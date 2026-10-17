@@ -188,14 +188,7 @@ pub fn migrate(data: &Path) -> Result<Vec<String>> {
             ));
             continue;
         }
-        let id = (0..)
-            .map(|n| match n {
-                0 => info.code.clone(),
-                1 => format!("{}-track", info.code),
-                n => format!("{}-track-{n}", info.code),
-            })
-            .find(|id| !lib.join(id).exists())
-            .expect("a free id");
+        let id = free_id(&lib, &info.code);
         let staging = lib.join(format!("{MIGRATING}{source}"));
         if !dir.starts_with(&staging) && staging.exists() {
             std::fs::remove_dir_all(&staging).map_err(io_err(&staging))?;
@@ -256,6 +249,21 @@ pub fn migrate(data: &Path) -> Result<Vec<String>> {
         }
     }
     Ok(notes)
+}
+
+pub fn library_id(lib: &Path, code: &str) -> String {
+    tracks(lib).remove(code).unwrap_or_else(|| free_id(lib, code))
+}
+
+fn free_id(lib: &Path, code: &str) -> String {
+    (0..)
+        .map(|n| match n {
+            0 => code.to_owned(),
+            1 => format!("{code}-track"),
+            n => format!("{code}-track-{n}"),
+        })
+        .find(|id| !lib.join(id).exists())
+        .expect("a free id")
 }
 
 fn entries(dir: &Path) -> Vec<PathBuf> {
@@ -440,6 +448,43 @@ mod tests {
             json!([{"id": "testring-track", "enabled": true}])
         );
         std::fs::remove_dir_all(&data).ok();
+    }
+
+    #[test]
+    fn a_track_import_keeps_a_mod_with_its_code() {
+        let root = tmp("import-taken");
+        let library = Library::new(&root.join("data"));
+        let mod_dir = root.join("livery");
+        std::fs::create_dir_all(mod_dir.join("F1 25/2025_asset_groups")).unwrap();
+        std::fs::write(mod_dir.join("F1 25/2025_asset_groups/livery.erp"), b"erp").unwrap();
+        std::fs::write(mod_dir.join(serps::FILE), r#"{"mod_name":"testring"}"#).unwrap();
+        let held = library.import(&mod_dir, None, &mut |_, _| {}).unwrap().package;
+        assert_eq!((held.id.as_str(), held.track.as_deref()), ("testring", None));
+        let track = root.join("testring.zip");
+        zip(
+            &track,
+            &[(MANIFEST, MANIFEST_JSON.as_bytes()), ("testring.erp", b"erp")],
+        );
+        let p = library.import(&track, None, &mut |_, _| {}).unwrap().package;
+        assert_eq!(
+            (p.id.as_str(), p.track.as_deref()),
+            ("testring-track", Some("testring"))
+        );
+        assert_eq!(library.get("testring").unwrap(), held);
+        zip(
+            &track,
+            &[(MANIFEST, MANIFEST_JSON.as_bytes()), ("testring.erp", b"erp 2")],
+        );
+        let again = library.import(&track, None, &mut |_, _| {}).unwrap().package;
+        assert_eq!(again.id, "testring-track");
+        assert_eq!(
+            std::fs::read(library.dir("testring-track").join("track/testring.erp")).unwrap(),
+            b"erp 2"
+        );
+        let mut ids: Vec<String> = library.list().unwrap().into_iter().map(|p| p.id).collect();
+        ids.sort();
+        assert_eq!(ids, ["testring", "testring-track"]);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
