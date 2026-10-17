@@ -192,7 +192,7 @@ impl Library {
         if let Some((dir, info)) = track::find(&unpacked)? {
             progress(0.85, &source);
             let out = staging.join("package");
-            let package = track::store(&dir, &info, source, &out)?;
+            let package = track::store(&dir, &info, &info.code, source, &out)?;
             self.place(&package, &out)?;
             progress(1.0, &package.name);
             return Ok(Imported { package, refused });
