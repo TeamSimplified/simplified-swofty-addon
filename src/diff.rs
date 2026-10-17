@@ -365,6 +365,7 @@ mod tests {
                 file(text("ger"), Class::Text),
             ],
             skipped: Vec::new(),
+            track: None,
         };
         let game = Game {
             dir: stock.clone(),

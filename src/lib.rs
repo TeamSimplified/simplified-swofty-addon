@@ -3,6 +3,7 @@ pub mod library;
 pub mod merge;
 pub mod package;
 pub mod serps;
+pub mod track;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -238,6 +239,10 @@ fn date(secs: u64) -> String {
 fn tags(p: &Package, exe: Option<&str>) -> Vec<Tag> {
     let tag = |text: String, tone: Tone| Tag { text, tone };
     let mut out = Vec::new();
+    if p.track.is_some() {
+        out.push(tag("Track".into(), Tone::Accent));
+        return out;
+    }
     if p.count(Class::Database) > 0 {
         out.push(tag("Database".into(), Tone::Muted));
     }
@@ -634,6 +639,17 @@ impl Addon for Simplified {
         let library = Library::new(cx.data_dir);
         let loaded = Loaded::read(cx)?;
         for p in loaded.enabled() {
+            if p.track.is_some() {
+                batch.lines.push(format!("{}: track {}", p.name, p.id));
+                batch.ops.push(Op {
+                    op: track::op(p),
+                    origin: Origin {
+                        addon: ID.into(),
+                        item: Some(p.id.clone()),
+                    },
+                });
+                continue;
+            }
             let diff = library.diff(p, game)?;
             let records = library.records(&p.id, &diff.build_key)?;
             let merged = merge::ops(&p.id, &diff, &records);
@@ -817,10 +833,20 @@ impl Addon for Simplified {
             items: loaded.enabled().map(|p| p.name.clone()).collect(),
         })
     }
+
+    fn migrate(&self, data: &Path, version: u32) -> Result<Vec<String>> {
+        if version >= 3 {
+            return Ok(Vec::new());
+        }
+        track::migrate(data)
+    }
 }
 
 impl Importer for Simplified {
     fn claims(&self, path: &Path) -> Claim {
+        if track::claims(path) == Claim::Yes {
+            return Claim::Yes;
+        }
         package::claims(path)
     }
 

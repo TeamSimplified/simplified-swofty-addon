@@ -10,6 +10,7 @@ use swofty_formats::gvdb::Gvdb;
 use crate::diff::{self, Diff};
 use crate::package::{self, Class};
 use crate::serps::{self, ModInfo};
+use crate::track;
 use crate::{Result, err, io_err};
 
 pub const PACKAGE_FILE: &str = "package.json";
@@ -36,6 +37,8 @@ pub struct Package {
     pub files: Vec<File>,
     #[serde(default)]
     pub skipped: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -120,6 +123,12 @@ impl Library {
 
     pub fn diff(&self, p: &Package, game: &dyn GameFiles) -> Result<Diff> {
         let key = game.build_key();
+        if p.track.is_some() {
+            return Ok(Diff {
+                build_key: key,
+                ..Diff::default()
+            });
+        }
         if let Some(diff) = self.cached(&p.id, &key) {
             return Ok(diff);
         }
@@ -180,6 +189,14 @@ impl Library {
         let source = package::file_name(src);
         let unpacked = staging.join("unpacked");
         let refused = package::unpack(src, &unpacked, &mut |done| progress(done * 0.7, &source))?;
+        if let Some((dir, info)) = track::find(&unpacked)? {
+            progress(0.85, &source);
+            let out = staging.join("package");
+            let package = track::store(&dir, &info, source, &out)?;
+            self.place(&package, &out)?;
+            progress(1.0, &package.name);
+            return Ok(Imported { package, refused });
+        }
         let root = package::package_root(&unpacked).unwrap_or_else(|| unpacked.clone());
         let serps_path = root.join(serps::FILE);
         let info = match serps_path.is_file() {
@@ -243,6 +260,7 @@ impl Library {
                 .map_or(0, |d| d.as_secs()),
             files,
             skipped,
+            track: None,
         };
         if serps_path.is_file() {
             std::fs::copy(&serps_path, out.join(serps::FILE)).map_err(io_err(&out))?;
@@ -250,12 +268,18 @@ impl Library {
         let json = serde_json::to_vec_pretty(&package).expect("serialisable");
         let path = out.join(PACKAGE_FILE);
         std::fs::write(&path, json).map_err(io_err(&path))?;
+        self.place(&package, &out)?;
+        progress(1.0, &package.name);
+        Ok(Imported { package, refused })
+    }
+
+    fn place(&self, package: &Package, out: &Path) -> Result<()> {
         let dest = self.dir(&package.id);
         let aside = dest.exists().then(|| free(&self.root(), ".replaced-"));
         if let Some(aside) = &aside {
             std::fs::rename(&dest, aside).map_err(io_err(aside))?;
         }
-        if let Err(e) = std::fs::rename(&out, &dest) {
+        if let Err(e) = std::fs::rename(out, &dest) {
             if let Some(aside) = &aside {
                 std::fs::rename(aside, &dest).ok();
             }
@@ -264,8 +288,7 @@ impl Library {
         if let Some(aside) = aside {
             std::fs::remove_dir_all(aside).ok();
         }
-        progress(1.0, &package.name);
-        Ok(Imported { package, refused })
+        Ok(())
     }
 }
 
