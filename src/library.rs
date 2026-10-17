@@ -7,12 +7,14 @@ use sha2::{Digest, Sha256};
 use swofty_addon::launcher::GameFiles;
 use swofty_formats::gvdb::Gvdb;
 
+use crate::diff::{self, Diff};
 use crate::package::{self, Class};
 use crate::serps::{self, ModInfo};
 use crate::{Result, err, io_err};
 
 pub const PACKAGE_FILE: &str = "package.json";
 pub const FILES: &str = "files";
+pub const DIFF: &str = "diff";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Package {
@@ -102,6 +104,43 @@ impl Library {
             return Err(err(format!("no mod {id} in the library")));
         }
         read_package(&path)
+    }
+
+    fn diff_path(&self, id: &str, key: &str, ext: &str) -> PathBuf {
+        self.dir(id).join(DIFF).join(format!("{key}.{ext}"))
+    }
+
+    pub fn cached(&self, id: &str, key: &str) -> Option<Diff> {
+        let bytes = std::fs::read(self.diff_path(id, key, "json")).ok()?;
+        serde_json::from_slice::<Diff>(&bytes)
+            .ok()
+            .filter(|d| d.build_key == key)
+    }
+
+    pub fn diff(&self, p: &Package, game: &dyn GameFiles) -> Result<Diff> {
+        let key = game.build_key();
+        if let Some(diff) = self.cached(&p.id, &key) {
+            return Ok(diff);
+        }
+        let (diff, records) = diff::compute(p, &self.dir(&p.id).join(FILES), game)?;
+        let dir = self.dir(&p.id).join(DIFF);
+        if dir.is_dir() {
+            std::fs::remove_dir_all(&dir).map_err(io_err(&dir))?;
+        }
+        std::fs::create_dir_all(&dir).map_err(io_err(&dir))?;
+        let db = self.diff_path(&p.id, &key, "db");
+        std::fs::write(&db, records.to_bytes_unsorted()).map_err(io_err(&db))?;
+        let json = self.diff_path(&p.id, &key, "json");
+        let tmp = json.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(&diff).expect("serialisable"))
+            .map_err(io_err(&tmp))?;
+        std::fs::rename(&tmp, &json).map_err(io_err(&json))?;
+        Ok(diff)
+    }
+
+    pub fn records(&self, id: &str, key: &str) -> Result<Gvdb> {
+        let path = self.diff_path(id, key, "db");
+        Gvdb::parse(&package::read_file(&path)?).map_err(|e| err(format!("{}: {e}", path.display())))
     }
 
     pub fn remove(&self, id: &str) -> Result<Package> {

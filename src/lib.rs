@@ -1,3 +1,4 @@
+pub mod diff;
 pub mod library;
 pub mod package;
 pub mod serps;
@@ -14,6 +15,7 @@ use swofty_addon::view::{
 };
 use swofty_addon::{Error, Result};
 
+use crate::diff::Diff;
 use crate::library::{Library, Package};
 use crate::package::Class;
 
@@ -23,6 +25,7 @@ const MANIFEST: &str = include_str!("../swofty.json");
 const FOOTER: &str = "Mod packages in the Simplified Suite's .serps format. Based on Simplified Suite by Team Simplified - https://github.com/TeamSimplified/simplified-suite";
 const IMPORT: &str = "import";
 const ENABLE: &str = "enable";
+const COMPARE: &str = "compare";
 const SHOW: &str = "show:";
 const REMOVE: &str = "remove:";
 
@@ -148,6 +151,9 @@ fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress) -> Result<Vec<Str
                 if !p.skipped.is_empty() {
                     line.push_str(&format!(", skipped {}", p.skipped.join(", ")));
                 }
+                if let Some(Err(e)) = cx.game.map(|g| library.diff(p, g)) {
+                    line.push_str(&format!(", not compared with the game: {e}"));
+                }
                 done.push(line);
                 if !known.contains(&p.id) {
                     added.push(p.id.clone());
@@ -251,7 +257,120 @@ fn tags(p: &Package, exe: Option<&str>) -> Vec<Tag> {
     out
 }
 
-fn row(p: &Package, on: bool, switchable: bool, exe: Option<&str>) -> Row {
+fn changes(p: &Package, d: &Diff, exe: Option<&str>) -> Vec<Block> {
+    let mut out = vec![Block::Label("WHAT IT CHANGES".into())];
+    if d.is_empty() {
+        out.push(Block::Text {
+            text: "Nothing differs from the game.".into(),
+            tone: Tone::Muted,
+        });
+    }
+    if !d.records.is_empty() {
+        out.push(Block::Facts(vec![
+            Fact::new("RECORDS CHANGED", d.records.changed.len().to_string()),
+            Fact::new("RECORDS ADDED", d.records.added.len().to_string()),
+            Fact::new("RECORDS REMOVED", d.records.removed.len().to_string()),
+        ]));
+    }
+    if !d.text.is_empty() {
+        out.push(Block::Table {
+            columns: vec!["Language".into(), "Changed".into(), "Added".into()],
+            rows: d
+                .text
+                .iter()
+                .map(|t| {
+                    let language = match &t.from {
+                        Some(from) => format!("{} (from {from})", t.language),
+                        None => t.language.clone(),
+                    };
+                    vec![language, t.changed.len().to_string(), t.added.len().to_string()]
+                })
+                .collect(),
+        });
+    }
+    if !d.archives.is_empty() {
+        out.push(Block::Table {
+            columns: vec![
+                "Archive".into(),
+                "Changed".into(),
+                "Added".into(),
+                "Removed".into(),
+            ],
+            rows: d
+                .archives
+                .iter()
+                .map(|a| {
+                    vec![
+                        a.path.clone(),
+                        a.changed.len().to_string(),
+                        a.added.len().to_string(),
+                        a.removed.len().to_string(),
+                    ]
+                })
+                .collect(),
+        });
+    }
+    for (label, class) in [
+        ("REPLACED FILES", Class::Replacement),
+        ("ADDED FILES", Class::Addition),
+    ] {
+        let items: Vec<String> = d
+            .files
+            .iter()
+            .filter(|f| f.class == class)
+            .map(|f| f.path.clone())
+            .collect();
+        if !items.is_empty() {
+            out.push(Block::Names {
+                label: label.into(),
+                items,
+            });
+        }
+    }
+    if d.dropped > 0 {
+        let made = p.game_version.as_deref().unwrap_or("an unknown version");
+        let game = exe.unwrap_or("unknown");
+        out.push(Block::Text {
+            text: format!(
+                "{} removal(s) left out: the package was made for {made} and the game is {game}.",
+                d.dropped
+            ),
+            tone: Tone::Warn,
+        });
+    }
+    out
+}
+
+fn files(p: &Package) -> Vec<Block> {
+    let groups = [
+        ("DATABASE", Class::Database),
+        ("LANGUAGES", Class::Text),
+        ("ARCHIVES", Class::Archive),
+        ("REPLACED FILES", Class::Replacement),
+        ("ADDED FILES", Class::Addition),
+    ];
+    let mut out = Vec::new();
+    for (label, class) in groups {
+        let items: Vec<String> = p
+            .files
+            .iter()
+            .filter(|f| f.class == class)
+            .map(|f| match class {
+                Class::Text => diff::language(&f.path).unwrap_or(&f.path).to_owned(),
+                _ => f.path.clone(),
+            })
+            .collect();
+        if !items.is_empty() {
+            out.push(Block::Names {
+                label: label.into(),
+                items,
+            });
+        }
+    }
+    out
+}
+
+fn row(p: &Package, on: bool, switchable: bool, exe: Option<&str>, diff: Option<&Diff>) -> Row {
     let dash = |v: &Option<String>| v.clone().unwrap_or_else(|| "—".into());
     let mut detail = vec![Block::Stats(vec![
         Fact::new("STATUS", if on { "On" } else { "Off" }),
@@ -262,35 +381,9 @@ fn row(p: &Package, on: bool, switchable: bool, exe: Option<&str>) -> Row {
         Fact::new("SIZE", size(p.size())),
         Fact::new("IMPORTED", date(p.imported)),
     ])];
-    let groups = [
-        ("DATABASE", Class::Database),
-        ("LANGUAGES", Class::Text),
-        ("ARCHIVES", Class::Archive),
-        ("REPLACED FILES", Class::Replacement),
-        ("ADDED FILES", Class::Addition),
-    ];
-    for (label, class) in groups {
-        let items: Vec<String> = p
-            .files
-            .iter()
-            .filter(|f| f.class == class)
-            .map(|f| match class {
-                Class::Text => f
-                    .path
-                    .rsplit('/')
-                    .next()
-                    .and_then(|n| n.strip_prefix("language_")?.strip_suffix(".lng"))
-                    .unwrap_or(&f.path)
-                    .to_owned(),
-                _ => f.path.clone(),
-            })
-            .collect();
-        if !items.is_empty() {
-            detail.push(Block::Names {
-                label: label.into(),
-                items,
-            });
-        }
+    match diff {
+        Some(d) => detail.extend(changes(p, d, exe)),
+        None => detail.extend(files(p)),
     }
     if !p.skipped.is_empty() {
         detail.push(Block::Names {
@@ -362,6 +455,21 @@ impl Addon for Simplified {
             });
         }
         let exe = cx.game.and_then(|g| g.exe_version());
+        let key = cx.game.map(|g| g.build_key());
+        let library = Library::new(cx.data_dir);
+        let diffs: Vec<Option<Diff>> = loaded
+            .order
+            .iter()
+            .map(|(p, _)| key.as_deref().and_then(|k| library.cached(&p.id, k)))
+            .collect();
+        let missing = diffs.iter().filter(|d| d.is_none()).count();
+        if key.is_some() && missing > 0 {
+            notices.push(Notice {
+                text: format!("{missing} mod(s) are not compared with this game build yet."),
+                tone: Tone::Muted,
+                action: Some(Button::new(COMPARE, "Compare")),
+            });
+        }
         let body = if loaded.order.is_empty() {
             Body::Empty {
                 title: "No mods yet".into(),
@@ -373,7 +481,8 @@ impl Addon for Simplified {
                 rows: loaded
                     .order
                     .iter()
-                    .map(|(p, on)| row(p, *on, !cx.profile.vanilla, exe.as_deref()))
+                    .zip(&diffs)
+                    .map(|((p, on), d)| row(p, *on, !cx.profile.vanilla, exe.as_deref(), d.as_ref()))
                     .collect(),
                 reorder: !cx.profile.vanilla,
             }
@@ -412,6 +521,16 @@ impl Addon for Simplified {
                 Ok(Effect::Notice(import(cx, &paths, &NoProgress)?.join("\n")))
             }
             Event::Click { id } if id == ENABLE => Ok(Effect::SetAddonEnabled(true)),
+            Event::Click { id } if id == COMPARE => {
+                let game = cx
+                    .game
+                    .ok_or_else(|| err("no game was found to compare with".into()))?;
+                let library = Library::new(cx.data_dir);
+                for p in library.list()? {
+                    library.diff(&p, game)?;
+                }
+                Ok(Effect::Reload)
+            }
             Event::Click { id } if id.starts_with(SHOW) => {
                 let dir = Library::new(cx.data_dir)
                     .dir(&id[SHOW.len()..])
