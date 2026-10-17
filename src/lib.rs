@@ -477,6 +477,10 @@ impl Addon for Simplified {
         &self.manifest
     }
 
+    fn icon(&self) -> Option<&'static [u8]> {
+        Some(include_bytes!("../icon.svg"))
+    }
+
     fn sections(&self) -> Vec<SectionSpec> {
         vec![SectionSpec {
             id: SECTION.into(),
