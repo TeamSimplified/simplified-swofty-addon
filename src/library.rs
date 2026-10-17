@@ -13,6 +13,7 @@ use crate::serps::{self, ModInfo};
 use crate::{Result, err, io_err};
 
 pub const PACKAGE_FILE: &str = "package.json";
+pub const LIBRARY: &str = "library";
 pub const FILES: &str = "files";
 pub const DIFF: &str = "diff";
 
@@ -72,7 +73,7 @@ impl Library {
     }
 
     pub fn root(&self) -> PathBuf {
-        self.data.join("library")
+        self.data.join(LIBRARY)
     }
 
     pub fn dir(&self, id: &str) -> PathBuf {

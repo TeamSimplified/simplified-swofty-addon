@@ -1,5 +1,6 @@
 pub mod diff;
 pub mod library;
+pub mod merge;
 pub mod package;
 pub mod serps;
 
@@ -7,7 +8,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use swofty_addon::launcher::{Addon, ArgSpec, Builtin, Claim, CommandSpec, Cx, Importer, Progress, Summary};
+use swofty_addon::asset::{AssetBatch, Op, Origin};
+use swofty_addon::launcher::{
+    Addon, ArgSpec, BuildCx, Builtin, Claim, CommandSpec, Cx, Importer, Progress, Summary,
+};
 use swofty_addon::manifest::AddonManifest;
 use swofty_addon::view::{
     Art, Block, Body, Button, ButtonKind, Control, Effect, Event, Fact, Icon, Notice, Row, SectionSpec,
@@ -17,6 +21,7 @@ use swofty_addon::{Error, Result};
 
 use crate::diff::Diff;
 use crate::library::{Library, Package};
+use crate::merge::Clash;
 use crate::package::Class;
 
 pub const ID: &str = "teamsimplified.mods";
@@ -370,7 +375,47 @@ fn files(p: &Package) -> Vec<Block> {
     out
 }
 
-fn row(p: &Package, on: bool, switchable: bool, exe: Option<&str>, diff: Option<&Diff>) -> Row {
+struct Shown<'a> {
+    on: bool,
+    switchable: bool,
+    exe: Option<&'a str>,
+    diff: Option<&'a Diff>,
+    wins: Vec<(&'a str, &'a Clash)>,
+    losses: Vec<(&'a str, &'a Clash)>,
+}
+
+fn conflicts(shown: &Shown) -> (Vec<Tag>, Vec<Block>) {
+    let mut tags = Vec::new();
+    let mut blocks = Vec::new();
+    for (name, c) in &shown.wins {
+        tags.push(Tag {
+            text: format!("Overrides {} in {name}", c.targets.len()),
+            tone: Tone::Accent,
+        });
+        blocks.push(Block::Names {
+            label: format!("OVERRIDES {}", name.to_uppercase()),
+            items: c.targets.clone(),
+        });
+    }
+    for (name, c) in &shown.losses {
+        tags.push(Tag {
+            text: format!("{} overridden by {name}", c.targets.len()),
+            tone: Tone::Warn,
+        });
+        blocks.push(Block::Names {
+            label: format!("OVERRIDDEN BY {}", name.to_uppercase()),
+            items: c.targets.clone(),
+        });
+    }
+    if !blocks.is_empty() {
+        blocks.insert(0, Block::Label("CONFLICTS".into()));
+    }
+    (tags, blocks)
+}
+
+fn row(p: &Package, shown: Shown) -> Row {
+    let (on, switchable, exe, diff) = (shown.on, shown.switchable, shown.exe, shown.diff);
+    let (clash_tags, clash_blocks) = conflicts(&shown);
     let dash = |v: &Option<String>| v.clone().unwrap_or_else(|| "—".into());
     let mut detail = vec![Block::Stats(vec![
         Fact::new("STATUS", if on { "On" } else { "Off" }),
@@ -385,6 +430,7 @@ fn row(p: &Package, on: bool, switchable: bool, exe: Option<&str>, diff: Option<
         Some(d) => detail.extend(changes(p, d, exe)),
         None => detail.extend(files(p)),
     }
+    detail.extend(clash_blocks);
     if !p.skipped.is_empty() {
         detail.push(Block::Names {
             label: "SKIPPED".into(),
@@ -411,7 +457,7 @@ fn row(p: &Package, on: bool, switchable: bool, exe: Option<&str>, diff: Option<
         title: p.name.clone(),
         subtitle: subtitle(p),
         art: Art::Monogram(monogram(&p.name)),
-        tags: tags(p, exe),
+        tags: tags(p, exe).into_iter().chain(clash_tags).collect(),
         trailing: Some(Control::Switch {
             id: p.id.clone(),
             on,
@@ -470,6 +516,14 @@ impl Addon for Simplified {
                 action: Some(Button::new(COMPARE, "Compare")),
             });
         }
+        let on_diffs: Vec<Option<&Diff>> = loaded
+            .order
+            .iter()
+            .zip(&diffs)
+            .map(|((_, on), d)| d.as_ref().filter(|_| *on))
+            .collect();
+        let clashes = merge::clashes(&on_diffs);
+        let name = |i: usize| loaded.order[i].0.name.as_str();
         let body = if loaded.order.is_empty() {
             Body::Empty {
                 title: "No mods yet".into(),
@@ -482,7 +536,26 @@ impl Addon for Simplified {
                     .order
                     .iter()
                     .zip(&diffs)
-                    .map(|((p, on), d)| row(p, *on, !cx.profile.vanilla, exe.as_deref(), d.as_ref()))
+                    .enumerate()
+                    .map(|(i, ((p, on), d))| {
+                        let shown = Shown {
+                            on: *on,
+                            switchable: !cx.profile.vanilla,
+                            exe: exe.as_deref(),
+                            diff: d.as_ref(),
+                            wins: clashes
+                                .iter()
+                                .filter(|c| c.winner == i)
+                                .map(|c| (name(c.loser), c))
+                                .collect(),
+                            losses: clashes
+                                .iter()
+                                .filter(|c| c.loser == i)
+                                .map(|c| (name(c.winner), c))
+                                .collect(),
+                        };
+                        row(p, shown)
+                    })
                     .collect(),
                 reorder: !cx.profile.vanilla,
             }
@@ -550,6 +623,48 @@ impl Addon for Simplified {
 
     fn importer(&self) -> Option<&dyn Importer> {
         Some(self)
+    }
+
+    fn build(&self, cx: &BuildCx) -> Result<AssetBatch> {
+        let cx = &cx.cx;
+        let mut batch = AssetBatch::default();
+        let Some(game) = cx.game.filter(|_| !cx.profile.vanilla) else {
+            return Ok(batch);
+        };
+        let library = Library::new(cx.data_dir);
+        let loaded = Loaded::read(cx)?;
+        for p in loaded.enabled() {
+            let diff = library.diff(p, game)?;
+            let records = library.records(&p.id, &diff.build_key)?;
+            let merged = merge::ops(&p.id, &diff, &records);
+            batch.lines.push(format!(
+                "{}: {} record(s), {} resource(s), {} text entr(ies), {} file(s)",
+                p.name, merged.records, merged.resources, merged.strings, merged.files
+            ));
+            if diff.dropped > 0 {
+                batch.warnings.push(format!(
+                    "{}: {} removal(s) left out; made for {}",
+                    p.name,
+                    diff.dropped,
+                    p.game_version.as_deref().unwrap_or("an unknown version")
+                ));
+            }
+            if merged.unbuilt > 0 {
+                batch.warnings.push(format!(
+                    "{}: {} resource removal(s) left out; erp.remove-resource is not built yet",
+                    p.name, merged.unbuilt
+                ));
+            }
+            let origin = Origin {
+                addon: ID.into(),
+                item: Some(p.id.clone()),
+            };
+            batch.ops.extend(merged.ops.into_iter().map(|op| Op {
+                op,
+                origin: origin.clone(),
+            }));
+        }
+        Ok(batch)
     }
 
     fn commands(&self) -> Vec<CommandSpec> {
