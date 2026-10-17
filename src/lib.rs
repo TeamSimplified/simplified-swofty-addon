@@ -16,7 +16,7 @@ use swofty_addon::launcher::{
     Addon, ArgSpec, BuildCx, Builtin, Claim, CommandSpec, Cx, Importer, Progress, Summary,
 };
 use swofty_addon::manifest::AddonManifest;
-use swofty_addon::ops::DbOp;
+use swofty_addon::ops::{DbOp, ErpOp};
 use swofty_addon::view::{
     Art, Block, Body, Button, ButtonKind, Control, Effect, Event, Fact, Icon, Notice, Row, SectionSpec,
     Style, Tag, Tone, View,
@@ -40,17 +40,32 @@ const REMOVE: &str = "remove:";
 
 // Mods built from the same tools write many records and strings with the same
 // values. A write that repeats the value already in place is left out, so it is
-// not reported as one mod overriding another.
+// not reported as one mod overriding another. A removal of something an earlier
+// mod already removed is left out too, since the second one would find nothing.
 fn without_repeats(ops: Vec<Op>) -> Vec<Op> {
-    let mut last: HashMap<(char, String, String), (u8, String)> = HashMap::new();
+    let mut last: HashMap<(char, String, String), Option<(u8, String)>> = HashMap::new();
     ops.into_iter()
         .filter(|op| {
             let (target, value) = match &op.op {
                 AssetOp::Db(DbOp::PutRecord { key, tag, value }) => {
-                    (('d', key.clone(), String::new()), (*tag, value.clone()))
+                    (('d', key.clone(), String::new()), Some((*tag, value.clone())))
                 }
+                AssetOp::Db(DbOp::RemoveRecord { key }) => (('d', key.clone(), String::new()), None),
                 AssetOp::Lang(LangOp::Set { language, key, value }) => {
-                    (('l', language.clone(), key.clone()), (0, value.clone()))
+                    (('l', language.clone(), key.clone()), Some((0, value.clone())))
+                }
+                AssetOp::Erp(ErpOp::RemoveResource { erp, resource }) => {
+                    (('e', erp.clone(), resource.clone()), None)
+                }
+                AssetOp::Erp(ErpOp::PutResource {
+                    erp,
+                    resource,
+                    rename,
+                    ..
+                }) => {
+                    let name = rename.as_deref().unwrap_or(resource);
+                    last.remove(&('e', erp.clone(), name.to_owned()));
+                    return true;
                 }
                 _ => return true,
             };
@@ -733,10 +748,10 @@ impl Addon for Simplified {
                     p.game_version.as_deref().unwrap_or("an unknown version")
                 ));
             }
-            if merged.unbuilt > 0 {
-                batch.warnings.push(format!(
-                    "{}: {} resource removal(s) left out; erp.remove-resource is not built yet",
-                    p.name, merged.unbuilt
+            if merged.removals > 0 {
+                batch.lines.push(format!(
+                    "{}: {} resource(s) removed from the game's archives",
+                    p.name, merged.removals
                 ));
             }
             let origin = Origin {
@@ -997,6 +1012,49 @@ mod merge_tests {
             record("d", "6c"),
         ];
         assert_eq!(items(&without_repeats(ops)), ["a", "c", "d"]);
+    }
+
+    #[test]
+    fn a_removal_of_something_already_removed_is_left_out() {
+        let op = |item: &str, op: AssetOp| Op {
+            op,
+            origin: Origin {
+                addon: ID.into(),
+                item: Some(item.into()),
+            },
+        };
+        let remove = |item: &str| {
+            op(
+                item,
+                AssetOp::Erp(ErpOp::RemoveResource {
+                    erp: "a.erp".into(),
+                    resource: "eaid://r".into(),
+                }),
+            )
+        };
+        let put = |item: &str| {
+            op(
+                item,
+                AssetOp::Erp(ErpOp::PutResource {
+                    erp: "a.erp".into(),
+                    resource: "eaid://r".into(),
+                    source: swofty_addon::asset::Source::addon("x.erp"),
+                    rename: None,
+                }),
+            )
+        };
+        let drop_record = |item: &str| op(item, AssetOp::Db(DbOp::RemoveRecord { key: "0x1".into() }));
+        let ops = vec![
+            remove("a"),
+            remove("b"),
+            put("c"),
+            remove("d"),
+            drop_record("e"),
+            record("f", "6c"),
+            drop_record("g"),
+            drop_record("h"),
+        ];
+        assert_eq!(items(&without_repeats(ops)), ["a", "c", "d", "e", "f", "g"]);
     }
 
     #[test]

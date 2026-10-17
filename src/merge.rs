@@ -23,7 +23,7 @@ pub struct Merged {
     pub carried: usize,
     pub strings: usize,
     pub files: usize,
-    pub unbuilt: usize,
+    pub removals: usize,
 }
 
 pub const MARKER: &str = "eaid://tools_package/";
@@ -66,7 +66,7 @@ pub fn ops(id: &str, diff: &Diff, records: &Gvdb) -> Merged {
     }
     let mut resources = 0;
     let mut carried = 0;
-    let mut unbuilt = 0;
+    let mut removals = 0;
     for a in &diff.archives {
         let added = added_to(&a.path);
         let changed = a.changed.iter().map(|uri| (a.path.as_str(), uri));
@@ -90,7 +90,13 @@ pub fn ops(id: &str, diff: &Diff, records: &Gvdb) -> Merged {
         if added == BOOT_ERP {
             carried += a.added.iter().filter(|uri| !uri.starts_with(MARKER)).count();
         }
-        unbuilt += a.removed.len();
+        for uri in &a.removed {
+            ops.push(AssetOp::Erp(ErpOp::RemoveResource {
+                erp: a.path.clone(),
+                resource: uri.clone(),
+            }));
+        }
+        removals += a.removed.len();
     }
     let mut strings = 0;
     let mut defaults = Vec::new();
@@ -122,7 +128,7 @@ pub fn ops(id: &str, diff: &Diff, records: &Gvdb) -> Merged {
         carried,
         strings,
         files: diff.files.len(),
-        unbuilt,
+        removals,
     }
 }
 
@@ -252,6 +258,50 @@ mod tests {
         assert!(targets(&diff).contains(&format!(
             "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image in {BOOT_ERP}"
         )));
+    }
+
+    #[test]
+    fn removed_resources_become_remove_resource_ops() {
+        let flow = "2025_asset_groups/ui_package/flow_boot.erp";
+        let shader = "shader_package_2025/object_glass.nefx2.sm51.erp";
+        let diff = Diff {
+            archives: vec![
+                Archive {
+                    path: flow.into(),
+                    changed: vec!["eaid://ui_package/a".into()],
+                    added: Vec::new(),
+                    removed: vec!["eaid://ui_package/b".into(), "eaid://ui_package/c".into()],
+                },
+                Archive {
+                    path: shader.into(),
+                    changed: Vec::new(),
+                    added: Vec::new(),
+                    removed: vec!["eaid://shader_package/d".into()],
+                },
+            ],
+            ..Diff::default()
+        };
+        let merged = ops("m", &diff, &Gvdb::default());
+        let removed: Vec<(&str, &str)> = merged
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                AssetOp::Erp(ErpOp::RemoveResource { erp, resource }) => {
+                    Some((erp.as_str(), resource.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            removed,
+            [
+                (flow, "eaid://ui_package/b"),
+                (flow, "eaid://ui_package/c"),
+                (shader, "eaid://shader_package/d"),
+            ]
+        );
+        assert_eq!((merged.resources, merged.removals), (1, 3));
+        assert!(targets(&diff).contains(&format!("eaid://ui_package/b in {flow}")));
     }
 
     #[test]
