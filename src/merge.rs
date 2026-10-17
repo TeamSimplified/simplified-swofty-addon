@@ -6,14 +6,38 @@ use swofty_formats::gvdb::Gvdb;
 
 use crate::diff::Diff;
 use crate::library::{FILES, LIBRARY};
+use crate::texarray;
+
+// Simplified Studio carries a mod's textures and models in the shader archives the
+// game loads at boot. Those archives are not listed by asset groups the loader can
+// patch, so the resources they carry go into an overlay on an archive the boot group
+// loads instead.
+pub const BOOT_ERP: &str = "2025_asset_groups/vfx_package/common.erp";
 
 pub struct Merged {
     pub ops: Vec<AssetOp>,
+    // Set before every mod's own changes, so that any mod's rename wins.
+    pub defaults: Vec<AssetOp>,
     pub records: usize,
     pub resources: usize,
+    pub carried: usize,
     pub strings: usize,
     pub files: usize,
     pub unbuilt: usize,
+}
+
+pub const MARKER: &str = "eaid://tools_package/";
+
+pub fn carrier(rel: &str) -> bool {
+    rel.starts_with("shader_package")
+}
+
+fn added_to(path: &str) -> &str {
+    match (texarray::carrier(path), carrier(path)) {
+        (true, _) => texarray::UI_ERP,
+        (false, true) => BOOT_ERP,
+        (false, false) => path,
+    }
 }
 
 pub fn key(k: u64) -> String {
@@ -41,29 +65,48 @@ pub fn ops(id: &str, diff: &Diff, records: &Gvdb) -> Merged {
         ops.push(AssetOp::Db(DbOp::RemoveRecord { key: key(*k) }));
     }
     let mut resources = 0;
+    let mut carried = 0;
     let mut unbuilt = 0;
     for a in &diff.archives {
-        for uri in a.changed.iter().chain(&a.added) {
+        let added = added_to(&a.path);
+        let changed = a.changed.iter().map(|uri| (a.path.as_str(), uri));
+        // ui_texture archives are merged across mods by texarray::build, and
+        // Simplified Studio's marker does nothing in the game.
+        let carried_ui = added == texarray::UI_ERP;
+        let in_carrier = added != a.path;
+        let adds = a
+            .added
+            .iter()
+            .filter(|uri| !(carried_ui || in_carrier && uri.starts_with(MARKER)));
+        for (erp, uri) in changed.chain(adds.map(|uri| (added, uri))) {
             ops.push(AssetOp::Erp(ErpOp::PutResource {
-                erp: a.path.clone(),
+                erp: erp.to_owned(),
                 resource: uri.clone(),
                 source: source(&a.path),
                 rename: None,
             }));
             resources += 1;
         }
+        if added == BOOT_ERP {
+            carried += a.added.iter().filter(|uri| !uri.starts_with(MARKER)).count();
+        }
         unbuilt += a.removed.len();
     }
     let mut strings = 0;
+    let mut defaults = Vec::new();
+    let set = |t: &crate::diff::Text, k: &String, v: &String| {
+        AssetOp::Lang(LangOp::Set {
+            language: t.language.clone(),
+            key: k.clone(),
+            value: v.clone(),
+        })
+    };
     for t in &diff.text {
         for (k, v) in t.entries() {
-            ops.push(AssetOp::Lang(LangOp::Set {
-                language: t.language.clone(),
-                key: k.clone(),
-                value: v.clone(),
-            }));
+            ops.push(set(t, k, v));
             strings += 1;
         }
+        defaults.extend(t.defaults.iter().map(|(k, v)| set(t, k, v)));
     }
     for f in &diff.files {
         ops.push(AssetOp::File(FileOp::Put {
@@ -73,8 +116,10 @@ pub fn ops(id: &str, diff: &Diff, records: &Gvdb) -> Merged {
     }
     Merged {
         ops,
+        defaults,
         records: records.records.len() + diff.records.removed.len(),
         resources,
+        carried,
         strings,
         files: diff.files.len(),
         unbuilt,
@@ -92,8 +137,14 @@ pub fn targets(diff: &Diff) -> Vec<String> {
             .map(|k| key(*k)),
     );
     for a in &diff.archives {
-        let uris = a.changed.iter().chain(&a.added).chain(&a.removed);
+        let uris = a.changed.iter().chain(&a.removed);
         out.extend(uris.map(|uri| format!("{uri} in {}", a.path)));
+        let added = added_to(&a.path);
+        let adds = a.added.iter().filter(|uri| {
+            let merged = added == texarray::UI_ERP && texarray::merged_by_slice(uri);
+            !(uri.starts_with(MARKER) || merged)
+        });
+        out.extend(adds.map(|uri| format!("{uri} in {added}")));
     }
     for t in &diff.text {
         out.extend(t.entries().map(|(k, _)| format!("{k} ({})", t.language)));
@@ -113,7 +164,10 @@ pub fn clashes(diffs: &[Option<&Diff>]) -> Vec<Clash> {
     let mut writers: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, d) in diffs.iter().enumerate() {
         for t in d.map(targets).unwrap_or_default() {
-            writers.entry(t).or_default().push(i);
+            let w = writers.entry(t).or_default();
+            if w.last() != Some(&i) {
+                w.push(i);
+            }
         }
     }
     let mut pairs: BTreeMap<(usize, usize), Vec<String>> = BTreeMap::new();
@@ -139,6 +193,111 @@ pub fn clashes(diffs: &[Option<&Diff>]) -> Vec<Clash> {
 mod tests {
     use super::*;
     use crate::diff::{Archive, Records};
+
+    #[test]
+    fn resources_carried_in_shader_archives_go_to_the_boot_archive() {
+        let shader = "shader_package_2025/object_auto_illuminate.nefx2.sm51.erp";
+        let diff = Diff {
+            archives: vec![
+                Archive {
+                    path: shader.into(),
+                    changed: vec!["eaid://shader_package/x".into()],
+                    added: vec!["eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image".into()],
+                    removed: Vec::new(),
+                },
+                Archive {
+                    path: "2025_asset_groups/ui_package/flow_boot.erp".into(),
+                    changed: Vec::new(),
+                    added: vec!["eaid://ui_package/b".into()],
+                    removed: Vec::new(),
+                },
+            ],
+            ..Diff::default()
+        };
+        let merged = ops("m", &diff, &Gvdb::default());
+        let puts: Vec<(&str, &str, &str)> = merged
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                AssetOp::Erp(ErpOp::PutResource {
+                    erp,
+                    resource,
+                    source,
+                    ..
+                }) => Some((erp.as_str(), resource.as_str(), source.path.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            puts,
+            [
+                (
+                    shader,
+                    "eaid://shader_package/x",
+                    "library/m/files/shader_package_2025/object_auto_illuminate.nefx2.sm51.erp"
+                ),
+                (
+                    BOOT_ERP,
+                    "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image",
+                    "library/m/files/shader_package_2025/object_auto_illuminate.nefx2.sm51.erp"
+                ),
+                (
+                    "2025_asset_groups/ui_package/flow_boot.erp",
+                    "eaid://ui_package/b",
+                    "library/m/files/2025_asset_groups/ui_package/flow_boot.erp"
+                ),
+            ]
+        );
+        assert_eq!((merged.resources, merged.carried), (3, 1));
+        assert!(targets(&diff).contains(&format!(
+            "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image in {BOOT_ERP}"
+        )));
+    }
+
+    #[test]
+    fn a_mod_does_not_clash_with_itself() {
+        let texture = "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image";
+        let carrier = |path: &str| Archive {
+            path: path.into(),
+            changed: Vec::new(),
+            added: vec![texture.into()],
+            removed: Vec::new(),
+        };
+        let d = Diff {
+            archives: vec![
+                carrier("shader_package_2025/object_auto_illuminate.nefx2.sm51.erp"),
+                carrier("shader_package_2025/object_glass.nefx2.sm51.erp"),
+            ],
+            ..Diff::default()
+        };
+        assert_eq!(clashes(&[Some(&d)]), []);
+        let found = clashes(&[Some(&d), Some(&d)]);
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].winner, found[0].loser), (1, 0));
+    }
+
+    #[test]
+    fn markers_and_merged_logo_arrays_are_not_conflicts() {
+        let logos =
+            "eaid://ui_package/art/texture_arrays/overrides.uidb/overrides.team_logos.f1_2026.texarray";
+        let d = Diff {
+            archives: vec![Archive {
+                path: "shader_package_2025/ui_texture.nefx2.sm51.erp".into(),
+                changed: Vec::new(),
+                added: vec![
+                    "eaid://tools_package/default/serps".into(),
+                    logos.into(),
+                    format!("{logos}.image"),
+                ],
+                removed: Vec::new(),
+            }],
+            ..Diff::default()
+        };
+        assert!(targets(&d).is_empty());
+        assert_eq!(clashes(&[Some(&d), Some(&d)]), []);
+        let merged = ops("m", &d, &Gvdb::default());
+        assert_eq!((merged.resources, merged.carried), (0, 0));
+    }
 
     #[test]
     fn later_mods_win_shared_targets() {

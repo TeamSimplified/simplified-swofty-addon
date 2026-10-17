@@ -3,17 +3,20 @@ pub mod library;
 pub mod merge;
 pub mod package;
 pub mod serps;
+pub mod texarray;
 pub mod track;
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use swofty_addon::asset::{AssetBatch, Op, Origin};
+use swofty_addon::asset::{AssetBatch, AssetOp, LangOp, Op, Origin};
 use swofty_addon::launcher::{
     Addon, ArgSpec, BuildCx, Builtin, Claim, CommandSpec, Cx, Importer, Progress, Summary,
 };
 use swofty_addon::manifest::AddonManifest;
+use swofty_addon::ops::DbOp;
 use swofty_addon::view::{
     Art, Block, Body, Button, ButtonKind, Control, Effect, Event, Fact, Icon, Notice, Row, SectionSpec,
     Style, Tag, Tone, View,
@@ -34,6 +37,41 @@ const ENABLE: &str = "enable";
 const COMPARE: &str = "compare";
 const SHOW: &str = "show:";
 const REMOVE: &str = "remove:";
+
+// Mods built from the same tools write many records and strings with the same
+// values. A write that repeats the value already in place is left out, so it is
+// not reported as one mod overriding another.
+fn without_repeats(ops: Vec<Op>) -> Vec<Op> {
+    let mut last: HashMap<(char, String, String), (u8, String)> = HashMap::new();
+    ops.into_iter()
+        .filter(|op| {
+            let (target, value) = match &op.op {
+                AssetOp::Db(DbOp::PutRecord { key, tag, value }) => {
+                    (('d', key.clone(), String::new()), (*tag, value.clone()))
+                }
+                AssetOp::Lang(LangOp::Set { language, key, value }) => {
+                    (('l', language.clone(), key.clone()), (0, value.clone()))
+                }
+                _ => return true,
+            };
+            last.insert(target, value.clone()) != Some(value)
+        })
+        .collect()
+}
+
+// A default goes in once for each key no mod renames: the mods that fill it in
+// all give the game's own text, and a rename replaces it anyway.
+fn only_defaults(defaults: Vec<Op>, ops: &[Op]) -> Vec<Op> {
+    let key = |op: &Op| match &op.op {
+        AssetOp::Lang(LangOp::Set { language, key, .. }) => Some((language.clone(), key.clone())),
+        _ => None,
+    };
+    let mut seen: HashSet<(String, String)> = ops.iter().filter_map(key).collect();
+    defaults
+        .into_iter()
+        .filter(|op| key(op).is_some_and(|k| seen.insert(k)))
+        .collect()
+}
 
 pub fn builtin() -> Builtin {
     Builtin {
@@ -642,6 +680,8 @@ impl Addon for Simplified {
         };
         let library = Library::new(cx.data_dir);
         let loaded = Loaded::read(cx)?;
+        let mut carried = Vec::new();
+        let mut defaults = Vec::new();
         for p in loaded.enabled() {
             if p.track.is_some() {
                 batch.lines.push(format!("{}: track {}", p.name, p.id));
@@ -655,12 +695,36 @@ impl Addon for Simplified {
                 continue;
             }
             let diff = library.diff(p, game)?;
+            for a in diff
+                .archives
+                .iter()
+                .filter(|a| texarray::carrier(&a.path) && !a.added.is_empty())
+            {
+                carried.push(texarray::Carried {
+                    item: p.name.clone(),
+                    erp: library.dir(&p.id).join(library::FILES).join(&a.path),
+                    uris: a
+                        .added
+                        .iter()
+                        .filter(|uri| !uri.starts_with(merge::MARKER))
+                        .cloned()
+                        .collect(),
+                });
+            }
             let records = library.records(&p.id, &diff.build_key)?;
             let merged = merge::ops(&p.id, &diff, &records);
             batch.lines.push(format!(
                 "{}: {} record(s), {} resource(s), {} text entr(ies), {} file(s)",
                 p.name, merged.records, merged.resources, merged.strings, merged.files
             ));
+            if merged.carried > 0 {
+                batch.lines.push(format!(
+                    "{}: {} resource(s) carried in shader archives load with {}",
+                    p.name,
+                    merged.carried,
+                    merge::BOOT_ERP
+                ));
+            }
             if diff.dropped > 0 {
                 batch.warnings.push(format!(
                     "{}: {} removal(s) left out; made for {}",
@@ -679,11 +743,34 @@ impl Addon for Simplified {
                 addon: ID.into(),
                 item: Some(p.id.clone()),
             };
+            defaults.extend(merged.defaults.into_iter().map(|op| Op {
+                op,
+                origin: origin.clone(),
+            }));
             batch.ops.extend(merged.ops.into_iter().map(|op| Op {
                 op,
                 origin: origin.clone(),
             }));
         }
+        batch.ops.splice(0..0, only_defaults(defaults, &batch.ops));
+        batch.ops = without_repeats(std::mem::take(&mut batch.ops));
+        let ui = texarray::build(game, &carried, &cx.cache_dir.join(texarray::MERGED))?;
+        if !ui.ops.is_empty() {
+            batch.lines.push(format!(
+                "ui textures: {} resource(s) load with {}",
+                ui.ops.len(),
+                texarray::UI_ERP
+            ));
+        }
+        batch.lines.extend(ui.lines);
+        batch.warnings.extend(ui.warnings);
+        batch.ops.extend(ui.ops.into_iter().map(|op| Op {
+            op,
+            origin: Origin {
+                addon: ID.into(),
+                item: None,
+            },
+        }));
         Ok(batch)
     }
 
@@ -863,4 +950,65 @@ struct NoProgress;
 
 impl Progress for NoProgress {
     fn report(&self, _: f32, _: &str) {}
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    fn set(item: &str, key: &str, value: &str) -> Op {
+        Op {
+            op: AssetOp::Lang(LangOp::Set {
+                language: "eng".into(),
+                key: key.into(),
+                value: value.into(),
+            }),
+            origin: Origin {
+                addon: ID.into(),
+                item: Some(item.into()),
+            },
+        }
+    }
+
+    fn record(item: &str, value: &str) -> Op {
+        Op {
+            op: AssetOp::Db(DbOp::PutRecord {
+                key: "0x1".into(),
+                tag: 2,
+                value: value.into(),
+            }),
+            origin: Origin {
+                addon: ID.into(),
+                item: Some(item.into()),
+            },
+        }
+    }
+
+    fn items(ops: &[Op]) -> Vec<&str> {
+        ops.iter().map(|op| op.origin.item.as_deref().unwrap()).collect()
+    }
+
+    #[test]
+    fn a_write_that_repeats_the_value_in_place_is_left_out() {
+        let ops = vec![
+            record("a", "6c"),
+            record("b", "6c"),
+            record("c", "6d"),
+            record("d", "6c"),
+        ];
+        assert_eq!(items(&without_repeats(ops)), ["a", "c", "d"]);
+    }
+
+    #[test]
+    fn defaults_go_in_once_and_only_for_keys_nobody_renames() {
+        let renames = vec![set("b", "ast", "Genesis")];
+        let defaults = vec![
+            set("a", "ast", "Aston"),
+            set("a", "alp", "Alpine"),
+            set("b", "alp", "Alpine"),
+        ];
+        let kept = only_defaults(defaults, &renames);
+        assert_eq!(items(&kept), ["a"]);
+        assert!(matches!(&kept[0].op, AssetOp::Lang(LangOp::Set { key, .. }) if key == "alp"));
+    }
 }

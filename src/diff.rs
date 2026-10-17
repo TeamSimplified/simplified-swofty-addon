@@ -4,7 +4,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use swofty_addon::launcher::GameFiles;
 use swofty_formats::erp::{ErpFile, Resource};
-use swofty_formats::gvdb::{Gvdb, Record};
+use swofty_formats::gvdb::{Gvdb, Record, ValueType};
 use swofty_formats::lng::{Entry, Lng};
 
 use crate::library::Package;
@@ -12,10 +12,13 @@ use crate::package::{self, Class};
 use crate::{Result, err};
 
 pub const FALLBACK: &str = "eng";
+pub const VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Diff {
     pub build_key: String,
+    #[serde(default)]
+    pub version: u32,
     #[serde(default)]
     pub records: Records,
     #[serde(default)]
@@ -50,6 +53,11 @@ pub struct Text {
     pub from: Option<String>,
     pub changed: BTreeMap<String, String>,
     pub added: BTreeMap<String, String>,
+    // Added keys whose text is the game's own: a mod's database points a record
+    // at a key of its own, and fills in the text of the key the record pointed at
+    // before. Other mods' renames of the same key win over these.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub defaults: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -84,7 +92,7 @@ impl Text {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.len() == 0 && self.defaults.is_empty()
     }
 
     pub fn entries(&self) -> impl Iterator<Item = (&String, &String)> {
@@ -102,18 +110,21 @@ pub fn compute(p: &Package, files: &Path, game: &dyn GameFiles) -> Result<(Diff,
     let removals = p.game_version.is_some() && p.game_version == game.exe_version();
     let mut diff = Diff {
         build_key: game.build_key(),
+        version: VERSION,
         ..Diff::default()
     };
     let mut records = Gvdb::default();
+    let mut names = HashMap::new();
     let mut texts = Vec::new();
     for f in &p.files {
         let path = files.join(&f.path);
         match f.class {
             Class::Database => {
-                let (r, values, dropped) = database(&path, game, removals)?;
+                let (r, values, dropped, pointed) = database(&path, game, removals)?;
                 diff.records = r;
                 diff.dropped += dropped;
                 records = values;
+                names = pointed;
             }
             Class::Text => texts.push(f.path.as_str()),
             _ => match package::class(&f.path, Some(game)) {
@@ -132,7 +143,7 @@ pub fn compute(p: &Package, files: &Path, game: &dyn GameFiles) -> Result<(Diff,
             },
         }
     }
-    diff.text = text(&texts, files, game)?;
+    diff.text = text(&texts, files, game, &names)?;
     Ok((diff, records))
 }
 
@@ -140,7 +151,11 @@ fn read(path: &Path) -> Result<Vec<u8>> {
     package::read_file(path)
 }
 
-fn database(path: &Path, game: &dyn GameFiles, removals: bool) -> Result<(Records, Gvdb, usize)> {
+type Database = (Records, Gvdb, usize, HashMap<String, String>);
+
+// Besides the records, the text keys the mod points string records at, each with
+// the key the game's own record points at.
+fn database(path: &Path, game: &dyn GameFiles, removals: bool) -> Result<Database> {
     let stock = Gvdb::parse(&read(&game.original(package::DATABASE)?)?)
         .map_err(|e| err(format!("the game's database: {e}")))?;
     let ours = Gvdb::parse(&read(path)?).map_err(|e| err(format!("{}: {e}", path.display())))?;
@@ -148,11 +163,17 @@ fn database(path: &Path, game: &dyn GameFiles, removals: bool) -> Result<(Record
     let mut out = Records::default();
     let mut values = Gvdb::default();
     let mut seen = HashSet::with_capacity(ours.records.len());
+    let mut pointed = HashMap::new();
     for r in &ours.records {
         seen.insert(r.key);
         match index.get(&r.key) {
             Some(s) if s.tag == r.tag && s.value == r.value => continue,
-            Some(_) => out.changed.push(r.key),
+            Some(s) => {
+                out.changed.push(r.key);
+                if s.value_type() == ValueType::String && r.value_type() == ValueType::String {
+                    pointed.insert(r.text().into_owned(), s.text().into_owned());
+                }
+            }
             None => out.added.push(r.key),
         }
         values.records.push(r.clone());
@@ -170,7 +191,7 @@ fn database(path: &Path, game: &dyn GameFiles, removals: bool) -> Result<(Record
         }
         false => removed.len(),
     };
-    Ok((out, values, dropped))
+    Ok((out, values, dropped, pointed))
 }
 
 fn same(stock: &ErpFile, s: &Resource, ours: &ErpFile, r: &Resource) -> swofty_formats::Result<bool> {
@@ -227,7 +248,12 @@ fn lng(path: &Path) -> Result<Lng> {
     Lng::parse(&read(path)?).map_err(|e| err(format!("{}: {e}", path.display())))
 }
 
-fn text(paths: &[&str], files: &Path, game: &dyn GameFiles) -> Result<Vec<Text>> {
+fn text(
+    paths: &[&str],
+    files: &Path,
+    game: &dyn GameFiles,
+    names: &HashMap<String, String>,
+) -> Result<Vec<Text>> {
     let mut out: Vec<Text> = Vec::new();
     let mut stock_dir = None;
     for rel in paths {
@@ -245,6 +271,7 @@ fn text(paths: &[&str], files: &Path, game: &dyn GameFiles) -> Result<Vec<Text>>
             from: None,
             changed: map(&d.changed),
             added: map(&d.added),
+            defaults: BTreeMap::new(),
         });
     }
     let Some(source) = out
@@ -272,9 +299,55 @@ fn text(paths: &[&str], files: &Path, game: &dyn GameFiles) -> Result<Vec<Text>>
             ..source.clone()
         });
     }
+    defaults(&mut out, game, names)?;
     out.retain(|t| !t.is_empty());
     out.sort_by(|a, b| a.language.cmp(&b.language));
     Ok(out)
+}
+
+fn defaults(out: &mut [Text], game: &dyn GameFiles, names: &HashMap<String, String>) -> Result<()> {
+    let mut stock: HashMap<String, Option<Lng>> = HashMap::new();
+    let mut lookup = |code: &str, key: &str| -> Result<Option<String>> {
+        if !stock.contains_key(code) {
+            let l = match game.original_lang(code) {
+                Ok(path) => Some(lng(&path)?),
+                Err(_) => None,
+            };
+            stock.insert(code.to_owned(), l);
+        }
+        Ok(stock[code].as_ref().and_then(|l| l.get(key)).map(str::to_owned))
+    };
+    for t in out.iter_mut() {
+        // A translation replaced with the game's English text is untranslated
+        // filler, not a change.
+        if t.language != FALLBACK && t.from.is_none() {
+            let keys: Vec<String> = t.changed.keys().cloned().collect();
+            for key in keys {
+                if lookup(FALLBACK, &key)?.as_deref() == Some(t.changed[&key].as_str()) {
+                    t.changed.remove(&key);
+                }
+            }
+        }
+        let source = t.from.clone().unwrap_or_else(|| t.language.clone());
+        let keys: Vec<String> = t
+            .added
+            .keys()
+            .filter(|k| names.contains_key(*k))
+            .cloned()
+            .collect();
+        for key in keys {
+            let was = &names[&key];
+            // Mods fill in untranslated names too, so the English text counts.
+            let value = Some(t.added[&key].clone());
+            if lookup(&source, was)? != value && lookup(FALLBACK, was)? != value {
+                continue;
+            }
+            let value = t.added.remove(&key).expect("listed above");
+            let own = lookup(&t.language, was)?.unwrap_or(value);
+            t.defaults.insert(key, own);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -322,6 +395,119 @@ mod tests {
             l.set(k, *v);
         }
         l.to_bytes()
+    }
+
+    #[test]
+    fn text_a_mod_fills_in_from_the_game_is_a_default() {
+        let root = std::env::temp_dir().join(format!("simplified-defaults-{}", std::process::id()));
+        let (stock, ours) = (root.join("game"), root.join("files"));
+        let db = |records: &[(&str, &str)]| Gvdb {
+            records: records.iter().map(|(k, v)| Record::new(k, 2, *v)).collect(),
+        };
+        write(
+            &stock.join(package::DATABASE),
+            &db(&[("ast", "lng_ast"), ("rac", "lng_rac")]).to_bytes(),
+        );
+        write(
+            &ours.join(package::DATABASE),
+            &db(&[("ast", "lng_ast_26"), ("rac", "lng_rac_26")]).to_bytes(),
+        );
+        let names = |code: &str| {
+            [
+                ("lng_ast", format!("Aston {code}")),
+                ("lng_rac", format!("Bulls {code}")),
+            ]
+        };
+        for code in ["eng", "ger", "kor"] {
+            let n = names(code);
+            write(
+                &stock.join(format!("lang/language_{code}.lng")),
+                &lng(&[(n[0].0, &n[0].1), (n[1].0, &n[1].1)]),
+            );
+        }
+        write(
+            &ours.join("localisation/2025_release/language_eng.lng"),
+            &lng(&[
+                ("lng_ast", "Aston eng"),
+                ("lng_rac", "Bulls eng"),
+                ("lng_ast_26", "Aston eng"),
+                ("lng_rac_26", "Cupra"),
+            ]),
+        );
+        write(
+            &ours.join("localisation/2025_release/language_ger.lng"),
+            &lng(&[
+                ("lng_ast", "Aston ger"),
+                ("lng_rac", "Bulls eng"),
+                ("lng_ast_26", "Aston eng"),
+                ("lng_rac_26", "Cupra DE"),
+            ]),
+        );
+        let p = Package {
+            id: "m".into(),
+            name: "M".into(),
+            author: None,
+            version: None,
+            game_version: None,
+            studio_version: None,
+            source: "m.zip".into(),
+            sha256: None,
+            imported: 0,
+            files: vec![
+                File {
+                    path: package::DATABASE.into(),
+                    class: Class::Database,
+                    size: 0,
+                },
+                File {
+                    path: "localisation/2025_release/language_eng.lng".into(),
+                    class: Class::Text,
+                    size: 0,
+                },
+                File {
+                    path: "localisation/2025_release/language_ger.lng".into(),
+                    class: Class::Text,
+                    size: 0,
+                },
+            ],
+            skipped: Vec::new(),
+            track: None,
+        };
+        let game = Game {
+            dir: stock,
+            exe: "1.0",
+        };
+        let (d, _) = compute(&p, &ours, &game).unwrap();
+        let eng = &d.text[0];
+        assert_eq!(eng.language, "eng");
+        assert_eq!(
+            eng.added,
+            BTreeMap::from([("lng_rac_26".to_owned(), "Cupra".to_owned())])
+        );
+        assert_eq!(
+            eng.defaults,
+            BTreeMap::from([("lng_ast_26".to_owned(), "Aston eng".to_owned())])
+        );
+        let ger = &d.text[1];
+        assert_eq!((ger.language.as_str(), ger.from.as_deref()), ("ger", None));
+        assert!(ger.changed.is_empty());
+        assert_eq!(
+            ger.added,
+            BTreeMap::from([("lng_rac_26".to_owned(), "Cupra DE".to_owned())])
+        );
+        assert_eq!(
+            ger.defaults,
+            BTreeMap::from([("lng_ast_26".to_owned(), "Aston ger".to_owned())])
+        );
+        let kor = &d.text[2];
+        assert_eq!((kor.language.as_str(), kor.from.as_deref()), ("kor", Some("eng")));
+        assert_eq!(
+            kor.defaults,
+            BTreeMap::from([("lng_ast_26".to_owned(), "Aston kor".to_owned())])
+        );
+        let merged = crate::merge::ops("m", &d, &Gvdb::default());
+        assert_eq!((merged.strings, merged.defaults.len()), (3, 3));
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

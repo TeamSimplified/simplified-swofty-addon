@@ -118,7 +118,7 @@ impl Library {
         let bytes = std::fs::read(self.diff_path(id, key, "json")).ok()?;
         serde_json::from_slice::<Diff>(&bytes)
             .ok()
-            .filter(|d| d.build_key == key)
+            .filter(|d| d.build_key == key && d.version == diff::VERSION)
     }
 
     pub fn diff(&self, p: &Package, game: &dyn GameFiles) -> Result<Diff> {
