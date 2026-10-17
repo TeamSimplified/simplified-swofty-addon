@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "teamsimplified.mods",
+  "name": "Team Simplified",
+  "version": "0.1.0",
+  "author": "Team Simplified",
+  "description": "Imports and loads mods in the Simplified Suite's .serps format",
+  "license": "AGPL-3.0-or-later",
+  "homepage": "https://github.com/TeamSimplified/simplified-suite",
+  "compat": { "game": "f1_25" }
+}

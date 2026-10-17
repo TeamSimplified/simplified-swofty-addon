@@ -1,0 +1,602 @@
+pub mod library;
+pub mod package;
+pub mod serps;
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use swofty_addon::launcher::{Addon, ArgSpec, Builtin, Claim, CommandSpec, Cx, Importer, Progress, Summary};
+use swofty_addon::manifest::AddonManifest;
+use swofty_addon::view::{
+    Art, Block, Body, Button, ButtonKind, Control, Effect, Event, Fact, Icon, Notice, Row, SectionSpec,
+    Style, Tag, Tone, View,
+};
+use swofty_addon::{Error, Result};
+
+use crate::library::{Library, Package};
+use crate::package::Class;
+
+pub const ID: &str = "teamsimplified.mods";
+pub const SECTION: &str = "mods";
+const MANIFEST: &str = include_str!("../swofty.json");
+const FOOTER: &str = "Mod packages in the Simplified Suite's .serps format. Based on Simplified Suite by Team Simplified - https://github.com/TeamSimplified/simplified-suite";
+const IMPORT: &str = "import";
+const ENABLE: &str = "enable";
+const SHOW: &str = "show:";
+const REMOVE: &str = "remove:";
+
+pub fn builtin() -> Builtin {
+    Builtin {
+        addon: Arc::new(Simplified::new()),
+        locked: false,
+        default_on: true,
+    }
+}
+
+pub(crate) fn err(text: String) -> Error {
+    Error::Other(text)
+}
+
+pub(crate) fn io_err(path: impl Into<PathBuf>) -> impl FnOnce(std::io::Error) -> Error {
+    let path = path.into();
+    move |source| Error::Io { path, source }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct State {
+    #[serde(default)]
+    pub mods: Vec<Slot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Slot {
+    pub id: String,
+    pub enabled: bool,
+}
+
+pub struct Simplified {
+    manifest: AddonManifest,
+}
+
+impl Default for Simplified {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Simplified {
+    pub fn new() -> Self {
+        Self {
+            manifest: AddonManifest::parse(MANIFEST).expect("the built-in manifest is valid"),
+        }
+    }
+}
+
+struct Loaded {
+    order: Vec<(Package, bool)>,
+}
+
+impl Loaded {
+    fn read(cx: &Cx) -> Result<Self> {
+        let mut library = Library::new(cx.data_dir).list()?;
+        let state: State = cx.state()?;
+        let mut order = Vec::new();
+        for slot in state.mods {
+            if let Some(i) = library.iter().position(|p| p.id == slot.id) {
+                order.push((library.remove(i), slot.enabled));
+            }
+        }
+        order.extend(library.into_iter().map(|p| (p, false)));
+        Ok(Self { order })
+    }
+
+    fn save(&self, cx: &Cx) -> Result<()> {
+        let mods = self
+            .order
+            .iter()
+            .map(|(p, on)| Slot {
+                id: p.id.clone(),
+                enabled: *on,
+            })
+            .collect();
+        cx.set_state(&State { mods })
+    }
+
+    fn find(&self, id: &str) -> Result<usize> {
+        self.order
+            .iter()
+            .position(|(p, _)| p.id == id)
+            .ok_or_else(|| err(format!("no mod {id} in the library")))
+    }
+
+    fn set(&mut self, id: &str, on: bool) -> Result<&Package> {
+        let i = self.find(id)?;
+        self.order[i].1 = on;
+        Ok(&self.order[i].0)
+    }
+
+    fn move_to(&mut self, id: &str, to: usize) -> Result<&Package> {
+        let entry = self.order.remove(self.find(id)?);
+        let to = to.min(self.order.len());
+        self.order.insert(to, entry);
+        Ok(&self.order[to].0)
+    }
+
+    fn enabled(&self) -> impl Iterator<Item = &Package> {
+        self.order.iter().filter(|(_, on)| *on).map(|(p, _)| p)
+    }
+}
+
+fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress) -> Result<Vec<String>> {
+    let library = Library::new(cx.data_dir);
+    let known: Vec<String> = library.list()?.into_iter().map(|p| p.id).collect();
+    let mut done = Vec::new();
+    let mut added = Vec::new();
+    let mut failed = Vec::new();
+    let total = paths.len().max(1) as f32;
+    for (i, path) in paths.iter().enumerate() {
+        let mut report =
+            |f: f32, text: &str| progress.report((i as f32 + f) / total, &format!("Importing {text}"));
+        match library.import(path, cx.game, &mut report) {
+            Ok(imported) => {
+                let p = &imported.package;
+                let mut line = format!("Imported {}", p.name);
+                if imported.refused > 0 {
+                    line.push_str(&format!(", {} unsafe path(s) left out", imported.refused));
+                }
+                if !p.skipped.is_empty() {
+                    line.push_str(&format!(", skipped {}", p.skipped.join(", ")));
+                }
+                done.push(line);
+                if !known.contains(&p.id) {
+                    added.push(p.id.clone());
+                }
+            }
+            Err(e) => failed.push(format!("{}: {e}", package::file_name(path))),
+        }
+    }
+    if !added.is_empty() && !cx.profile.vanilla {
+        let mut loaded = Loaded::read(cx)?;
+        for id in &added {
+            loaded.set(id, true)?;
+        }
+        loaded.save(cx)?;
+    }
+    if failed.is_empty() {
+        Ok(done)
+    } else {
+        failed.extend(done);
+        Err(err(failed.join("\n")))
+    }
+}
+
+fn import_button(primary: bool) -> Button {
+    Button {
+        icon: Some(Icon::Upload),
+        style: if primary { Style::Primary } else { Style::Outline },
+        kind: ButtonKind::Pick {
+            title: "Import mods".into(),
+            extensions: vec!["serps".into(), "zip".into()],
+            folders: true,
+            multiple: true,
+        },
+        ..Button::new(IMPORT, "Import…")
+    }
+}
+
+fn subtitle(p: &Package) -> String {
+    [p.author.as_deref(), p.version.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn monogram(name: &str) -> String {
+    let letters: String = name
+        .split_whitespace()
+        .filter_map(|w| w.chars().find(|c| c.is_alphanumeric()))
+        .take(2)
+        .collect();
+    letters.to_uppercase()
+}
+
+fn size(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
+        b if b >= 1 << 20 => format!("{:.0} MB", b as f64 / (1u64 << 20) as f64),
+        b if b >= 1 << 10 => format!("{:.0} KB", b as f64 / (1u64 << 10) as f64),
+        b => format!("{b} B"),
+    }
+}
+
+fn date(secs: u64) -> String {
+    let days = (secs / 86_400) as i64 + 719_468;
+    let era = days.div_euclid(146_097);
+    let doe = days.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year}-{month:02}-{day:02}")
+}
+
+fn tags(p: &Package, exe: Option<&str>) -> Vec<Tag> {
+    let tag = |text: String, tone: Tone| Tag { text, tone };
+    let mut out = Vec::new();
+    if p.count(Class::Database) > 0 {
+        out.push(tag("Database".into(), Tone::Muted));
+    }
+    if p.count(Class::Text) > 0 {
+        out.push(tag("Text".into(), Tone::Muted));
+    }
+    match p.count(Class::Archive) {
+        0 => {}
+        1 => out.push(tag("1 archive".into(), Tone::Muted)),
+        n => out.push(tag(format!("{n} archives"), Tone::Muted)),
+    }
+    match p.count(Class::Replacement) + p.count(Class::Addition) {
+        0 => {}
+        1 => out.push(tag("1 file".into(), Tone::Muted)),
+        n => out.push(tag(format!("{n} files"), Tone::Muted)),
+    }
+    if let (Some(made), Some(exe)) = (p.game_version.as_deref(), exe)
+        && made != exe
+    {
+        out.push(tag(format!("Made for {made}"), Tone::Warn));
+    }
+    out
+}
+
+fn row(p: &Package, on: bool, switchable: bool, exe: Option<&str>) -> Row {
+    let dash = |v: &Option<String>| v.clone().unwrap_or_else(|| "—".into());
+    let mut detail = vec![Block::Stats(vec![
+        Fact::new("STATUS", if on { "On" } else { "Off" }),
+        Fact::new("VERSION", dash(&p.version)),
+        Fact::new("AUTHOR", dash(&p.author)),
+        Fact::new("MADE FOR", dash(&p.game_version)),
+        Fact::new("STUDIO", dash(&p.studio_version)),
+        Fact::new("SIZE", size(p.size())),
+        Fact::new("IMPORTED", date(p.imported)),
+    ])];
+    let groups = [
+        ("DATABASE", Class::Database),
+        ("LANGUAGES", Class::Text),
+        ("ARCHIVES", Class::Archive),
+        ("REPLACED FILES", Class::Replacement),
+        ("ADDED FILES", Class::Addition),
+    ];
+    for (label, class) in groups {
+        let items: Vec<String> = p
+            .files
+            .iter()
+            .filter(|f| f.class == class)
+            .map(|f| match class {
+                Class::Text => f
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .and_then(|n| n.strip_prefix("language_")?.strip_suffix(".lng"))
+                    .unwrap_or(&f.path)
+                    .to_owned(),
+                _ => f.path.clone(),
+            })
+            .collect();
+        if !items.is_empty() {
+            detail.push(Block::Names {
+                label: label.into(),
+                items,
+            });
+        }
+    }
+    if !p.skipped.is_empty() {
+        detail.push(Block::Names {
+            label: "SKIPPED".into(),
+            items: p.skipped.clone(),
+        });
+    }
+    detail.push(Block::Buttons(vec![
+        Button {
+            icon: Some(Icon::FolderOpen),
+            ..Button::new(format!("{SHOW}{}", p.id), "Show files")
+        },
+        Button {
+            icon: Some(Icon::Trash),
+            style: Style::Danger,
+            kind: ButtonKind::Confirm {
+                title: format!("Remove {}?", p.name),
+                text: "It is deleted from the library and turned off in every profile.".into(),
+            },
+            ..Button::new(format!("{REMOVE}{}", p.id), "Remove from library")
+        },
+    ]));
+    Row {
+        id: p.id.clone(),
+        title: p.name.clone(),
+        subtitle: subtitle(p),
+        art: Art::Monogram(monogram(&p.name)),
+        tags: tags(p, exe),
+        trailing: Some(Control::Switch {
+            id: p.id.clone(),
+            on,
+            enabled: switchable,
+        }),
+        detail,
+    }
+}
+
+impl Addon for Simplified {
+    fn manifest(&self) -> &AddonManifest {
+        &self.manifest
+    }
+
+    fn sections(&self) -> Vec<SectionSpec> {
+        vec![SectionSpec {
+            id: SECTION.into(),
+            title: "Mods".into(),
+            icon: Icon::Package,
+        }]
+    }
+
+    fn view(&self, cx: &Cx, section: &str) -> Result<View> {
+        if section != SECTION {
+            return Err(Error::NoSection(section.into()));
+        }
+        let loaded = Loaded::read(cx)?;
+        let on = loaded.enabled().count();
+        let mut notices = Vec::new();
+        if cx.profile.vanilla {
+            notices.push(Notice {
+                text: "The vanilla profile plays without addons or mods.".into(),
+                tone: Tone::Muted,
+                action: None,
+            });
+        } else if !cx.profile.enabled {
+            notices.push(Notice {
+                text: format!("Team Simplified is off in {}.", cx.profile.name),
+                tone: Tone::Warn,
+                action: Some(Button::new(ENABLE, "Turn on")),
+            });
+        }
+        let exe = cx.game.and_then(|g| g.exe_version());
+        let body = if loaded.order.is_empty() {
+            Body::Empty {
+                title: "No mods yet".into(),
+                text: "Import a .serps package, a zip or a folder that holds an F1 25 folder.".into(),
+                action: Some(import_button(true)),
+            }
+        } else {
+            Body::List {
+                rows: loaded
+                    .order
+                    .iter()
+                    .map(|(p, on)| row(p, *on, !cx.profile.vanilla, exe.as_deref()))
+                    .collect(),
+                reorder: !cx.profile.vanilla,
+            }
+        };
+        Ok(View {
+            subtitle: format!(
+                "{} in library · {on} on in {} · lower in the list wins",
+                loaded.order.len(),
+                cx.profile.name
+            ),
+            actions: vec![import_button(false)],
+            notices,
+            body,
+            footer: Some(FOOTER.into()),
+        })
+    }
+
+    fn event(&self, cx: &Cx, section: &str, event: Event) -> Result<Effect> {
+        if section != SECTION {
+            return Err(Error::NoSection(section.into()));
+        }
+        match event {
+            Event::Toggle { id, on } => {
+                let mut loaded = Loaded::read(cx)?;
+                loaded.set(&id, on)?;
+                loaded.save(cx)?;
+                Ok(Effect::Reload)
+            }
+            Event::Move { row, to } => {
+                let mut loaded = Loaded::read(cx)?;
+                loaded.move_to(&row, to)?;
+                loaded.save(cx)?;
+                Ok(Effect::Reload)
+            }
+            Event::Picked { id, paths } if id == IMPORT => {
+                Ok(Effect::Notice(import(cx, &paths, &NoProgress)?.join("\n")))
+            }
+            Event::Click { id } if id == ENABLE => Ok(Effect::SetAddonEnabled(true)),
+            Event::Click { id } if id.starts_with(SHOW) => {
+                let dir = Library::new(cx.data_dir)
+                    .dir(&id[SHOW.len()..])
+                    .join(library::FILES);
+                Ok(Effect::Open(dir))
+            }
+            Event::Click { id } if id.starts_with(REMOVE) => {
+                let p = Library::new(cx.data_dir).remove(&id[REMOVE.len()..])?;
+                if !cx.profile.vanilla {
+                    Loaded::read(cx)?.save(cx)?;
+                }
+                Ok(Effect::Notice(format!("Removed {} from the library", p.name)))
+            }
+            _ => Ok(Effect::None),
+        }
+    }
+
+    fn importer(&self) -> Option<&dyn Importer> {
+        Some(self)
+    }
+
+    fn commands(&self) -> Vec<CommandSpec> {
+        let id = |help: &str| ArgSpec {
+            name: "id".into(),
+            help: help.into(),
+            required: true,
+            many: false,
+        };
+        let cmd = |name: &str, about: &str, args: Vec<ArgSpec>| CommandSpec {
+            name: name.into(),
+            about: about.into(),
+            args,
+            subcommands: Vec::new(),
+        };
+        vec![CommandSpec {
+            name: "mods".into(),
+            about: "Team Simplified mods: .serps packages in the library and their order in the profile"
+                .into(),
+            args: Vec::new(),
+            subcommands: vec![
+                cmd("list", "List the library in load order", Vec::new()),
+                cmd(
+                    "import",
+                    "Import .serps packages, zips or folders into the library",
+                    vec![ArgSpec {
+                        name: "path".into(),
+                        help: "A .serps file, a zip or a folder that holds an F1 25 folder".into(),
+                        required: true,
+                        many: true,
+                    }],
+                ),
+                cmd(
+                    "remove",
+                    "Delete a mod from the library",
+                    vec![id("The mod's id")],
+                ),
+                cmd("enable", "Turn a mod on in the profile", vec![id("The mod's id")]),
+                cmd(
+                    "disable",
+                    "Turn a mod off in the profile",
+                    vec![id("The mod's id")],
+                ),
+                cmd(
+                    "move",
+                    "Move a mod to a place in the load order (1 loads first)",
+                    vec![
+                        id("The mod's id"),
+                        ArgSpec {
+                            name: "position".into(),
+                            help: "The new place, from 1".into(),
+                            required: true,
+                            many: false,
+                        },
+                    ],
+                ),
+            ],
+        }]
+    }
+
+    fn command(&self, cx: &Cx, path: &[String], args: &[String]) -> Result<String> {
+        let verb = match path {
+            [top, verb] if top == "mods" => verb.as_str(),
+            _ => return Err(Error::NoCommand(path.join(" "))),
+        };
+        let arg = |i: usize| {
+            args.get(i)
+                .map(String::as_str)
+                .ok_or_else(|| err(format!("mods {verb}: missing argument")))
+        };
+        let refuse_vanilla = || match cx.profile.vanilla {
+            true => Err(err("the vanilla profile plays without mods".into())),
+            false => Ok(()),
+        };
+        match verb {
+            "list" => {
+                let loaded = Loaded::read(cx)?;
+                if loaded.order.is_empty() {
+                    return Ok("no mods in the library".into());
+                }
+                let lines: Vec<String> = loaded
+                    .order
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (p, on))| {
+                        let by = subtitle(p);
+                        let by = if by.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({by})")
+                        };
+                        format!(
+                            "{:>2}. [{}] {}  {}{by}",
+                            i + 1,
+                            if *on { "on " } else { "off" },
+                            p.id,
+                            p.name
+                        )
+                    })
+                    .collect();
+                Ok(lines.join("\n"))
+            }
+            "import" => {
+                let paths: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
+                Ok(import(cx, &paths, &NoProgress)?.join("\n"))
+            }
+            "remove" => {
+                let p = Library::new(cx.data_dir).remove(arg(0)?)?;
+                if !cx.profile.vanilla {
+                    Loaded::read(cx)?.save(cx)?;
+                }
+                Ok(format!("removed {} from the library", p.name))
+            }
+            "enable" | "disable" => {
+                refuse_vanilla()?;
+                let on = verb == "enable";
+                let mut loaded = Loaded::read(cx)?;
+                let name = loaded.set(arg(0)?, on)?.name.clone();
+                loaded.save(cx)?;
+                Ok(format!(
+                    "{name} is {} in {}",
+                    if on { "on" } else { "off" },
+                    cx.profile.name
+                ))
+            }
+            "move" => {
+                refuse_vanilla()?;
+                let to: usize = arg(1)?
+                    .parse()
+                    .ok()
+                    .filter(|n| *n >= 1)
+                    .ok_or_else(|| err(format!("{} is not a position from 1", arg(1).unwrap_or(""))))?;
+                let mut loaded = Loaded::read(cx)?;
+                let name = loaded.move_to(arg(0)?, to - 1)?.name.clone();
+                loaded.save(cx)?;
+                let at = loaded.find(arg(0)?)? + 1;
+                Ok(format!("{name} is number {at} in {}", cx.profile.name))
+            }
+            _ => Err(Error::NoCommand(path.join(" "))),
+        }
+    }
+
+    fn summary(&self, cx: &Cx) -> Option<Summary> {
+        if cx.profile.vanilla {
+            return None;
+        }
+        let loaded = Loaded::read(cx).ok()?;
+        Some(Summary {
+            label: "MODS".into(),
+            items: loaded.enabled().map(|p| p.name.clone()).collect(),
+        })
+    }
+}
+
+impl Importer for Simplified {
+    fn claims(&self, path: &Path) -> Claim {
+        package::claims(path)
+    }
+
+    fn import(&self, cx: &Cx, paths: &[PathBuf], progress: &dyn Progress) -> Result<Vec<String>> {
+        import(cx, paths, progress)
+    }
+}
+
+struct NoProgress;
+
+impl Progress for NoProgress {
+    fn report(&self, _: f32, _: &str) {}
+}

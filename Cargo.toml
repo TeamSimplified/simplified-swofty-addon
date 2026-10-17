@@ -1,0 +1,20 @@
+[package]
+name = "swofty-addon-simplified"
+description = "Team Simplified: .serps mods for Swofty Launcher for F1 25"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+swofty-addon.workspace = true
+swofty-formats.workspace = true
+zip.workspace = true
+
+[lints]
+workspace = true
