@@ -2,10 +2,112 @@
   "schema_version": 1,
   "id": "teamsimplified.mods",
   "name": "Simplified for Swofty",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": "Team Simplified",
   "description": "Imports and loads F1 25 mods from any zip, 7z, rar or folder, as copying them into the game folder would, including mods made with Simplified Studio and tracks",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://github.com/TeamSimplified/simplified-suite",
-  "compat": { "game": "f1_25" }
+  "compat": {
+    "game": "f1_25",
+    "launcher": ">=1.0.1"
+  },
+  "icon": "icon.svg",
+  "launcher": {
+    "program": {
+      "windows": "bin/simplified-helper.exe",
+      "linux": "bin/simplified-helper"
+    },
+    "sections": [
+      {
+        "id": "mods",
+        "title": "Mods",
+        "icon": "package"
+      }
+    ],
+    "imports": [
+      "serps",
+      "zip",
+      "7z",
+      "rar"
+    ],
+    "build": true,
+    "commands": [
+      {
+        "name": "mods",
+        "about": "Mods in the library and their order in the profile",
+        "subcommands": [
+          {
+            "name": "list",
+            "about": "List the library in load order"
+          },
+          {
+            "name": "import",
+            "about": "Import mods into the library",
+            "args": [
+              {
+                "name": "path",
+                "help": "A mod's zip, 7z, rar, .serps or folder, laid out like the game folder",
+                "required": true,
+                "many": true
+              }
+            ]
+          },
+          {
+            "name": "remove",
+            "about": "Delete a mod from the library",
+            "args": [
+              {
+                "name": "id",
+                "help": "The mod's id",
+                "required": true,
+                "many": false
+              }
+            ]
+          },
+          {
+            "name": "enable",
+            "about": "Turn a mod on in the profile",
+            "args": [
+              {
+                "name": "id",
+                "help": "The mod's id",
+                "required": true,
+                "many": false
+              }
+            ]
+          },
+          {
+            "name": "disable",
+            "about": "Turn a mod off in the profile",
+            "args": [
+              {
+                "name": "id",
+                "help": "The mod's id",
+                "required": true,
+                "many": false
+              }
+            ]
+          },
+          {
+            "name": "move",
+            "about": "Move a mod to a place in the load order (1 loads first)",
+            "args": [
+              {
+                "name": "id",
+                "help": "The mod's id",
+                "required": true,
+                "many": false
+              },
+              {
+                "name": "position",
+                "help": "The new place, from 1",
+                "required": true,
+                "many": false
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
 }

@@ -9,7 +9,7 @@ How Simplified for Swofty imports, stores, compares and merges `.serps` mods and
 - The crate `addons/simplified` (`swofty-addon-simplified`) is Rust and AGPL-3.0-or-later, like the rest of the repository. Its `mod.serps` reader, package root, content root and entry path checks are ported from the Simplified Launcher (GPL-3.0, used with Team Simplified's permission) and carry the Simplified Suite notice. `THIRD_PARTY.md` credits Team Simplified for the `.serps` format and the Simplified Suite, and the Mods section shows the credit.
 - Import, the library, profile state, the section and `swofty mods` are built (work item 13), and so are the diffs (work item 14), the merge and conflicts (work item 15).
 - Manifest: id `teamsimplified.mods`, name `Simplified for Swofty`, author `Team Simplified`. No options and no native plugin.
-- Built in and on by default in new profiles. It can be turned off per profile, which hides its section.
+- Ships as a launcher plugin: `teamsimplified.mods.swoftyaddon` holds `swofty.json` and the helper program `bin/simplified-helper`, which hands the addon to `swofty_addon::helper::run_helper`. `swofty.json` declares the Mods section, the `mods` command, the import extensions and the build hook, and the addon reads its sections and commands from it. The launcher can still build the crate in through `swofty-builtins`; built in, it is on by default in new profiles. Either way it can be turned off per profile, which hides its section.
 - It uses `swofty-addon` and `swofty-formats` only. Core has no code for it.
 
 ### 4.2 Packages

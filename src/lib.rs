@@ -12,10 +12,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use swofty_addon::asset::{AssetBatch, AssetOp, LangOp, Op, Origin};
-use swofty_addon::launcher::{
-    Addon, ArgSpec, BuildCx, Builtin, Claim, CommandSpec, Cx, Importer, Progress, Summary,
-};
-use swofty_addon::manifest::AddonManifest;
+use swofty_addon::launcher::{Addon, BuildCx, Builtin, Claim, CommandSpec, Cx, Importer, Progress, Summary};
+use swofty_addon::manifest::{AddonManifest, Launcher};
 use swofty_addon::ops::{DbOp, ErpOp};
 use swofty_addon::view::{
     Art, Block, Body, Button, ButtonKind, Control, Effect, Event, Fact, Icon, Notice, Row, SectionSpec,
@@ -143,6 +141,13 @@ impl Simplified {
         Self {
             manifest: AddonManifest::parse(MANIFEST).expect("the built-in manifest is valid"),
         }
+    }
+
+    fn launcher(&self) -> &Launcher {
+        self.manifest
+            .launcher
+            .as_ref()
+            .expect("swofty.json declares the launcher block")
     }
 }
 
@@ -551,12 +556,10 @@ impl Addon for Simplified {
         Some(include_bytes!("../icon.svg"))
     }
 
+    // The Mods page and the mods command are declared once, in swofty.json, which
+    // the launcher also reads when it runs this addon as a helper program.
     fn sections(&self) -> Vec<SectionSpec> {
-        vec![SectionSpec {
-            id: SECTION.into(),
-            title: "Mods".into(),
-            icon: Icon::Package,
-        }]
+        self.launcher().sections.clone()
     }
 
     fn view(&self, cx: &Cx, section: &str) -> Result<View> {
@@ -803,60 +806,7 @@ impl Addon for Simplified {
     }
 
     fn commands(&self) -> Vec<CommandSpec> {
-        let id = |help: &str| ArgSpec {
-            name: "id".into(),
-            help: help.into(),
-            required: true,
-            many: false,
-        };
-        let cmd = |name: &str, about: &str, args: Vec<ArgSpec>| CommandSpec {
-            name: name.into(),
-            about: about.into(),
-            args,
-            subcommands: Vec::new(),
-        };
-        vec![CommandSpec {
-            name: "mods".into(),
-            about: "Mods in the library and their order in the profile".into(),
-            args: Vec::new(),
-            subcommands: vec![
-                cmd("list", "List the library in load order", Vec::new()),
-                cmd(
-                    "import",
-                    "Import mods into the library",
-                    vec![ArgSpec {
-                        name: "path".into(),
-                        help: "A mod's zip, 7z, rar, .serps or folder, laid out like the game folder".into(),
-                        required: true,
-                        many: true,
-                    }],
-                ),
-                cmd(
-                    "remove",
-                    "Delete a mod from the library",
-                    vec![id("The mod's id")],
-                ),
-                cmd("enable", "Turn a mod on in the profile", vec![id("The mod's id")]),
-                cmd(
-                    "disable",
-                    "Turn a mod off in the profile",
-                    vec![id("The mod's id")],
-                ),
-                cmd(
-                    "move",
-                    "Move a mod to a place in the load order (1 loads first)",
-                    vec![
-                        id("The mod's id"),
-                        ArgSpec {
-                            name: "position".into(),
-                            help: "The new place, from 1".into(),
-                            required: true,
-                            many: false,
-                        },
-                    ],
-                ),
-            ],
-        }]
+        self.launcher().commands.clone()
     }
 
     fn command(&self, cx: &Cx, path: &[String], args: &[String]) -> Result<String> {

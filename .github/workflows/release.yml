@@ -1,0 +1,82 @@
+name: Release
+
+# Builds the helper for Windows and Linux and attaches teamsimplified.mods.swoftyaddon,
+# with its SHA256SUMS, to the release of the pushed tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and attach to, such as v0.5.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  helper:
+    name: Helper (${{ matrix.os }})
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            exe: simplified-helper.exe
+          - os: ubuntu-latest
+            exe: simplified-helper
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+
+      - name: Build
+        run: cargo build --release --locked --bin simplified-helper
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: helper-${{ matrix.os }}
+          path: target/release/${{ matrix.exe }}
+
+  package:
+    name: Package
+    needs: helper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: helpers
+
+      - name: Check the version
+        run: |
+          version=$(jq -r .version swofty.json)
+          test "v$version" = "$TAG" || { echo "swofty.json says $version, the tag is $TAG"; exit 1; }
+
+      # swofty.json sits at the zip root, as the launcher expects.
+      - name: Package
+        run: |
+          mkdir -p addon/bin
+          cp swofty.json icon.svg LICENSE README.md THIRD_PARTY.md addon/
+          cp helpers/helper-windows-latest/simplified-helper.exe addon/bin/
+          cp helpers/helper-ubuntu-latest/simplified-helper addon/bin/
+          chmod +x addon/bin/simplified-helper
+          (cd addon && zip -r -X ../teamsimplified.mods.swoftyaddon .)
+          sha256sum teamsimplified.mods.swoftyaddon > SHA256SUMS
+          unzip -l teamsimplified.mods.swoftyaddon
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "Simplified for Swofty $TAG" --notes ""
+          gh release upload "$TAG" teamsimplified.mods.swoftyaddon SHA256SUMS --clobber

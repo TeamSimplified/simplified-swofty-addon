@@ -13,20 +13,33 @@ How it works is in [docs/design.md](docs/design.md).
 
 ## Using it in Swofty Launcher
 
-The launcher builds this crate into `swofty-builtins`. It depends on two crates of the launcher, `swofty-addon` and `swofty-formats`, which this repository takes from a SwoftyLauncher release tag, or from a commit on its `main` when a change it needs is not released yet. In the launcher's root `Cargo.toml`, patch them to the launcher's own copies, so there is one of each:
+Simplified for Swofty is a launcher plugin: a helper program (`bin/simplified-helper`) that the launcher runs, packaged with its `swofty.json` as `teamsimplified.mods.swoftyaddon`. Each [release](https://github.com/TeamSimplified/simplified-swofty-addon/releases) attaches it, built for Windows and Linux, with its `SHA256SUMS`.
+
+To install it, drop the `.swoftyaddon` on the launcher, or run:
+
+```sh
+swofty addons install teamsimplified.mods.swoftyaddon
+swofty addons enable teamsimplified.mods
+```
+
+Its id is `teamsimplified.mods`, the same id the launcher's built-in copy used, so the mod library and each profile's mod list carry over. A launcher that still builds that copy in refuses to install this one ("teamsimplified.mods is built in").
+
+The helper speaks the launcher's helper protocol through `swofty_addon::helper::run_helper`. Until a launcher release includes [SwoftyLauncher#124](https://github.com/Swofty-Developments/SwoftyLauncher/pull/124), the plugin has three limits:
+
+- All mods share one runtime overlay archive. Conflicts still list each mod's changes, but name only the addon.
+- Only dropped files are claimed, by extension (`serps`, `zip`, `7z`, `rar`). To import a folder, use **Import** on the Mods page or `swofty mods import`.
+- The one-time move of tracks from the launcher's old `maps/` folder only runs in the built-in copy.
+
+The crate still builds as a library, so the launcher can also build it in through `swofty-builtins`, as it did before: depend on it from the launcher's root `Cargo.toml` and patch the launcher crates it uses to the launcher's own copies.
 
 ```toml
 [workspace.dependencies]
-swofty-addon-simplified = { git = "https://github.com/TeamSimplified/simplified-swofty-addon", branch = "main" }
+swofty-addon-simplified = { git = "https://github.com/TeamSimplified/simplified-swofty-addon", tag = "v0.5.0" }
 
 [patch."https://github.com/Swofty-Developments/SwoftyLauncher"]
 swofty-addon = { path = "packages/addon-api" }
 swofty-formats = { path = "packages/formats" }
 ```
-
-Then remove `addons/simplified` from `members` and `default-members`, and delete the folder. `addons/builtins` keeps `swofty-addon-simplified.workspace = true` and `swofty_addon_simplified::builtin()` as they are.
-
-Pin a tag or `rev` instead of `branch` for releases. To work on both repositories at once, point the dependency at a checkout instead: `{ path = "../simplified-swofty-addon" }`.
 
 ## Building on its own
 
@@ -35,6 +48,8 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 ```
+
+To build the helper, run `cargo build --release --bin simplified-helper`. Pushing a `v*` tag builds it for Windows and Linux and attaches the `.swoftyaddon` to that release (`.github/workflows/release.yml`); the version in `swofty.json` must match the tag.
 
 The toolchain is pinned in `rust-toolchain.toml`, to the same version as the launcher. The tests need no game files. When the launcher changes `swofty-addon` or `swofty-formats`, point the `tag` (or `rev`) in `Cargo.toml` at the release or commit that has the change.
 
