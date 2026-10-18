@@ -74,12 +74,13 @@ fn without_repeats(ops: Vec<Op>) -> Vec<Op> {
         .collect()
 }
 
-// What a mod's ui_texture archive adds goes into the merged UI archive, except
-// what Simplified Studio adds to every shader package.
+// Only the logo texture arrays of a mod's ui_texture archive go into the merged UI
+// archive, slice by slice. Everything else it adds loads with the mod's own archive
+// (merge::ops), and what Simplified Studio adds to every shader package with neither.
 fn ui_uris(added: &[String]) -> Vec<String> {
     added
         .iter()
-        .filter(|uri| !merge::studio_only(uri))
+        .filter(|uri| texarray::merged_by_slice(uri) && !merge::studio_only(uri))
         .cloned()
         .collect()
 }
@@ -212,20 +213,21 @@ fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress) -> Result<Vec<Str
             |f: f32, text: &str| progress.report((i as f32 + f) / total, &format!("Importing {text}"));
         match library.import(path, cx.game, &mut report) {
             Ok(imported) => {
-                let p = &imported.package;
-                let mut line = format!("Imported {}", p.name);
-                if imported.refused > 0 {
-                    line.push_str(&format!(", {} unsafe path(s) left out", imported.refused));
-                }
-                if !p.skipped.is_empty() {
-                    line.push_str(&format!(", skipped {}", p.skipped.join(", ")));
-                }
-                if let Some(Err(e)) = cx.game.map(|g| library.diff(p, g)) {
-                    line.push_str(&format!(", not compared with the game: {e}"));
-                }
-                done.push(line);
-                if !known.contains(&p.id) {
-                    added.push(p.id.clone());
+                for (n, p) in imported.packages.iter().enumerate() {
+                    let mut line = format!("Imported {}", p.name);
+                    if n == 0 && imported.refused > 0 {
+                        line.push_str(&format!(", {} unsafe path(s) left out", imported.refused));
+                    }
+                    if !p.skipped.is_empty() {
+                        line.push_str(&format!(", skipped {}", p.skipped.join(", ")));
+                    }
+                    if let Some(Err(e)) = cx.game.map(|g| library.diff(p, g)) {
+                        line.push_str(&format!(", not compared with the game: {e}"));
+                    }
+                    done.push(line);
+                    if !known.contains(&p.id) {
+                        added.push(p.id.clone());
+                    }
                 }
             }
             Err(e) => failed.push(format!("{}: {e}", package::file_name(path))),
@@ -1014,11 +1016,12 @@ mod merge_tests {
     }
 
     #[test]
-    fn studio_s_marker_and_shadow_stay_out_of_the_ui_archive() {
+    fn only_logo_arrays_go_into_the_ui_archive() {
         let logos =
             "eaid://ui_package/art/texture_arrays/overrides.uidb/overrides.team_logos.f1_2026.texarray.image";
         let added: Vec<String> = [
             logos,
+            "eaid://ui_package/art/textures/broadcast_ui_generic/bc_starting_grid/bc_starting_grid_grad_1.tif.image",
             "eaid://tools_package/default/serps",
             "eaid://f1_2025_vehicle_package/shared/shadows/materials/f1_vehicle_shadow.material",
         ]

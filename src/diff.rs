@@ -553,6 +553,7 @@ mod tests {
             ],
             skipped: Vec::new(),
             track: None,
+            part: None,
         };
         let game = Game {
             dir: stock,
@@ -633,6 +634,7 @@ mod tests {
             ],
             skipped: Vec::new(),
             track: None,
+            part: None,
         };
         let game = Game {
             dir: stock.clone(),

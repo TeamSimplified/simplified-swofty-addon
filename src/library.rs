@@ -39,6 +39,15 @@ pub struct Package {
     pub skipped: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track: Option<String>,
+    // A part of a mod that comes in parts: the mod's id and the part's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<Part>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Part {
+    pub of: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,8 +68,9 @@ impl Package {
 }
 
 #[derive(Debug)]
+// Every part of what was imported, one package each; a mod without parts gives one.
 pub struct Imported {
-    pub package: Package,
+    pub packages: Vec<Package>,
     pub refused: usize,
 }
 
@@ -196,7 +206,10 @@ impl Library {
             let package = track::store(&dir, &info, &id, source, &out)?;
             self.place(&package, &out)?;
             progress(1.0, &package.name);
-            return Ok(Imported { package, refused });
+            return Ok(Imported {
+                packages: vec![package],
+                refused,
+            });
         }
         let root = package::package_root(&unpacked).unwrap_or_else(|| unpacked.clone());
         let serps_path = root.join(serps::FILE);
@@ -204,79 +217,75 @@ impl Library {
             true => ModInfo::parse(&package::read_file(&serps_path)?).unwrap_or_default(),
             false => ModInfo::default(),
         };
-        let content = package::content_root(&root).ok_or_else(|| {
-            err(format!(
-                "{source} holds no game files: no {} folder, and no game folders such as \
-                     2025_asset_groups or shader_package_2025",
-                package::GAME_FOLDER
-            ))
-        })?;
-        progress(0.75, &source);
-        let out = staging.join("package");
-        let files_dir = out.join(FILES);
-        let mut files = Vec::new();
-        let mut skipped = Vec::new();
-        for path in package::files(&content)? {
-            let rel = path
-                .strip_prefix(&content)
-                .expect("under content")
-                .to_string_lossy()
-                .replace('\\', "/");
-            let Some(class) = package::class(&rel, game) else {
-                skipped.push(rel);
-                continue;
-            };
-            if class == Class::Database {
-                Gvdb::parse(&package::read_file(&path)?)
-                    .map_err(|e| err(format!("{source}: {rel} is not an F1 25 database: {e}")))?;
-            }
-            let rel = package::game_path(&rel);
-            let dest = files_dir.join(&rel);
-            if let Some(dir) = dest.parent() {
-                std::fs::create_dir_all(dir).map_err(io_err(dir))?;
-            }
-            std::fs::rename(&path, &dest).map_err(io_err(&dest))?;
-            let size = std::fs::metadata(&dest).map_err(io_err(&dest))?.len();
-            files.push(File {
-                path: rel,
-                class,
-                size,
-            });
-        }
-        if files.is_empty() {
-            return Err(err(format!("{source} holds no game files")));
-        }
-        files.sort_by(|a, b| a.path.cmp(&b.path));
-        progress(0.85, &source);
         let stem = src
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let package = Package {
+        let base = Package {
             id: id(&info, &stem),
             name: info.title().unwrap_or(&stem).to_owned(),
             author: info.author().map(str::to_owned),
             version: info.version().map(str::to_owned),
             game_version: info.game_version().map(str::to_owned),
             studio_version: info.studio_version().map(str::to_owned),
-            source,
+            source: source.clone(),
             sha256: src.is_file().then(|| sha256(src)).transpose()?,
             imported: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs()),
-            files,
-            skipped,
+            files: Vec::new(),
+            skipped: Vec::new(),
             track: None,
+            part: None,
         };
-        if serps_path.is_file() {
-            std::fs::copy(&serps_path, out.join(serps::FILE)).map_err(io_err(&out))?;
+        let parts = package::parts(&root)?;
+        let mut packages = Vec::new();
+        if parts.len() < 2 {
+            let content = package::content_root(&root).ok_or_else(|| {
+                err(format!(
+                    "{source} holds no game files: no {} folder, and no game folders such as \
+                     2025_asset_groups or shader_package_2025",
+                    package::GAME_FOLDER
+                ))
+            })?;
+            packages.push((base.clone(), content));
+        } else {
+            for part in &parts {
+                let dir = root.join(&part.rel);
+                let content = package::content_root(&dir).unwrap_or(dir);
+                let p = Package {
+                    id: format!("{}.{}", base.id, slug(&part.rel)),
+                    name: format!("{} › {}", base.name, part.name),
+                    part: Some(Part {
+                        of: base.id.clone(),
+                        name: part.name.clone(),
+                    }),
+                    ..base.clone()
+                };
+                packages.push((p, content));
+            }
         }
-        let json = serde_json::to_vec_pretty(&package).expect("serialisable");
-        let path = out.join(PACKAGE_FILE);
-        std::fs::write(&path, json).map_err(io_err(&path))?;
-        self.place(&package, &out)?;
-        progress(1.0, &package.name);
-        Ok(Imported { package, refused })
+        progress(0.75, &source);
+        let mut placed = Vec::new();
+        for (n, (mut p, content)) in packages.into_iter().enumerate() {
+            let out = staging.join(format!("package-{n}"));
+            let (files, skipped) = gather(&content, &out.join(FILES), game, &source)?;
+            p.files = files;
+            p.skipped = skipped;
+            if serps_path.is_file() {
+                std::fs::copy(&serps_path, out.join(serps::FILE)).map_err(io_err(&out))?;
+            }
+            let json = serde_json::to_vec_pretty(&p).expect("serialisable");
+            let path = out.join(PACKAGE_FILE);
+            std::fs::write(&path, json).map_err(io_err(&path))?;
+            placed.push((p, out));
+        }
+        for (p, out) in &placed {
+            self.place(p, out)?;
+        }
+        let packages: Vec<Package> = placed.into_iter().map(|(p, _)| p).collect();
+        progress(1.0, &packages[0].name);
+        Ok(Imported { packages, refused })
     }
 
     fn place(&self, package: &Package, out: &Path) -> Result<()> {
@@ -296,6 +305,48 @@ impl Library {
         }
         Ok(())
     }
+}
+
+fn gather(
+    content: &Path,
+    files_dir: &Path,
+    game: Option<&dyn GameFiles>,
+    source: &str,
+) -> Result<(Vec<File>, Vec<String>)> {
+    let mut files = Vec::new();
+    let mut skipped = Vec::new();
+    for path in package::files(content)? {
+        let rel = path
+            .strip_prefix(content)
+            .expect("under content")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let Some(class) = package::class(&rel, game) else {
+            skipped.push(rel);
+            continue;
+        };
+        if class == Class::Database {
+            Gvdb::parse(&package::read_file(&path)?)
+                .map_err(|e| err(format!("{source}: {rel} is not an F1 25 database: {e}")))?;
+        }
+        let rel = package::game_path(&rel);
+        let dest = files_dir.join(&rel);
+        if let Some(dir) = dest.parent() {
+            std::fs::create_dir_all(dir).map_err(io_err(dir))?;
+        }
+        std::fs::rename(&path, &dest).map_err(io_err(&dest))?;
+        let size = std::fs::metadata(&dest).map_err(io_err(&dest))?.len();
+        files.push(File {
+            path: rel,
+            class,
+            size,
+        });
+    }
+    if files.is_empty() {
+        return Err(err(format!("{source} holds no game files")));
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok((files, skipped))
 }
 
 fn read_package(path: &Path) -> Result<Package> {
@@ -365,6 +416,68 @@ fn sweep(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_part_of_a_mod_is_a_library_entry_of_its_own() {
+        let root = std::env::temp_dir().join(format!("simplified-import-parts-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let src = root.join("Realism Patch");
+        for (rel, data) in [
+            (
+                "mod.serps",
+                &br#"{"mod_name":"Realism Patch","author":"Venturi"}"#[..],
+            ),
+            (
+                "Broadcast -c/shader_package_2025/ui_texture.nefx2.sm51.erp",
+                b"ui",
+            ),
+            ("Tyres/shader_package_2025/ui_texture.nefx2.sm51.erp", b"tyres"),
+            (
+                "Tyres/shader_package_2025/object_steering_screen.nefx2.sm51.erp",
+                b"steering",
+            ),
+        ] {
+            let p = src.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, data).unwrap();
+        }
+        let library = Library::new(&root.join("data"));
+        let imported = library.import(&src, None, &mut |_, _| {}).unwrap();
+        let got: Vec<(&str, &str, usize)> = imported
+            .packages
+            .iter()
+            .map(|p| (p.id.as_str(), p.name.as_str(), p.files.len()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "venturi.realism-patch.broadcast-c",
+                    "Realism Patch › Broadcast",
+                    1
+                ),
+                ("venturi.realism-patch.tyres", "Realism Patch › Tyres", 2),
+            ]
+        );
+        let part = imported.packages[1].part.as_ref().unwrap();
+        assert_eq!(
+            (part.of.as_str(), part.name.as_str()),
+            ("venturi.realism-patch", "Tyres")
+        );
+        let ui = |id: &str| {
+            std::fs::read(
+                library
+                    .dir(id)
+                    .join(FILES)
+                    .join("shader_package_2025/ui_texture.nefx2.sm51.erp"),
+            )
+            .unwrap()
+        };
+        assert_eq!(ui("venturi.realism-patch.broadcast-c"), b"ui");
+        assert_eq!(ui("venturi.realism-patch.tyres"), b"tyres");
+        assert_eq!(library.list().unwrap().len(), 2);
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn ids_come_from_author_and_name() {

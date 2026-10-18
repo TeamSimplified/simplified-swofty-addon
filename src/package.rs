@@ -396,6 +396,74 @@ pub fn package_root(dir: &Path) -> Option<PathBuf> {
     }
 }
 
+// A mod can come in parts: folders that each hold game files of their own, such as
+// "Broadcast graphics/shader_package_2025" beside "Tyre colours/shader_package_2025".
+// A part is the folder above a game folder, or above a folder named like the game,
+// unless it sits inside another part's game files. Ported from list_mods.py of the
+// Simplified Launcher.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartDir {
+    pub rel: String,
+    pub name: String,
+}
+
+pub fn parts(root: &Path) -> Result<Vec<PartDir>> {
+    let mut candidates = std::collections::BTreeSet::new();
+    for file in files(root)? {
+        let rel = file
+            .strip_prefix(root)
+            .expect("under root")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let segs: Vec<&str> = rel.split('/').collect();
+        let dirs = &segs[..segs.len() - 1];
+        if let Some(i) = dirs.iter().position(|d| is_game_folder(d) || is_marker(d)) {
+            candidates.insert(dirs[..i].join("/"));
+        }
+    }
+    let mut sorted: Vec<String> = candidates.into_iter().collect();
+    sorted.sort_by_key(|c| (c.split('/').filter(|s| !s.is_empty()).count(), c.clone()));
+    let mut kept: Vec<String> = Vec::new();
+    for c in sorted {
+        let inside = kept.iter().any(|k| {
+            let rest = match k.is_empty() {
+                true => Some(c.as_str()),
+                false => c.strip_prefix(&format!("{k}/")),
+            };
+            rest.is_some_and(|r| {
+                let first = r.split('/').next().unwrap_or("");
+                is_game_folder(first) || is_marker(first)
+            })
+        });
+        if !inside {
+            kept.push(c);
+        }
+    }
+    Ok(kept
+        .into_iter()
+        .map(|rel| PartDir {
+            name: part_name(&rel),
+            rel,
+        })
+        .collect())
+}
+
+// "Liveries -c/Ferrari -x" shows as "Liveries › Ferrari", as in the Simplified Launcher.
+fn part_name(rel: &str) -> String {
+    let mut segs: Vec<&str> = rel.split('/').filter(|s| !s.is_empty()).collect();
+    if segs.last().is_some_and(|s| is_game_folder(s)) {
+        segs.pop();
+    }
+    segs.iter()
+        .map(|s| {
+            s.strip_suffix(" -c")
+                .or_else(|| s.strip_suffix(" -x"))
+                .unwrap_or(s)
+        })
+        .collect::<Vec<_>>()
+        .join(" › ")
+}
+
 pub fn content_root(root: &Path) -> Option<PathBuf> {
     named_game(root).or_else(|| {
         std::iter::once(root.to_path_buf())
@@ -545,6 +613,61 @@ mod tests {
         assert_eq!(claims(&dir.join("mod.7z")), Claim::Yes);
         assert_eq!(claims(&dir.join("mod.rar")), Claim::Yes);
         assert_eq!(claims(&dir.join("notes.txt")), Claim::No);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn tree(dir: &Path, files: &[&str]) {
+        std::fs::remove_dir_all(dir).ok();
+        for f in files {
+            let p = dir.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+    }
+
+    #[test]
+    fn a_mod_comes_in_the_parts_that_hold_game_files() {
+        let dir = std::env::temp_dir().join(format!("simplified-parts-{}", std::process::id()));
+        let names = |files: &[&str]| {
+            tree(&dir, files);
+            parts(&dir)
+                .unwrap()
+                .into_iter()
+                .map(|p| (p.rel, p.name))
+                .collect::<Vec<_>>()
+        };
+        let part = |rel: &str, name: &str| (rel.to_owned(), name.to_owned());
+        assert_eq!(
+            names(&[
+                "mod.serps",
+                "2026 Broadcast graphics/shader_package_2025/ui_texture.nefx2.sm51.erp",
+                "Realistic Tyre colours/shader_package_2025/object_steering_screen.nefx2.sm51.erp",
+            ]),
+            [
+                part("2026 Broadcast graphics", "2026 Broadcast graphics"),
+                part("Realistic Tyre colours", "Realistic Tyre colours"),
+            ]
+        );
+        assert_eq!(
+            names(&["F1 25/game_package/db.bin", "F1 25/2025_asset_groups/a.erp"]),
+            [part("", "")]
+        );
+        assert_eq!(
+            names(&["Wrap/v2/2025_asset_groups/a.erp"]),
+            [part("Wrap/v2", "Wrap › v2")]
+        );
+        assert_eq!(
+            names(&[
+                "Pack/F1 25/game_package/db.bin",
+                "Pack/UI/F1 25/shader_package_2025/ui.erp"
+            ]),
+            [part("Pack", "Pack"), part("Pack/UI", "Pack › UI")]
+        );
+        assert_eq!(
+            names(&["Liveries -c/Ferrari -x/F1 25 (red)/2025_asset_groups/a.erp"]),
+            [part("Liveries -c/Ferrari -x", "Liveries › Ferrari")]
+        );
+        assert_eq!(names(&["readme.txt"]), []);
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -123,6 +123,7 @@ pub fn store(from: &Path, info: &Info, id: &str, source: String, out: &Path) -> 
         files,
         skipped: Vec::new(),
         track: Some(info.code.clone()),
+        part: None,
     };
     let mut serps = serde_json::Map::new();
     serps.insert("mod_name".into(), package.name.clone().into());
@@ -337,8 +338,8 @@ mod tests {
         assert_eq!(claims(&inner), Claim::Yes);
         assert_eq!(claims(&outer), Claim::Yes);
         let library = Library::new(&root.join("data"));
-        let imported = library.import(&outer, None, &mut |_, _| {}).unwrap();
-        let p = imported.package;
+        let mut imported = library.import(&outer, None, &mut |_, _| {}).unwrap();
+        let p = imported.packages.remove(0);
         assert_eq!((p.id.as_str(), p.name.as_str()), ("testring", "Test Ring"));
         assert_eq!(p.track.as_deref(), Some("testring"));
         let dir = library.dir("testring");
@@ -427,6 +428,7 @@ mod tests {
             files: Vec::new(),
             skipped: Vec::new(),
             track: None,
+            part: None,
         };
         write(&serp.join(PACKAGE_FILE), &serde_json::to_value(&held).unwrap()).unwrap();
         migrate(&data).unwrap();
@@ -458,14 +460,22 @@ mod tests {
         std::fs::create_dir_all(mod_dir.join("F1 25/2025_asset_groups")).unwrap();
         std::fs::write(mod_dir.join("F1 25/2025_asset_groups/livery.erp"), b"erp").unwrap();
         std::fs::write(mod_dir.join(serps::FILE), r#"{"mod_name":"testring"}"#).unwrap();
-        let held = library.import(&mod_dir, None, &mut |_, _| {}).unwrap().package;
+        let held = library
+            .import(&mod_dir, None, &mut |_, _| {})
+            .unwrap()
+            .packages
+            .remove(0);
         assert_eq!((held.id.as_str(), held.track.as_deref()), ("testring", None));
         let track = root.join("testring.zip");
         zip(
             &track,
             &[(MANIFEST, MANIFEST_JSON.as_bytes()), ("testring.erp", b"erp")],
         );
-        let p = library.import(&track, None, &mut |_, _| {}).unwrap().package;
+        let p = library
+            .import(&track, None, &mut |_, _| {})
+            .unwrap()
+            .packages
+            .remove(0);
         assert_eq!(
             (p.id.as_str(), p.track.as_deref()),
             ("testring-track", Some("testring"))
@@ -475,7 +485,11 @@ mod tests {
             &track,
             &[(MANIFEST, MANIFEST_JSON.as_bytes()), ("testring.erp", b"erp 2")],
         );
-        let again = library.import(&track, None, &mut |_, _| {}).unwrap().package;
+        let again = library
+            .import(&track, None, &mut |_, _| {})
+            .unwrap()
+            .packages
+            .remove(0);
         assert_eq!(again.id, "testring-track");
         assert_eq!(
             std::fs::read(library.dir("testring-track").join("track/testring.erp")).unwrap(),
