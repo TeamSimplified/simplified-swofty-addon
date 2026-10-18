@@ -8,10 +8,10 @@ use crate::diff::Diff;
 use crate::library::{FILES, LIBRARY};
 use crate::texarray;
 
-// Simplified Studio carries a mod's textures and models in the shader archives the
-// game loads at boot. Those archives are not listed by asset groups the loader can
-// patch, so the resources they carry go into an overlay on an archive the boot group
-// loads instead.
+// Every resource a mod adds or changes, in any archive, goes into an overlay on this
+// archive, which the boot groups load before any car or UI group. Each mod's
+// resources make an overlay archive of their own, and they override the game's
+// copies, as the shader archives Simplified Studio packs a mod into do.
 pub const BOOT_ERP: &str = "2025_asset_groups/vfx_package/common.erp";
 
 pub struct Merged {
@@ -21,7 +21,6 @@ pub struct Merged {
     pub records: usize,
     pub resources: usize,
     pub carried: usize,
-    pub relaid: usize,
     pub strings: usize,
     pub files: usize,
     pub removals: usize,
@@ -33,23 +32,10 @@ pub fn carrier(rel: &str) -> bool {
     rel.starts_with("shader_package")
 }
 
-// The in-game loader replaces a resource in its own archive only when the
-// replacement keeps the game's layout. One that doesn't, such as a texture of
-// another size, loads with the boot archive instead, as resources carried in
-// shader archives do, and overrides the game's.
-fn changed_in<'a>(a: &'a crate::diff::Archive, uri: &String) -> &'a str {
-    match a.relayout.contains(uri) && !carrier(&a.path) {
-        true => BOOT_ERP,
-        false => &a.path,
-    }
-}
-
-fn added_to(path: &str) -> &str {
-    match (texarray::carrier(path), carrier(path)) {
-        (true, _) => texarray::UI_ERP,
-        (false, true) => BOOT_ERP,
-        (false, false) => path,
-    }
+// Resources added to ui_texture archives are merged across mods by texarray::build,
+// and Simplified Studio's marker does nothing in the game.
+fn loaded(a: &crate::diff::Archive, uri: &str) -> bool {
+    !(texarray::carrier(&a.path) && texarray::merged_by_slice(uri) || uri.starts_with(MARKER))
 }
 
 pub fn key(k: u64) -> String {
@@ -78,35 +64,20 @@ pub fn ops(id: &str, diff: &Diff, records: &Gvdb) -> Merged {
     }
     let mut resources = 0;
     let mut carried = 0;
-    let mut relaid = 0;
     let mut removals = 0;
     for a in &diff.archives {
-        let added = added_to(&a.path);
-        let changed = a.changed.iter().map(|uri| (changed_in(a, uri), uri));
-        relaid += a
-            .relayout
-            .iter()
-            .filter(|uri| changed_in(a, uri) == BOOT_ERP)
-            .count();
-        // ui_texture archives are merged across mods by texarray::build, and
-        // Simplified Studio's marker does nothing in the game.
-        let carried_ui = added == texarray::UI_ERP;
-        let in_carrier = added != a.path;
-        let adds = a
-            .added
-            .iter()
-            .filter(|uri| !(carried_ui || in_carrier && uri.starts_with(MARKER)));
-        for (erp, uri) in changed.chain(adds.map(|uri| (added, uri))) {
+        let adds: Vec<&String> = a.added.iter().filter(|uri| loaded(a, uri)).collect();
+        for uri in a.changed.iter().chain(adds.iter().copied()) {
             ops.push(AssetOp::Erp(ErpOp::PutResource {
-                erp: erp.to_owned(),
+                erp: BOOT_ERP.into(),
                 resource: uri.clone(),
                 source: source(&a.path),
                 rename: None,
             }));
             resources += 1;
         }
-        if added == BOOT_ERP {
-            carried += a.added.iter().filter(|uri| !uri.starts_with(MARKER)).count();
+        if carrier(&a.path) {
+            carried += a.changed.len() + adds.len();
         }
         for uri in &a.removed {
             ops.push(AssetOp::Erp(ErpOp::RemoveResource {
@@ -144,7 +115,6 @@ pub fn ops(id: &str, diff: &Diff, records: &Gvdb) -> Merged {
         records: records.records.len() + diff.records.removed.len(),
         resources,
         carried,
-        relaid,
         strings,
         files: diff.files.len(),
         removals,
@@ -162,18 +132,14 @@ pub fn targets(diff: &Diff) -> Vec<String> {
             .map(|k| key(*k)),
     );
     for a in &diff.archives {
+        let adds = a.added.iter().filter(|uri| loaded(a, uri));
         out.extend(
             a.changed
                 .iter()
-                .map(|uri| format!("{uri} in {}", changed_in(a, uri))),
+                .chain(adds)
+                .map(|uri| format!("{uri} in {BOOT_ERP}")),
         );
         out.extend(a.removed.iter().map(|uri| format!("{uri} in {}", a.path)));
-        let added = added_to(&a.path);
-        let adds = a.added.iter().filter(|uri| {
-            let merged = added == texarray::UI_ERP && texarray::merged_by_slice(uri);
-            !(uri.starts_with(MARKER) || merged)
-        });
-        out.extend(adds.map(|uri| format!("{uri} in {added}")));
     }
     for t in &diff.text {
         out.extend(t.entries().map(|(k, _)| format!("{k} ({})", t.language)));
@@ -233,14 +199,12 @@ mod tests {
                     changed: vec!["eaid://shader_package/x".into()],
                     added: vec!["eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image".into()],
                     removed: Vec::new(),
-                    relayout: Vec::new(),
                 },
                 Archive {
                     path: "2025_asset_groups/ui_package/flow_boot.erp".into(),
                     changed: Vec::new(),
                     added: vec!["eaid://ui_package/b".into()],
                     removed: Vec::new(),
-                    relayout: Vec::new(),
                 },
             ],
             ..Diff::default()
@@ -263,7 +227,7 @@ mod tests {
             puts,
             [
                 (
-                    shader,
+                    BOOT_ERP,
                     "eaid://shader_package/x",
                     "library/m/files/shader_package_2025/object_auto_illuminate.nefx2.sm51.erp"
                 ),
@@ -273,44 +237,52 @@ mod tests {
                     "library/m/files/shader_package_2025/object_auto_illuminate.nefx2.sm51.erp"
                 ),
                 (
-                    "2025_asset_groups/ui_package/flow_boot.erp",
+                    BOOT_ERP,
                     "eaid://ui_package/b",
                     "library/m/files/2025_asset_groups/ui_package/flow_boot.erp"
                 ),
             ]
         );
-        assert_eq!((merged.resources, merged.carried), (3, 1));
+        assert_eq!((merged.resources, merged.carried), (3, 2));
         assert!(targets(&diff).contains(&format!(
             "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image in {BOOT_ERP}"
         )));
     }
 
     #[test]
-    fn a_change_of_layout_loads_with_the_boot_archive() {
+    fn every_change_to_a_car_archive_loads_with_the_boot_archive() {
         let car = "2025_asset_groups/f1_2026_vehicle_package/teams/mclaren/wep/mclaren.erp";
         let diff = Diff {
             archives: vec![Archive {
                 path: car.into(),
                 changed: vec!["eaid://paint".into(), "eaid://handling".into()],
-                added: Vec::new(),
-                removed: Vec::new(),
-                relayout: vec!["eaid://paint".into()],
+                added: vec!["eaid://decal".into()],
+                removed: vec!["eaid://old".into()],
             }],
             ..Diff::default()
         };
         let merged = ops("m", &diff, &Gvdb::default());
-        let puts: Vec<(&str, &str)> = merged
+        let writes: Vec<(&str, &str)> = merged
             .ops
             .iter()
             .filter_map(|op| match op {
-                AssetOp::Erp(ErpOp::PutResource { erp, resource, .. }) => {
+                AssetOp::Erp(ErpOp::PutResource { erp, resource, .. })
+                | AssetOp::Erp(ErpOp::RemoveResource { erp, resource }) => {
                     Some((erp.as_str(), resource.as_str()))
                 }
                 _ => None,
             })
             .collect();
-        assert_eq!(puts, [(BOOT_ERP, "eaid://paint"), (car, "eaid://handling")]);
-        assert_eq!(merged.relaid, 1);
+        assert_eq!(
+            writes,
+            [
+                (BOOT_ERP, "eaid://paint"),
+                (BOOT_ERP, "eaid://handling"),
+                (BOOT_ERP, "eaid://decal"),
+                (car, "eaid://old"),
+            ]
+        );
+        assert_eq!((merged.resources, merged.carried), (3, 0));
         assert!(targets(&diff).contains(&format!("eaid://paint in {BOOT_ERP}")));
     }
 
@@ -325,14 +297,12 @@ mod tests {
                     changed: vec!["eaid://ui_package/a".into()],
                     added: Vec::new(),
                     removed: vec!["eaid://ui_package/b".into(), "eaid://ui_package/c".into()],
-                    relayout: Vec::new(),
                 },
                 Archive {
                     path: shader.into(),
                     changed: Vec::new(),
                     added: Vec::new(),
                     removed: vec!["eaid://shader_package/d".into()],
-                    relayout: Vec::new(),
                 },
             ],
             ..Diff::default()
@@ -368,7 +338,6 @@ mod tests {
             changed: Vec::new(),
             added: vec![texture.into()],
             removed: Vec::new(),
-            relayout: Vec::new(),
         };
         let d = Diff {
             archives: vec![
@@ -397,7 +366,6 @@ mod tests {
                     format!("{logos}.image"),
                 ],
                 removed: Vec::new(),
-                relayout: Vec::new(),
             }],
             ..Diff::default()
         };
@@ -426,7 +394,6 @@ mod tests {
                 changed: vec!["eaid://r".into()],
                 added: Vec::new(),
                 removed: Vec::new(),
-                relayout: Vec::new(),
             }],
             ..Diff::default()
         };
@@ -446,7 +413,7 @@ mod tests {
                 Clash {
                     winner: 3,
                     loser: 2,
-                    targets: vec!["eaid://r in x.erp".into()],
+                    targets: vec![format!("eaid://r in {BOOT_ERP}")],
                 },
             ]
         );

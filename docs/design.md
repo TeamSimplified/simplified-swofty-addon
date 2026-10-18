@@ -74,7 +74,7 @@ Each mod is compared with clean files from `GameFiles`, never with the game fold
 | Class | Unit | Changed | Added | Removed |
 |---|---|---|---|---|
 | Database | record key | same key, other tag or bytes | key not in stock | stock key missing from the package |
-| Archive | resource URI | index digest differs (fragment data when a digest is empty) | URI not in stock | stock URI missing from the package |
+| Archive | resource URI | type, fragment layout or sizes differ, or else the index digest (fragment data when a digest is empty). Mod tools keep the game's digest on resources they rewrite | URI not in stock | stock URI missing from the package |
 | Text | language and key | value differs | key not in stock | never |
 | Replacement, Addition | file | whole file | whole file | never |
 
@@ -100,14 +100,15 @@ The build hook emits ops for each enabled mod, in profile order, with origin `te
 - The ops take the planner's routes ([section 3.4](https://f1.swofty.net/design/addons-and-mods#_3-4-deliveries)). Without the in-game loader, text ops wait and the build reports how many entries wait.
 - Resource removals are `erp.remove-resource` ops on the archive the mod removed them from, and put every `erp` op on the build route. A removal of a record or resource an earlier mod already removed is left out.
 - Database records are written as raw `db.put-record` values from `diff/<build key>.db`. Archive and file sources are `{ "root": "data", "path": "library/<id>/files/<game path>" }`.
+- Every resource a mod adds or changes, in any archive, is put into `2025_asset_groups/vfx_package/common.erp`. Its overlay loads with the boot groups that list that archive, before any car or UI group, and overrides the game's copies, as Simplified Studio's shader archives do. A replacement may change a resource's size, which a replacement in its own archive can't at runtime. With a launcher that writes one overlay archive per origin, each mod has its own, numbered in load order.
 - A write that repeats the value already in place, from an earlier mod, is left out.
 
 #### Shader archive carriers
 
 Simplified Studio packages carry a mod's textures and models in archives under `shader_package_2025/`, which the game loads at boot. No asset group the loader patches lists those archives, so an overlay targeting them is never read. This is built.
 
-- Resources a package adds to a shader archive are put into `2025_asset_groups/vfx_package/common.erp` instead. Its overlay loads with the boot groups that list that archive, before any car or UI group, as the shader archive would. Resources the package changes stay on the shader archive.
-- Team logo texture arrays carried in `ui_texture*` archives are merged across every enabled mod. Each `.texarray.image` starts from the game's own array, from the first of eight `ui_package` archives that holds it. Fragment 1 is split into the array's slices, and each mod's slices that differ from the game's go in, later mods winning. An array built for an older game, with fewer slices of the same format and size, merges over the slices it has. An array of another format is used whole, and the build warns. The result is written to `cache/addons/teamsimplified.mods/ui_textures.erp` and put into `2025_asset_groups/vfx_package/param_particles/systemstartup.erp`, so it loads as an overlay of its own with the boot group. Ported from the Simplified Launcher's `merge_resources.py` and the Team Editor's logo code.
+- Their resources load with `common.erp` like every other resource a mod adds or changes.
+- Team logo texture arrays carried in `ui_texture*` archives are merged across every enabled mod. Each `.texarray.image` starts from the game's own array, from the first of eight `ui_package` archives that holds it. Fragment 1 is split into the array's slices, and each mod's slices that differ from the game's go in, later mods winning. An array built for an older game, with fewer slices of the same format and size, merges over the slices it has. An array of another format is used whole, and the build warns. The result is written to `cache/addons/teamsimplified.mods/ui_textures.erp` and put into `common.erp` with the addon as its origin, so it loads as an overlay of its own, apart from every mod's. Ported from the Simplified Launcher's `merge_resources.py` and the Team Editor's logo code.
 - Simplified Studio's `eaid://tools_package/` marker is left out.
 
 #### Text a package fills in

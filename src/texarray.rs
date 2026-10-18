@@ -16,10 +16,10 @@ use crate::{Result, err, io_err};
 
 // Team logos sit in texture arrays that mods carry in the ui_texture shader
 // archives. Each mod's arrays are compared with the game's own slice by slice, and
-// the slices that differ are combined into one archive, later mods winning. It
-// loads with the boot group that lists this archive, apart from the other carried
-// resources.
-pub const UI_ERP: &str = "2025_asset_groups/vfx_package/param_particles/systemstartup.erp";
+// the slices that differ are combined into one archive, later mods winning. It loads
+// with the boot archive as an overlay of its own, apart from every mod's, because
+// the build hook gives it the addon as its origin.
+pub const UI_ERP: &str = crate::merge::BOOT_ERP;
 pub const MERGED: &str = "ui_textures.erp";
 const IMAGE: &str = ".texarray.image";
 const STOCK: [&str; 8] = [

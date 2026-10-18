@@ -44,9 +44,6 @@ pub struct Archive {
     pub changed: Vec<String>,
     pub added: Vec<String>,
     pub removed: Vec<String>,
-    // Changed resources whose type or fragment layout differs from the game's.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub relayout: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -230,17 +227,11 @@ fn archive(rel: &str, path: &Path, game: &dyn GameFiles, removals: bool) -> Resu
         changed: Vec::new(),
         added: Vec::new(),
         removed: Vec::new(),
-        relayout: Vec::new(),
     };
     for r in &ours.erp.resources {
         match index.get(r.name.as_str()) {
             Some(s) if same(&stock, s, &ours, r).map_err(&fail)? => {}
-            Some(s) => {
-                if !layout_same(s, r) {
-                    out.relayout.push(r.name.clone());
-                }
-                out.changed.push(r.name.clone());
-            }
+            Some(_) => out.changed.push(r.name.clone()),
             None => out.added.push(r.name.clone()),
         }
     }
@@ -471,7 +462,6 @@ mod tests {
         };
         let (a, _) = archive(rel, &ours.join(rel), &game, false).unwrap();
         assert_eq!(a.changed, ["paint"]);
-        assert_eq!(a.relayout, ["paint"]);
         std::fs::remove_dir_all(&root).ok();
     }
 
