@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "teamsimplified.mods",
   "name": "Simplified for Swofty",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "author": "Team Simplified",
   "description": "Imports and loads F1 25 mods from any zip, 7z, rar or folder, as copying them into the game folder would, including mods made with Simplified Studio and tracks",
   "license": "AGPL-3.0-or-later",
