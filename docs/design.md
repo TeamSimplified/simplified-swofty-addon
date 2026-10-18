@@ -12,13 +12,17 @@ How the Team Simplified addon imports, stores, compares and merges `.serps` mods
 - Built in and on by default in new profiles. It can be turned off per profile, which hides its section.
 - It uses `swofty-addon` and `swofty-formats` only. Core has no code for it.
 
-### 4.2 The .serps format
+### 4.2 Packages
 
-- A package is a zip archive under any name, `.serps` included, or a folder.
+Any mod works, as copying it into the game folder would.
+
+- A package is a zip archive under any name, `.serps` included, a 7z or RAR archive, or a folder.
+- Dropped on the launcher, a folder or zip is claimed when it holds `mod.serps` at its root, a folder whose name starts with `F1 25`, or a game folder (see the content root below) at most three folders down. 7z and RAR archives are claimed by their extension.
+- 7z archives are read by `sevenz-rust2`. RAR archives, and 7z archives that reader can't read, are unpacked by 7-Zip or UnRAR from `PATH` or where their installers put them. Without either, a RAR import fails and says what to install.
 - `mod.serps` at the package root is JSON: `mod_name` or `name` (`mod_name` wins), `author`, `version`, `game` (for example `F1® 25`), `game_version` (for example `1.0.141.7865`), and `studio_version` from Simplified Studio. Every field is optional. The reader accepts a UTF-8 byte order mark, comments and trailing commas.
 - `F1 25/` holds files in the game folder's layout. RM Designs' Scuderia AlphaTauri ORLEN package has the whole `game_package/gamedatabases/gamedatabases.2025.bin`, 11 whole language files under `localisatioa/2025_release/` and four whole shader archives under `shader_package_2025/`.
 - `localisatioa/` is the folder Simplified's launcher points a patched exe at. Both `localisatioa/` and `localisation/` name the stock language file with the same file name.
-- Without `F1 25/`, the content root is the first folder, within three levels, whose subfolders match top-level folders of the installed game, or `localisation` or `localisatioa`.
+- The content root is the first folder, at most three levels down, whose name starts with `F1 25`. Without one, it is the first folder, from the top down to three levels, with a game folder in it: `asset_groups`, `actionmaps`, `audio`, `videos`, `game_package`, `character_package`, `localisation`, `localisatioa`, or a folder ending in `_package`, `_package_shared` or `_asset_groups`, or starting with `shader_package_`.
 
 ### 4.3 Import
 
@@ -33,7 +37,7 @@ How the Team Simplified addon imports, stores, compares and merges `.serps` mods
 | A `.erp` the game ships | Archive |
 | Any other file the game ships | Replacement |
 | A file the game does not ship | Addition |
-| `.exe`, `.dll`, `.asi` | Skipped and named in the report |
+| `.exe`, `.dll`, `.asi`, and EA AntiCheat files other than `EAAntiCheat.splash.png` | Skipped and named in the report |
 
 4. The id is `<author>.<name>`, lowercased to `[a-z0-9-]`, or the file name when both are missing. Importing an id that exists replaces it: the new copy is staged, the old one moves aside, the new one moves in and the old one is deleted. Profiles keep the id's place and switch.
 5. The importer diffs the package ([section 4.5](#45-diff)) and writes `package.json`.
@@ -123,12 +127,12 @@ Team rename packages point the team name records at keys of their own, such as `
 
 The sidebar entry `Mods` comes after `Addons`, with the library size as its count.
 
-- **Header.** Title `Mods`. Subtitle `<n> in library · <k> on in <profile> · lower in the list wins`. Action `Import…`, a picker for `.serps` and `.zip` files and folders, several at once.
+- **Header.** Title `Mods`. Subtitle `<n> in library · <k> on in <profile> · lower in the list wins`. Action `Import…`, a picker for `.zip`, `.7z`, `.rar` and `.serps` files and folders, several at once.
 - **Notices.** The addon is off in this profile (button `Turn on`). The vanilla profile is active. Mods are not compared with the installed game build yet (button `Compare`).
 - **Rows.** Reorderable, in load order. Title from `mod.serps`, subtitle `<author> · <version>`, tags `Database`, `Text`, `<n> archives`, `<n> files`, conflict tags and `Made for <game_version>` when it differs from the game. A switch turns the mod on in the profile.
 - **Expanded row.** Stats: status, version, author, made for, Studio version, size, imported. `WHAT IT CHANGES`: records changed, added and removed; text entries by language; resources by archive; files. `CONFLICTS`. Buttons: Move up, Move down, Show files, and Remove from library with a confirmation.
-- **Empty.** `No mods yet`, `Import a .serps package, a zip or a folder that holds an F1 25 folder.` and `Import…`.
-- **Footer.** `Mod packages in the Simplified Suite's .serps format. Based on Simplified Suite by Team Simplified - https://github.com/TeamSimplified/simplified-suite`
+- **Empty.** `No mods yet`, `Drop a mod on the window, or import its zip, 7z, rar or folder. Mods made with Simplified Studio import too.` and `Import…`.
+- **Footer.** `Works with any F1 25 mod: its files go where copying them into the game folder would put them. Made by Team Simplified. Based on Simplified Suite by Team Simplified - https://github.com/TeamSimplified/simplified-suite`
 - **Profile cards.** `summary` adds `MODS` with the enabled mods' names.
 - **CLI.** `swofty mods list`, `import <path>…`, `remove <id>`, `enable <id>`, `disable <id>`, `move <id> <position>`.
 

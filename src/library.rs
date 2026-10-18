@@ -204,8 +204,13 @@ impl Library {
             true => ModInfo::parse(&package::read_file(&serps_path)?).unwrap_or_default(),
             false => ModInfo::default(),
         };
-        let content = package::content_root(&root)
-            .ok_or_else(|| err(format!("{source} holds no {} folder", package::GAME_FOLDER)))?;
+        let content = package::content_root(&root).ok_or_else(|| {
+            err(format!(
+                "{source} holds no game files: no {} folder, and no game folders such as \
+                     2025_asset_groups or shader_package_2025",
+                package::GAME_FOLDER
+            ))
+        })?;
         progress(0.75, &source);
         let out = staging.join("package");
         let files_dir = out.join(FILES);

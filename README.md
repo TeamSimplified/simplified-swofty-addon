@@ -1,8 +1,8 @@
 # Team Simplified addon for Swofty Launcher
 
-The built-in addon that brings Simplified Suite mods to [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). It shows as **Mods** in the launcher and as `swofty mods` on the command line.
+The built-in addon, made by Team Simplified, that loads F1 25 mods in [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). It shows as **Mods** in the launcher and as `swofty mods` on the command line.
 
-- Imports `.serps` packages, mod zips and folders that hold an `F1 25/` folder, and community track zips.
+- Works with any mod: drop its zip, 7z, rar or folder on the launcher, and its files go where copying them into the game folder would put them. The game folders can sit at the top or up to three folders down, or in a folder named like `F1 25`. Mods made with Simplified Studio (`.serps`) and community track zips import too.
 - Keeps one library for every profile, and each profile's mods in load order. Lower in the list wins.
 - Compares each mod with the game's own files and merges only what it changes: database records, text, archive resources and files. Several mods load together, and the Mods page shows where they overlap.
 - Loads mods that Simplified Studio packed into the shader archives. Their resources load at boot, as they do with the Simplified Launcher.

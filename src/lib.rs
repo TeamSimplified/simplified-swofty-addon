@@ -31,7 +31,7 @@ use crate::package::Class;
 pub const ID: &str = "teamsimplified.mods";
 pub const SECTION: &str = "mods";
 const MANIFEST: &str = include_str!("../swofty.json");
-const FOOTER: &str = "Mod packages in the Simplified Suite's .serps format. Based on Simplified Suite by Team Simplified - https://github.com/TeamSimplified/simplified-suite";
+const FOOTER: &str = "Works with any F1 25 mod: its files go where copying them into the game folder would put them. Made by Team Simplified. Based on Simplified Suite by Team Simplified - https://github.com/TeamSimplified/simplified-suite";
 const IMPORT: &str = "import";
 const ENABLE: &str = "enable";
 const COMPARE: &str = "compare";
@@ -242,7 +242,7 @@ fn import_button(primary: bool) -> Button {
         style: if primary { Style::Primary } else { Style::Outline },
         kind: ButtonKind::Pick {
             title: "Import mods".into(),
-            extensions: vec!["serps".into(), "zip".into()],
+            extensions: vec!["zip".into(), "7z".into(), "rar".into(), "serps".into()],
             folders: true,
             multiple: true,
         },
@@ -589,7 +589,8 @@ impl Addon for Simplified {
         let body = if loaded.order.is_empty() {
             Body::Empty {
                 title: "No mods yet".into(),
-                text: "Import a .serps package, a zip or a folder that holds an F1 25 folder.".into(),
+                text: "Drop a mod on the window, or import its zip, 7z, rar or folder. Mods made with Simplified Studio import too."
+                    .into(),
                 action: Some(import_button(true)),
             }
         } else {
@@ -804,17 +805,16 @@ impl Addon for Simplified {
         };
         vec![CommandSpec {
             name: "mods".into(),
-            about: "Team Simplified mods: .serps packages in the library and their order in the profile"
-                .into(),
+            about: "Mods in the library and their order in the profile".into(),
             args: Vec::new(),
             subcommands: vec![
                 cmd("list", "List the library in load order", Vec::new()),
                 cmd(
                     "import",
-                    "Import .serps packages, zips or folders into the library",
+                    "Import mods into the library",
                     vec![ArgSpec {
                         name: "path".into(),
-                        help: "A .serps file, a zip or a folder that holds an F1 25 folder".into(),
+                        help: "A mod's zip, 7z, rar, .serps or folder, laid out like the game folder".into(),
                         required: true,
                         many: true,
                     }],

@@ -29,6 +29,10 @@ const EXACT_MARKERS: [&str; 8] = [
 const SUFFIX_MARKERS: [&str; 3] = ["_package", "_package_shared", "_asset_groups"];
 const PREFIX_MARKERS: [&str; 1] = ["shader_package_"];
 const CODE: [&str; 3] = ["exe", "dll", "asi"];
+// A mod never replaces EA AntiCheat, except its splash image, which is only shown
+// while it starts.
+const ANTICHEAT: &str = "eaanticheat.";
+const ANTICHEAT_SPLASH: &str = "eaanticheat.splash.png";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -43,7 +47,8 @@ pub enum Class {
 pub fn class(rel: &str, game: Option<&dyn GameFiles>) -> Option<Class> {
     let lower = rel.to_ascii_lowercase();
     let ext = lower.rsplit_once('.').map_or("", |(_, e)| e);
-    if CODE.contains(&ext) {
+    let file = lower.rsplit('/').next().unwrap_or(&lower);
+    if CODE.contains(&ext) || file.starts_with(ANTICHEAT) && file != ANTICHEAT_SPLASH {
         return None;
     }
     if lower == DATABASE {
@@ -73,52 +78,43 @@ pub fn game_path(rel: &str) -> String {
     }
 }
 
+// Like copying a mod into the game folder: anything that holds game folders, at
+// most three folders down, or a folder named after the game is a mod.
 pub fn claims(path: &Path) -> Claim {
     if path.is_dir() {
-        let yes = package_root(path).is_some_and(|r| {
-            r.join(serps::FILE).is_file()
-                || subdirs(&r)
-                    .iter()
-                    .any(|d| name(d).eq_ignore_ascii_case(GAME_FOLDER))
-        });
+        let yes =
+            package_root(path).is_some_and(|r| r.join(serps::FILE).is_file() || content_root(&r).is_some());
         return if yes { Claim::Yes } else { Claim::No };
     }
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if ext == "serps" {
-        return Claim::Yes;
-    }
-    if ext != "zip" {
-        return Claim::No;
+    match extension(path).as_str() {
+        "serps" | "7z" | "rar" => return Claim::Yes,
+        "zip" => {}
+        _ => return Claim::No,
     }
     let Some(names) = zip_names(path) else {
         return Claim::No;
     };
-    let tops: Vec<&str> = names.iter().filter_map(|n| n.split('/').next()).collect();
-    let single = tops
-        .windows(2)
-        .all(|w| w[0] == w[1])
-        .then(|| tops.first().copied())
-        .flatten();
-    let at = |rel: &str| {
-        names
-            .iter()
-            .any(|n| n == rel || single.is_some_and(|t| *n == format!("{t}/{rel}")))
-    };
     let game = |n: &String| {
-        n.starts_with(&format!("{GAME_FOLDER}/"))
-            || single.is_some_and(|t| n.starts_with(&format!("{t}/{GAME_FOLDER}/")))
+        let dirs: Vec<&str> = n.split('/').collect();
+        dirs[..dirs.len() - 1]
+            .iter()
+            .take(MAX_DEPTH + 1)
+            .any(|d| is_game_folder(d) || is_marker(d))
     };
-    if at(serps::FILE) || names.iter().any(game) {
+    let serps_at_root =
+        |n: &String| n.ends_with(serps::FILE) && n.split('/').filter(|p| !p.is_empty()).count() <= 2;
+    if names.iter().any(|n| game(n) || serps_at_root(n)) {
         Claim::Yes
-    } else if tops.iter().any(|t| is_marker(t)) {
-        Claim::Maybe
     } else {
         Claim::No
     }
+}
+
+fn extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
 }
 
 fn zip_names(path: &Path) -> Option<Vec<String>> {
@@ -132,6 +128,24 @@ pub fn unpack(src: &Path, dest: &Path, progress: &mut dyn FnMut(f32)) -> Result<
     if src.is_dir() {
         return copy_dir(src, dest);
     }
+    match extension(src).as_str() {
+        "7z" => unpack_7z(src, dest, progress).or_else(|e| match extractor() {
+            Some(tool) => unpack_with(&tool, src, dest),
+            None => Err(e),
+        }),
+        "rar" => match extractor() {
+            Some(tool) => unpack_with(&tool, src, dest),
+            None => Err(err(format!(
+                "{} is a RAR archive: install 7-Zip (https://www.7-zip.org) or WinRAR to import it, \
+                 or repack it as a zip or 7z",
+                file_name(src)
+            ))),
+        },
+        _ => unpack_zip(src, dest, progress),
+    }
+}
+
+fn unpack_zip(src: &Path, dest: &Path, progress: &mut dyn FnMut(f32)) -> Result<usize> {
     let file = std::fs::File::open(src).map_err(io_err(src))?;
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|e| err(format!("{} is not a zip archive: {e}", file_name(src))))?;
@@ -155,6 +169,140 @@ pub fn unpack(src: &Path, dest: &Path, progress: &mut dyn FnMut(f32)) -> Result<
         }
         let mut f = std::fs::File::create(&out).map_err(io_err(&out))?;
         std::io::copy(&mut entry, &mut f).map_err(io_err(&out))?;
+    }
+    Ok(refused)
+}
+
+fn unpack_7z(src: &Path, dest: &Path, progress: &mut dyn FnMut(f32)) -> Result<usize> {
+    let fail = |e: sevenz_rust2::Error| {
+        err(format!(
+            "{} is not a 7z archive this can read: {e}",
+            file_name(src)
+        ))
+    };
+    let mut reader = sevenz_rust2::ArchiveReader::open(src, sevenz_rust2::Password::empty()).map_err(fail)?;
+    let total = reader.archive().files.len().max(1) as f32;
+    let (mut done, mut refused) = (0, 0);
+    let mut failed = None;
+    reader
+        .for_each_entries(|entry, data| {
+            done += 1;
+            progress(done as f32 / total);
+            if entry.is_directory() || entry.is_anti_item() {
+                return Ok(true);
+            }
+            let Some(rel) = relative(&entry.name().replace('\\', "/")) else {
+                refused += 1;
+                std::io::copy(data, &mut std::io::sink())?;
+                return Ok(true);
+            };
+            let out = dest.join(rel);
+            let written = out
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::File::create(&out))
+                .and_then(|mut f| std::io::copy(data, &mut f));
+            if let Err(e) = written {
+                failed = Some((out, e));
+                return Ok(false);
+            }
+            Ok(true)
+        })
+        .map_err(fail)?;
+    if let Some((out, e)) = failed {
+        return Err(io_err(out)(e));
+    }
+    Ok(refused)
+}
+
+// 7-Zip or UnRAR, for RAR archives and for 7z archives the built-in reader can't
+// read. Either is looked for on PATH and where its installer puts it.
+#[derive(Debug)]
+enum Tool {
+    SevenZip(PathBuf),
+    UnRar(PathBuf),
+}
+
+fn extractor() -> Option<Tool> {
+    let on_path = |name: &str| {
+        let exe = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+            .map(|dir| dir.join(&exe))
+            .find(|p| p.is_file())
+    };
+    let installed = |rel: &str| {
+        ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"]
+            .iter()
+            .filter_map(std::env::var_os)
+            .map(|dir| PathBuf::from(dir).join(rel))
+            .find(|p| p.is_file())
+    };
+    ["7z", "7zz", "7za"]
+        .iter()
+        .find_map(|n| on_path(n))
+        .or_else(|| installed("7-Zip/7z.exe"))
+        .map(Tool::SevenZip)
+        .or_else(|| {
+            on_path("unrar")
+                .or_else(|| installed("WinRAR/UnRAR.exe"))
+                .map(Tool::UnRar)
+        })
+}
+
+fn unpack_with(tool: &Tool, src: &Path, dest: &Path) -> Result<usize> {
+    std::fs::create_dir_all(dest).map_err(io_err(dest))?;
+    let (exe, mut cmd) = match tool {
+        Tool::SevenZip(exe) => {
+            let mut c = std::process::Command::new(exe);
+            c.arg("x")
+                .arg("-y")
+                .arg(format!("-o{}", dest.display()))
+                .arg("--")
+                .arg(src);
+            (exe, c)
+        }
+        Tool::UnRar(exe) => {
+            let mut c = std::process::Command::new(exe);
+            let into = format!("{}{}", dest.display(), std::path::MAIN_SEPARATOR);
+            c.arg("x").arg("-y").arg("--").arg(src).arg(into);
+            (exe, c)
+        }
+    };
+    cmd.stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output().map_err(io_err(exe))?;
+    if !out.status.success() {
+        let text = String::from_utf8_lossy(&out.stderr);
+        let last = text
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .trim();
+        return Err(err(format!(
+            "{} could not unpack {}: {last}",
+            file_name(exe),
+            file_name(src)
+        )));
+    }
+    // The tools keep entries inside the folder. Links are left out, as they are
+    // for folders.
+    let mut refused = 0;
+    for path in files(dest)? {
+        if std::fs::symlink_metadata(&path)
+            .map_err(io_err(&path))?
+            .is_symlink()
+        {
+            std::fs::remove_file(&path).map_err(io_err(&path))?;
+            refused += 1;
+        }
     }
     Ok(refused)
 }
@@ -231,7 +379,12 @@ pub fn content_root(root: &Path) -> Option<PathBuf> {
 }
 
 fn named_game(root: &Path) -> Option<PathBuf> {
-    walk(root).find(|d| name(d).eq_ignore_ascii_case(GAME_FOLDER))
+    walk(root).find(|d| is_game_folder(&name(d)))
+}
+
+// Mods name the game folder "F1 25", or "F1 25 (mod name)" and the like.
+fn is_game_folder(name: &str) -> bool {
+    name.to_lowercase().starts_with(&GAME_FOLDER.to_lowercase())
 }
 
 fn walk(root: &Path) -> impl Iterator<Item = PathBuf> {
@@ -319,10 +472,89 @@ mod tests {
         let deep = dir.join("wrap/inner/shader_package_2025");
         std::fs::create_dir_all(&deep).unwrap();
         assert_eq!(content_root(&dir), Some(dir.join("wrap/inner")));
-        std::fs::create_dir_all(dir.join("wrap/F1 25/game_package")).unwrap();
-        assert_eq!(content_root(&dir), Some(dir.join("wrap/F1 25")));
-        assert_eq!(claims(&dir), Claim::No);
+        std::fs::create_dir_all(dir.join("wrap/F1 25 (my mod)/game_package")).unwrap();
+        assert_eq!(content_root(&dir), Some(dir.join("wrap/F1 25 (my mod)")));
+        assert_eq!(claims(&dir), Claim::Yes);
         assert_eq!(claims(&dir.join("wrap")), Claim::Yes);
+        let other = dir.join("photos/holiday");
+        std::fs::create_dir_all(&other).unwrap();
+        assert_eq!(claims(&dir.join("photos")), Claim::No);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn zip_of(path: &Path, names: &[&str]) {
+        let mut w = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        for n in names {
+            w.start_file(*n, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut w, b"x").unwrap();
+        }
+        w.finish().unwrap();
+    }
+
+    #[test]
+    fn any_archive_laid_out_like_the_game_is_a_mod() {
+        let dir = std::env::temp_dir().join(format!("simplified-claims-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let cases: [(&str, &[&str], Claim); 6] = [
+            ("top.zip", &["2025_asset_groups/ui_package/a.erp"], Claim::Yes),
+            (
+                "wrapped.zip",
+                &["My Mod/v2/shader_package_2025/b.erp"],
+                Claim::Yes,
+            ),
+            ("named.zip", &["F1 25 - My Mod/readme.txt"], Claim::Yes),
+            ("studio.zip", &["Mod/mod.serps", "Mod/notes.txt"], Claim::Yes),
+            ("photos.zip", &["holiday/beach.png"], Claim::No),
+            ("deep.zip", &["a/b/c/d/2025_asset_groups/x.erp"], Claim::No),
+        ];
+        for (name, entries, want) in cases {
+            let path = dir.join(name);
+            zip_of(&path, entries);
+            assert_eq!(claims(&path), want, "{name}");
+        }
+        std::fs::write(dir.join("mod.7z"), b"").unwrap();
+        std::fs::write(dir.join("mod.rar"), b"").unwrap();
+        assert_eq!(claims(&dir.join("mod.7z")), Claim::Yes);
+        assert_eq!(claims(&dir.join("mod.rar")), Claim::Yes);
+        assert_eq!(claims(&dir.join("notes.txt")), Claim::No);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_game_and_anticheat_are_never_replaced() {
+        assert_eq!(class("F1_25.exe", None), None);
+        assert_eq!(class("EAAntiCheat.GameServiceLauncher.dll", None), None);
+        assert_eq!(class("EAAntiCheat.cfg", None), None);
+        assert_eq!(class("bin/plugin.asi", None), None);
+        assert_eq!(class("EAAntiCheat.splash.png", None), Some(Class::Replacement));
+    }
+
+    #[test]
+    fn a_7z_unpacks_and_unsafe_paths_stay_out() {
+        let dir = std::env::temp_dir().join(format!("simplified-7z-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("mod.7z");
+        let mut w = sevenz_rust2::ArchiveWriter::create(&archive).unwrap();
+        for (name, data) in [
+            ("My Mod/2025_asset_groups/ui_package/a.erp", &b"erp"[..]),
+            ("../escape.txt", &b"no"[..]),
+        ] {
+            w.push_archive_entry(sevenz_rust2::ArchiveEntry::new_file(name), Some(data))
+                .unwrap();
+        }
+        w.finish().unwrap();
+        let out = dir.join("out");
+        let refused = unpack(&archive, &out, &mut |_| {}).unwrap();
+        assert_eq!(refused, 1);
+        assert_eq!(
+            std::fs::read(out.join("My Mod/2025_asset_groups/ui_package/a.erp")).unwrap(),
+            b"erp"
+        );
+        assert!(!dir.join("escape.txt").exists());
+        assert_eq!(content_root(&out), Some(out.join("My Mod")));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

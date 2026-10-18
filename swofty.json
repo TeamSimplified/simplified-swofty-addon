@@ -4,7 +4,7 @@
   "name": "Team Simplified",
   "version": "0.1.0",
   "author": "Team Simplified",
-  "description": "Imports and loads mods in the Simplified Suite's .serps format",
+  "description": "Imports and loads F1 25 mods from any zip, 7z, rar or folder, as copying them into the game folder would, including mods made with Simplified Studio and tracks",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://github.com/TeamSimplified/simplified-suite",
   "compat": { "game": "f1_25" }
