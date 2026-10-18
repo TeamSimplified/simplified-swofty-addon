@@ -13,7 +13,7 @@ How it works is in [docs/design.md](docs/design.md).
 
 ## Using it in Swofty Launcher
 
-The launcher builds this crate into `swofty-builtins`. It depends on two crates of the launcher, `swofty-addon` and `swofty-formats`, which this repository takes from a SwoftyLauncher release tag. In the launcher's root `Cargo.toml`, patch them to the launcher's own copies, so there is one of each:
+The launcher builds this crate into `swofty-builtins`. It depends on two crates of the launcher, `swofty-addon` and `swofty-formats`, which this repository takes from a SwoftyLauncher release tag, or from a commit on its `main` when a change it needs is not released yet. In the launcher's root `Cargo.toml`, patch them to the launcher's own copies, so there is one of each:
 
 ```toml
 [workspace.dependencies]
@@ -36,7 +36,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-The toolchain is pinned in `rust-toolchain.toml`, to the same version as the launcher. The tests need no game files. When the launcher changes `swofty-addon` or `swofty-formats`, update the `tag` in `Cargo.toml` to the release that has the change.
+The toolchain is pinned in `rust-toolchain.toml`, to the same version as the launcher. The tests need no game files. When the launcher changes `swofty-addon` or `swofty-formats`, point the `tag` (or `rev`) in `Cargo.toml` at the release or commit that has the change.
 
 ## Licence
 
