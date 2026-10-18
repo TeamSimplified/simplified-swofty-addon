@@ -27,6 +27,10 @@ pub struct Merged {
 }
 
 pub const MARKER: &str = "eaid://tools_package/";
+// Simplified Studio adds this vehicle shadow material to every shader package it
+// builds, beside the marker (SerpsOverlay.cs in the Simplified Suite). Loaded at boot
+// it would replace the game's own shadow material, so it is left out too.
+const SHADOW: &str = "/shared/shadows/materials/f1_vehicle_shadow.material";
 
 pub fn carrier(rel: &str) -> bool {
     rel.starts_with("shader_package")
@@ -35,7 +39,8 @@ pub fn carrier(rel: &str) -> bool {
 // Resources added to ui_texture archives are merged across mods by texarray::build,
 // and Simplified Studio's marker does nothing in the game.
 fn loaded(a: &crate::diff::Archive, uri: &str) -> bool {
-    !(texarray::carrier(&a.path) && texarray::merged_by_slice(uri) || uri.starts_with(MARKER))
+    let studio = uri.starts_with(MARKER) || carrier(&a.path) && uri.ends_with(SHADOW);
+    !(texarray::carrier(&a.path) && texarray::merged_by_slice(uri) || studio)
 }
 
 pub fn key(k: u64) -> String {
@@ -66,8 +71,9 @@ pub fn ops(id: &str, diff: &Diff, records: &Gvdb) -> Merged {
     let mut carried = 0;
     let mut removals = 0;
     for a in &diff.archives {
+        let changed: Vec<&String> = a.changed.iter().filter(|uri| loaded(a, uri)).collect();
         let adds: Vec<&String> = a.added.iter().filter(|uri| loaded(a, uri)).collect();
-        for uri in a.changed.iter().chain(adds.iter().copied()) {
+        for &uri in changed.iter().chain(&adds) {
             ops.push(AssetOp::Erp(ErpOp::PutResource {
                 erp: BOOT_ERP.into(),
                 resource: uri.clone(),
@@ -77,7 +83,7 @@ pub fn ops(id: &str, diff: &Diff, records: &Gvdb) -> Merged {
             resources += 1;
         }
         if carrier(&a.path) {
-            carried += a.changed.len() + adds.len();
+            carried += changed.len() + adds.len();
         }
         for uri in &a.removed {
             ops.push(AssetOp::Erp(ErpOp::RemoveResource {
@@ -132,13 +138,8 @@ pub fn targets(diff: &Diff) -> Vec<String> {
             .map(|k| key(*k)),
     );
     for a in &diff.archives {
-        let adds = a.added.iter().filter(|uri| loaded(a, uri));
-        out.extend(
-            a.changed
-                .iter()
-                .chain(adds)
-                .map(|uri| format!("{uri} in {BOOT_ERP}")),
-        );
+        let written = a.changed.iter().chain(&a.added).filter(|uri| loaded(a, uri));
+        out.extend(written.map(|uri| format!("{uri} in {BOOT_ERP}")));
         out.extend(a.removed.iter().map(|uri| format!("{uri} in {}", a.path)));
     }
     for t in &diff.text {
@@ -284,6 +285,63 @@ mod tests {
         );
         assert_eq!((merged.resources, merged.carried), (3, 0));
         assert!(targets(&diff).contains(&format!("eaid://paint in {BOOT_ERP}")));
+    }
+
+    #[test]
+    fn studio_s_shadow_material_is_left_out_of_shader_archives() {
+        let shadow = "eaid://f1_2025_vehicle_package/shared/shadows/materials/f1_vehicle_shadow.material";
+        let car = "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image";
+        let diff = Diff {
+            archives: vec![
+                Archive {
+                    path: "shader_package_2025/object_opaque.nefx2.sm51.erp".into(),
+                    changed: vec![shadow.into()],
+                    added: vec![
+                        shadow.into(),
+                        car.into(),
+                        "eaid://tools_package/default/serps".into(),
+                    ],
+                    removed: Vec::new(),
+                },
+                Archive {
+                    path: "2025_asset_groups/f1_2025_vehicle_package/shared/shared.erp".into(),
+                    changed: vec![shadow.into()],
+                    added: Vec::new(),
+                    removed: Vec::new(),
+                },
+            ],
+            ..Diff::default()
+        };
+        let merged = ops("m", &diff, &Gvdb::default());
+        let puts: Vec<(&str, &str)> = merged
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                AssetOp::Erp(ErpOp::PutResource { resource, source, .. }) => {
+                    Some((resource.as_str(), source.path.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            puts,
+            [
+                (
+                    car,
+                    "library/m/files/shader_package_2025/object_opaque.nefx2.sm51.erp"
+                ),
+                (
+                    shadow,
+                    "library/m/files/2025_asset_groups/f1_2025_vehicle_package/shared/shared.erp"
+                ),
+            ]
+        );
+        assert_eq!(merged.carried, 1);
+        assert!(
+            !targets(&diff)
+                .iter()
+                .any(|t| t.contains("object_opaque") || t.starts_with("eaid://tools"))
+        );
     }
 
     #[test]
