@@ -74,6 +74,16 @@ fn without_repeats(ops: Vec<Op>) -> Vec<Op> {
         .collect()
 }
 
+// What a mod's ui_texture archive adds goes into the merged UI archive, except
+// what Simplified Studio adds to every shader package.
+fn ui_uris(added: &[String]) -> Vec<String> {
+    added
+        .iter()
+        .filter(|uri| !merge::studio_only(uri))
+        .cloned()
+        .collect()
+}
+
 // A default goes in once for each key no mod renames: the mods that fill it in
 // all give the game's own text, and a rename replaces it anyway.
 fn only_defaults(defaults: Vec<Op>, ops: &[Op]) -> Vec<Op> {
@@ -724,12 +734,7 @@ impl Addon for Simplified {
                 carried.push(texarray::Carried {
                     item: p.name.clone(),
                     erp: library.dir(&p.id).join(library::FILES).join(&a.path),
-                    uris: a
-                        .added
-                        .iter()
-                        .filter(|uri| !uri.starts_with(merge::MARKER))
-                        .cloned()
-                        .collect(),
+                    uris: ui_uris(&a.added),
                 });
             }
             let records = library.records(&p.id, &diff.build_key)?;
@@ -1006,6 +1011,20 @@ mod merge_tests {
 
     fn items(ops: &[Op]) -> Vec<&str> {
         ops.iter().map(|op| op.origin.item.as_deref().unwrap()).collect()
+    }
+
+    #[test]
+    fn studio_s_marker_and_shadow_stay_out_of_the_ui_archive() {
+        let logos =
+            "eaid://ui_package/art/texture_arrays/overrides.uidb/overrides.team_logos.f1_2026.texarray.image";
+        let added: Vec<String> = [
+            logos,
+            "eaid://tools_package/default/serps",
+            "eaid://f1_2025_vehicle_package/shared/shadows/materials/f1_vehicle_shadow.material",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(ui_uris(&added), [logos]);
     }
 
     #[test]

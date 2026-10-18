@@ -32,6 +32,11 @@ pub const MARKER: &str = "eaid://tools_package/";
 // it would replace the game's own shadow material, so it is left out too.
 const SHADOW: &str = "/shared/shadows/materials/f1_vehicle_shadow.material";
 
+// What Simplified Studio adds to every shader package it builds.
+pub fn studio_only(uri: &str) -> bool {
+    uri.starts_with(MARKER) || uri.ends_with(SHADOW)
+}
+
 pub fn carrier(rel: &str) -> bool {
     rel.starts_with("shader_package")
 }
@@ -39,7 +44,7 @@ pub fn carrier(rel: &str) -> bool {
 // Resources added to ui_texture archives are merged across mods by texarray::build,
 // and Simplified Studio's marker does nothing in the game.
 fn loaded(a: &crate::diff::Archive, uri: &str) -> bool {
-    let studio = uri.starts_with(MARKER) || carrier(&a.path) && uri.ends_with(SHADOW);
+    let studio = uri.starts_with(MARKER) || carrier(&a.path) && studio_only(uri);
     !(texarray::carrier(&a.path) && texarray::merged_by_slice(uri) || studio)
 }
 
