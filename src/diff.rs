@@ -12,7 +12,7 @@ use crate::package::{self, Class};
 use crate::{Result, err};
 
 pub const FALLBACK: &str = "eng";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Diff {
@@ -44,6 +44,9 @@ pub struct Archive {
     pub changed: Vec<String>,
     pub added: Vec<String>,
     pub removed: Vec<String>,
+    // Changed resources whose type or fragment layout differs from the game's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relayout: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -194,7 +197,23 @@ fn database(path: &Path, game: &dyn GameFiles, removals: bool) -> Result<Databas
     Ok((out, values, dropped, pointed))
 }
 
+fn layout_same(s: &Resource, r: &Resource) -> bool {
+    s.kind == r.kind
+        && s.unk == r.unk
+        && s.fragments.len() == r.fragments.len()
+        && s.fragments
+            .iter()
+            .zip(&r.fragments)
+            .all(|(a, b)| a.name == b.name && a.flags == b.flags && a.size == b.size)
+}
+
+// Mod tools rewrite a resource and keep the game's digest in the index, so a
+// digest only counts when the layout matches too.
 fn same(stock: &ErpFile, s: &Resource, ours: &ErpFile, r: &Resource) -> swofty_formats::Result<bool> {
+    let packed = |x: &Resource| x.fragments.iter().map(|f| f.packed).collect::<Vec<_>>();
+    if !layout_same(s, r) || packed(s) != packed(r) {
+        return Ok(false);
+    }
     if s.hash != [0; 16] && r.hash != [0; 16] {
         return Ok(s.hash == r.hash);
     }
@@ -211,11 +230,17 @@ fn archive(rel: &str, path: &Path, game: &dyn GameFiles, removals: bool) -> Resu
         changed: Vec::new(),
         added: Vec::new(),
         removed: Vec::new(),
+        relayout: Vec::new(),
     };
     for r in &ours.erp.resources {
         match index.get(r.name.as_str()) {
             Some(s) if same(&stock, s, &ours, r).map_err(&fail)? => {}
-            Some(_) => out.changed.push(r.name.clone()),
+            Some(s) => {
+                if !layout_same(s, r) {
+                    out.relayout.push(r.name.clone());
+                }
+                out.changed.push(r.name.clone());
+            }
             None => out.added.push(r.name.clone()),
         }
     }
@@ -382,6 +407,72 @@ mod tests {
         fn original_lang(&self, code: &str) -> Result<PathBuf> {
             Ok(self.dir.join(format!("lang/language_{code}.lng")))
         }
+    }
+
+    fn texture(name: &str, pixels: &[u8], hash: [u8; 16]) -> Resource {
+        use swofty_formats::erp::Fragment;
+        let frag = |data: &[u8]| Fragment {
+            name: *b"temp",
+            offset: 0,
+            size: data.len() as u64,
+            flags: 0x10,
+            compression: 0,
+            packed: data.len() as u64,
+            raw: data.to_vec(),
+        };
+        let mut kind = [0u8; 16];
+        kind[..13].copy_from_slice(b"GfxSurfaceRes");
+        Resource {
+            name: name.into(),
+            kind,
+            unk: vec![0; 4],
+            fragments: vec![frag(b"head"), frag(pixels)],
+            hash,
+        }
+    }
+
+    fn archive_of(path: &Path, resources: Vec<Resource>) {
+        use swofty_formats::erp::{Erp, HEADER_LEN, MAGIC};
+        let mut header = [0u8; HEADER_LEN];
+        header[..4].copy_from_slice(MAGIC);
+        header[4..8].copy_from_slice(&3u32.to_le_bytes());
+        let mut erp = Erp {
+            header,
+            version: 3,
+            resources,
+        };
+        write(path, &erp.to_bytes());
+    }
+
+    #[test]
+    fn a_resource_rewritten_under_the_game_s_digest_is_a_change() {
+        let root = std::env::temp_dir().join(format!("simplified-relayout-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let (stock, ours) = (root.join("game"), root.join("files"));
+        let rel = "2025_asset_groups/f1_2026_vehicle_package/teams/mclaren/wep/mclaren.erp";
+        let digest = [7; 16];
+        archive_of(
+            &stock.join(rel),
+            vec![
+                texture("paint", b"small", digest),
+                texture("wheel", b"same", digest),
+            ],
+        );
+        archive_of(
+            &ours.join(rel),
+            vec![
+                texture("paint", b"a much bigger texture", digest),
+                texture("wheel", b"same", digest),
+            ],
+        );
+        let game = Game {
+            dir: stock,
+            exe: "1.0",
+        };
+        let (a, _) = archive(rel, &ours.join(rel), &game, false).unwrap();
+        assert_eq!(a.changed, ["paint"]);
+        assert_eq!(a.relayout, ["paint"]);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     fn write(path: &Path, bytes: &[u8]) {

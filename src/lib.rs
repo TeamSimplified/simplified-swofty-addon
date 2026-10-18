@@ -741,6 +741,14 @@ impl Addon for Simplified {
                     merge::BOOT_ERP
                 ));
             }
+            if merged.relaid > 0 {
+                batch.lines.push(format!(
+                    "{}: {} resource(s) that change layout load with {}",
+                    p.name,
+                    merged.relaid,
+                    merge::BOOT_ERP
+                ));
+            }
             if diff.dropped > 0 {
                 batch.warnings.push(format!(
                     "{}: {} removal(s) left out; made for {}",
