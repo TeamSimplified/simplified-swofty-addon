@@ -500,15 +500,7 @@ fn row(p: &Package, shown: Shown) -> Row {
             icon: Some(Icon::FolderOpen),
             ..Button::new(format!("{SHOW}{}", p.id), "Show files")
         },
-        Button {
-            icon: Some(Icon::Trash),
-            style: Style::Danger,
-            kind: ButtonKind::Confirm {
-                title: format!("Remove {}?", p.name),
-                text: "It is deleted from the library and turned off in every profile.".into(),
-            },
-            ..Button::new(format!("{REMOVE}{}", p.id), "Remove from library")
-        },
+        remove_button(p),
     ]));
     Row {
         id: p.id.clone(),
@@ -522,6 +514,19 @@ fn row(p: &Package, shown: Shown) -> Row {
             enabled: switchable,
         }),
         detail,
+        menu: vec![remove_button(p)],
+    }
+}
+
+fn remove_button(p: &Package) -> Button {
+    Button {
+        icon: Some(Icon::Trash),
+        style: Style::Danger,
+        kind: ButtonKind::Confirm {
+            title: format!("Remove {}?", p.name),
+            text: "It is deleted from the library and turned off in every profile.".into(),
+        },
+        ..Button::new(format!("{REMOVE}{}", p.id), "Remove from library")
     }
 }
 
