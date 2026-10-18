@@ -1,20 +1,23 @@
 [package]
 name = "swofty-addon-simplified"
 description = "Team Simplified: .serps mods for Swofty Launcher for F1 25"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/TeamSimplified/simplified-swofty-addon"
 publish = false
 
 [dependencies]
-serde.workspace = true
-serde_json.workspace = true
-sha2.workspace = true
-swofty-addon.workspace = true
-swofty-formats.workspace = true
-zip.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+swofty-addon = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", tag = "v0.2.6" }
+swofty-formats = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", tag = "v0.2.6" }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
