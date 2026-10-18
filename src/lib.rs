@@ -31,7 +31,7 @@ use crate::package::Class;
 pub const ID: &str = "teamsimplified.mods";
 pub const SECTION: &str = "mods";
 const MANIFEST: &str = include_str!("../swofty.json");
-const FOOTER: &str = "Works with any F1 25 mod: its files go where copying them into the game folder would put them. Made by Team Simplified. Based on Simplified Suite by Team Simplified - https://github.com/TeamSimplified/simplified-suite";
+const FOOTER: &str = "Works with any F1 25 mod: its files go where copying them into the game folder would put them. Made by Team Simplified. Based on Simplified Suite by Team Simplified.";
 const IMPORT: &str = "import";
 const ENABLE: &str = "enable";
 const COMPARE: &str = "compare";
@@ -557,7 +557,7 @@ impl Addon for Simplified {
             });
         } else if !cx.profile.enabled {
             notices.push(Notice {
-                text: format!("Team Simplified is off in {}.", cx.profile.name),
+                text: format!("Simplified for Swofty is off in {}.", cx.profile.name),
                 tone: Tone::Warn,
                 action: Some(Button::new(ENABLE, "Turn on")),
             });

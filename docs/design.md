@@ -1,14 +1,14 @@
 # Design
 
-How the Team Simplified addon imports, stores, compares and merges `.serps` mods and tracks. These are sections 4 and 5 of the Swofty Launcher design notes, <https://f1.swofty.net/design/addons-and-mods>, which describe the Launcher API and Asset API this addon is built on. Links to other sections go there.
+How Simplified for Swofty imports, stores, compares and merges `.serps` mods and tracks. These are sections 4 and 5 of the Swofty Launcher design notes, <https://f1.swofty.net/design/addons-and-mods>, which describe the Launcher API and Asset API this addon is built on. Links to other sections go there.
 
-## 4. Team Simplified addon
+## 4. Simplified for Swofty
 
 ### 4.1 The addon
 
 - The crate `addons/simplified` (`swofty-addon-simplified`) is Rust and AGPL-3.0-or-later, like the rest of the repository. Its `mod.serps` reader, package root, content root and entry path checks are ported from the Simplified Launcher (GPL-3.0, used with Team Simplified's permission) and carry the Simplified Suite notice. `THIRD_PARTY.md` credits Team Simplified for the `.serps` format and the Simplified Suite, and the Mods section shows the credit.
 - Import, the library, profile state, the section and `swofty mods` are built (work item 13), and so are the diffs (work item 14), the merge and conflicts (work item 15).
-- Manifest: id `teamsimplified.mods`, name `Team Simplified`, author `Team Simplified`. No options and no native plugin.
+- Manifest: id `teamsimplified.mods`, name `Simplified for Swofty`, author `Team Simplified`. No options and no native plugin.
 - Built in and on by default in new profiles. It can be turned off per profile, which hides its section.
 - It uses `swofty-addon` and `swofty-formats` only. Core has no code for it.
 
@@ -133,7 +133,7 @@ The sidebar entry `Mods` comes after `Addons`, with the library size as its coun
 - **Rows.** Reorderable, in load order. Title from `mod.serps`, subtitle `<author> · <version>`, tags `Database`, `Text`, `<n> archives`, `<n> files`, conflict tags and `Made for <game_version>` when it differs from the game. A switch turns the mod on in the profile.
 - **Expanded row.** Stats: status, version, author, made for, Studio version, size, imported. `WHAT IT CHANGES`: records changed, added and removed; text entries by language; resources by archive; files. `CONFLICTS`. Buttons: Move up, Move down, Show files, and Remove from library with a confirmation.
 - **Empty.** `No mods yet`, `Drop a mod on the window, or import its zip, 7z, rar or folder. Mods made with Simplified Studio import too.` and `Import…`.
-- **Footer.** `Works with any F1 25 mod: its files go where copying them into the game folder would put them. Made by Team Simplified. Based on Simplified Suite by Team Simplified - https://github.com/TeamSimplified/simplified-suite`
+- **Footer.** `Works with any F1 25 mod: its files go where copying them into the game folder would put them. Made by Team Simplified. Based on Simplified Suite by Team Simplified.`
 - **Profile cards.** `summary` adds `MODS` with the enabled mods' names.
 - **CLI.** `swofty mods list`, `import <path>…`, `remove <id>`, `enable <id>`, `disable <id>`, `move <id> <position>`.
 

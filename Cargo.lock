@@ -473,8 +473,8 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "swofty-addon"
-version = "0.2.8"
-source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?tag=v0.2.8#a5134ab30b49396714d7916df23c56f41fd25ea4"
+version = "0.2.9"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?tag=v0.2.9#f6809ba28d1bf558b307f57bb4aa277996647bee"
 dependencies = [
  "semver",
  "serde",
@@ -499,8 +499,8 @@ dependencies = [
 
 [[package]]
 name = "swofty-formats"
-version = "0.2.8"
-source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?tag=v0.2.8#a5134ab30b49396714d7916df23c56f41fd25ea4"
+version = "0.2.9"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?tag=v0.2.9#f6809ba28d1bf558b307f57bb4aa277996647bee"
 dependencies = [
  "aes",
  "bcdec_rs",
@@ -511,8 +511,8 @@ dependencies = [
 
 [[package]]
 name = "swofty-sdk"
-version = "0.2.8"
-source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?tag=v0.2.8#a5134ab30b49396714d7916df23c56f41fd25ea4"
+version = "0.2.9"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?tag=v0.2.9#f6809ba28d1bf558b307f57bb4aa277996647bee"
 
 [[package]]
 name = "syn"
