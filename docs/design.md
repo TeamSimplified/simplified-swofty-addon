@@ -18,7 +18,7 @@ Any mod works, as copying it into the game folder would.
 
 - A package is a zip archive under any name, `.serps` included, a 7z or RAR archive, or a folder.
 - Dropped on the launcher, a folder or zip is claimed when it holds `mod.serps` at its root, a folder whose name starts with `F1 25`, or a game folder (see the content root below) at most three folders down. 7z and RAR archives are claimed by their extension.
-- 7z archives are read by `sevenz-rust2`. RAR archives, and 7z archives that reader can't read, are unpacked by 7-Zip or UnRAR from `PATH` or where their installers put them. Without either, a RAR import fails and says what to install.
+- Zip archives may use Deflate, Deflate64, BZip2, LZMA, XZ, PPMd or Zstandard. 7z archives are read by `sevenz-rust2`, and RAR archives of every version, RAR 1.3 to 7, by `rars`. An archive either reader can't read is unpacked by 7-Zip or UnRAR from `PATH` or where their installers put them, when one is installed.
 - `mod.serps` at the package root is JSON: `mod_name` or `name` (`mod_name` wins), `author`, `version`, `game` (for example `F1® 25`), `game_version` (for example `1.0.141.7865`), and `studio_version` from Simplified Studio. Every field is optional. The reader accepts a UTF-8 byte order mark, comments and trailing commas.
 - `F1 25/` holds files in the game folder's layout. RM Designs' Scuderia AlphaTauri ORLEN package has the whole `game_package/gamedatabases/gamedatabases.2025.bin`, 11 whole language files under `localisatioa/2025_release/` and four whole shader archives under `shader_package_2025/`.
 - `localisatioa/` is the folder Simplified's launcher points a patched exe at. Both `localisatioa/` and `localisation/` name the stock language file with the same file name.
@@ -42,7 +42,7 @@ Any mod works, as copying it into the game folder would.
 4. The id is `<author>.<name>`, lowercased to `[a-z0-9-]`, or the file name when both are missing. Importing an id that exists replaces it: the new copy is staged, the old one moves aside, the new one moves in and the old one is deleted. Profiles keep the id's place and switch.
 5. The importer diffs the package ([section 4.5](#45-diff)) and writes `package.json`.
 
-The importer reads zip archives and folders. 7z is a later item. RAR is not supported.
+The importer reads zip, 7z and RAR archives and folders. Encrypted archives are not supported.
 
 ### 4.4 Library
 

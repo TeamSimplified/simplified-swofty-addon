@@ -15,10 +15,12 @@ sevenz-rust2 = { version = "0.23", default-features = false, features = ["bzip2"
 sha2 = "0.11"
 swofty-addon = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "22e5b6df3f3fb9cbf3a7b4bf51f4da9d7c4beff9" }
 swofty-formats = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "22e5b6df3f3fb9cbf3a7b4bf51f4da9d7c4beff9" }
-zip = { version = "9", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["bzip2", "deflate", "deflate64", "lzma", "ppmd", "xz", "zstd"] }
+rars = { version = "=0.10.0", default-features = false }
 
 [dev-dependencies]
 sevenz-rust2 = { version = "0.23", default-features = false, features = ["compress"] }
+rars = { version = "=0.10.0", default-features = false, features = ["write"] }
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

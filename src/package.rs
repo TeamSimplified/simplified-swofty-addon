@@ -133,14 +133,10 @@ pub fn unpack(src: &Path, dest: &Path, progress: &mut dyn FnMut(f32)) -> Result<
             Some(tool) => unpack_with(&tool, src, dest),
             None => Err(e),
         }),
-        "rar" => match extractor() {
+        "rar" => unpack_rar(src, dest, progress).or_else(|e| match extractor() {
             Some(tool) => unpack_with(&tool, src, dest),
-            None => Err(err(format!(
-                "{} is a RAR archive: install 7-Zip (https://www.7-zip.org) or WinRAR to import it, \
-                 or repack it as a zip or 7z",
-                file_name(src)
-            ))),
-        },
+            None => Err(e),
+        }),
         _ => unpack_zip(src, dest, progress),
     }
 }
@@ -215,8 +211,38 @@ fn unpack_7z(src: &Path, dest: &Path, progress: &mut dyn FnMut(f32)) -> Result<u
     Ok(refused)
 }
 
-// 7-Zip or UnRAR, for RAR archives and for 7z archives the built-in reader can't
-// read. Either is looked for on PATH and where its installer puts it.
+fn unpack_rar(src: &Path, dest: &Path, progress: &mut dyn FnMut(f32)) -> Result<usize> {
+    let fail = |e: rars::Error| {
+        err(format!(
+            "{} is not a RAR archive this can read: {e}",
+            file_name(src)
+        ))
+    };
+    let archive = rars::ArchiveReader::read_path(src).map_err(fail)?;
+    let mut refused = 0;
+    archive
+        .extract_to(None, |entry| {
+            let sink = || -> rars::Result<Box<dyn std::io::Write>> { Ok(Box::new(std::io::sink())) };
+            if entry.is_directory {
+                return sink();
+            }
+            let Some(rel) = relative(&String::from_utf8_lossy(&entry.name).replace('\\', "/")) else {
+                refused += 1;
+                return sink();
+            };
+            let out = dest.join(rel);
+            if let Some(dir) = out.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            Ok(Box::new(std::fs::File::create(&out)?))
+        })
+        .map_err(fail)?;
+    progress(1.0);
+    Ok(refused)
+}
+
+// 7-Zip or UnRAR, for archives the built-in readers can't read. Either is looked
+// for on PATH and where its installer puts it.
 #[derive(Debug)]
 enum Tool {
     SevenZip(PathBuf),
@@ -529,6 +555,63 @@ mod tests {
         assert_eq!(class("EAAntiCheat.cfg", None), None);
         assert_eq!(class("bin/plugin.asi", None), None);
         assert_eq!(class("EAAntiCheat.splash.png", None), Some(Class::Replacement));
+    }
+
+    #[test]
+    fn a_rar_unpacks_whatever_its_version() {
+        let dir = std::env::temp_dir().join(format!("simplified-rar-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, version) in [
+            ("rar5.rar", rars::ArchiveVersion::Rar50),
+            ("rar29.rar", rars::ArchiveVersion::Rar29),
+        ] {
+            let mut b = rars::Builder::new(version);
+            b.add_bytes(
+                b"My Mod/2025_asset_groups/ui_package/a.erp".to_vec(),
+                b"erp".to_vec(),
+                None,
+                None,
+            )
+            .unwrap();
+            let archive = dir.join(name);
+            std::fs::write(&archive, b.to_bytes().unwrap()).unwrap();
+            assert_eq!(claims(&archive), Claim::Yes);
+            let out = dir.join(format!("out-{name}"));
+            assert_eq!(unpack(&archive, &out, &mut |_| {}).unwrap(), 0, "{name}");
+            assert_eq!(
+                std::fs::read(out.join("My Mod/2025_asset_groups/ui_package/a.erp")).unwrap(),
+                b"erp",
+                "{name}"
+            );
+            assert_eq!(content_root(&out), Some(out.join("My Mod")), "{name}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_zip_packed_with_bzip2_unpacks() {
+        let dir = std::env::temp_dir().join(format!("simplified-bzip2-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("mod.zip");
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        for method in [zip::CompressionMethod::Bzip2, zip::CompressionMethod::Zstd] {
+            let options = zip::write::SimpleFileOptions::default().compression_method(method);
+            w.start_file(format!("F1 25/game_package/{method:?}.bin"), options)
+                .unwrap();
+            std::io::Write::write_all(&mut w, b"packed").unwrap();
+        }
+        w.finish().unwrap();
+        let out = dir.join("out");
+        unpack(&archive, &out, &mut |_| {}).unwrap();
+        for method in ["Bzip2", "Zstd"] {
+            assert_eq!(
+                std::fs::read(out.join(format!("F1 25/game_package/{method}.bin"))).unwrap(),
+                b"packed"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
