@@ -608,7 +608,7 @@ impl Addon for Simplified {
             .order
             .iter()
             .zip(&summaries)
-            .filter(|(_, d)| d.is_none())
+            .filter(|((p, _), d)| p.track.is_none() && d.is_none())
             .count();
         if key.is_some() && missing > 0 {
             notices.push(Notice {
