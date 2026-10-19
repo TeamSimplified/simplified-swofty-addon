@@ -15,7 +15,7 @@ How it works is in [docs/design.md](docs/design.md).
 
 Simplified for Swofty is a launcher plugin: a helper program (`bin/simplified-helper`) that the launcher runs, packaged with its `swofty.json` as `teamsimplified.mods.swoftyaddon`. Each [release](https://github.com/TeamSimplified/simplified-swofty-addon/releases) attaches it, built for Windows and Linux, with its `SHA256SUMS`.
 
-To install it, drop the `.swoftyaddon` on the launcher, or run:
+Swofty Launcher 1.0.4 and later installs the addon itself from the latest release, checks it against `SHA256SUMS`, and keeps it up to date. To install it by hand, drop the `.swoftyaddon` on the launcher, or run:
 
 ```sh
 swofty addons install teamsimplified.mods.swoftyaddon
@@ -24,17 +24,15 @@ swofty addons enable teamsimplified.mods
 
 Its id is `teamsimplified.mods`, the same id the launcher's built-in copy used, so the mod library and each profile's mod list carry over. A launcher that still builds that copy in refuses to install this one ("teamsimplified.mods is built in").
 
-The helper speaks the launcher's helper protocol through `swofty_addon::helper::run_helper`. Until a launcher release includes [SwoftyLauncher#124](https://github.com/Swofty-Developments/SwoftyLauncher/pull/124), the plugin has three limits:
+The helper speaks the launcher's helper protocol through `swofty_addon::helper::run_helper`, which needs Swofty Launcher 1.0.4 or later ([SwoftyLauncher#124](https://github.com/Swofty-Developments/SwoftyLauncher/pull/124)). The launcher keeps one runtime overlay archive per mod, so conflicts name each mod, and the helper decides which dropped files and folders it imports, checking them by their contents.
 
-- All mods share one runtime overlay archive. Conflicts still list each mod's changes, but name only the addon.
-- Only dropped files are claimed, by extension (`serps`, `zip`, `7z`, `rar`). To import a folder, use **Import** on the Mods page or `swofty mods import`.
-- The one-time move of tracks from the launcher's old `maps/` folder only runs in the built-in copy.
+The one-time move of tracks from the launcher's old `maps/` folder only runs in the built-in copy.
 
 The crate still builds as a library, so the launcher can also build it in through `swofty-builtins`, as it did before: depend on it from the launcher's root `Cargo.toml` and patch the launcher crates it uses to the launcher's own copies.
 
 ```toml
 [workspace.dependencies]
-swofty-addon-simplified = { git = "https://github.com/TeamSimplified/simplified-swofty-addon", tag = "v0.5.0" }
+swofty-addon-simplified = { git = "https://github.com/TeamSimplified/simplified-swofty-addon", tag = "v0.5.1" }
 
 [patch."https://github.com/Swofty-Developments/SwoftyLauncher"]
 swofty-addon = { path = "packages/addon-api" }
