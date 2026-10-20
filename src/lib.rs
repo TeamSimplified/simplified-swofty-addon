@@ -5,10 +5,11 @@ pub mod package;
 pub mod serps;
 pub mod texarray;
 pub mod track;
+pub mod viewcache;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use swofty_addon::asset::{AssetBatch, AssetOp, LangOp, Op, Origin};
@@ -21,10 +22,9 @@ use swofty_addon::view::{
 };
 use swofty_addon::{Error, Result};
 
-use crate::diff::Diff;
 use crate::library::{Library, Package};
-use crate::merge::Clash;
 use crate::package::Class;
+use crate::viewcache::{Overlap, ViewCache};
 
 pub const ID: &str = "teamsimplified.mods";
 pub const SECTION: &str = "mods";
@@ -128,6 +128,7 @@ pub struct Slot {
 
 pub struct Simplified {
     manifest: AddonManifest,
+    views: Mutex<Option<ViewCache>>,
 }
 
 impl Default for Simplified {
@@ -140,6 +141,7 @@ impl Simplified {
     pub fn new() -> Self {
         Self {
             manifest: AddonManifest::parse(MANIFEST).expect("the built-in manifest is valid"),
+            views: Mutex::new(None),
         }
     }
 
@@ -337,19 +339,20 @@ fn tags(p: &Package, exe: Option<&str>) -> Vec<Tag> {
     out
 }
 
-fn changes(p: &Package, d: &Diff, exe: Option<&str>) -> Vec<Block> {
+fn changes(p: &Package, d: &viewcache::Summary, exe: Option<&str>) -> Vec<Block> {
     let mut out = vec![Block::Label("WHAT IT CHANGES".into())];
-    if d.is_empty() {
+    if d.empty {
         out.push(Block::Text {
             text: "Nothing differs from the game.".into(),
             tone: Tone::Muted,
         });
     }
-    if !d.records.is_empty() {
+    if d.has_records() {
+        let [changed, added, removed] = d.records;
         out.push(Block::Facts(vec![
-            Fact::new("RECORDS CHANGED", d.records.changed.len().to_string()),
-            Fact::new("RECORDS ADDED", d.records.added.len().to_string()),
-            Fact::new("RECORDS REMOVED", d.records.removed.len().to_string()),
+            Fact::new("RECORDS CHANGED", changed.to_string()),
+            Fact::new("RECORDS ADDED", added.to_string()),
+            Fact::new("RECORDS REMOVED", removed.to_string()),
         ]));
     }
     if !d.text.is_empty() {
@@ -363,7 +366,7 @@ fn changes(p: &Package, d: &Diff, exe: Option<&str>) -> Vec<Block> {
                         Some(from) => format!("{} (from {from})", t.language),
                         None => t.language.clone(),
                     };
-                    vec![language, t.changed.len().to_string(), t.added.len().to_string()]
+                    vec![language, t.changed.to_string(), t.added.to_string()]
                 })
                 .collect(),
         });
@@ -382,28 +385,19 @@ fn changes(p: &Package, d: &Diff, exe: Option<&str>) -> Vec<Block> {
                 .map(|a| {
                     vec![
                         a.path.clone(),
-                        a.changed.len().to_string(),
-                        a.added.len().to_string(),
-                        a.removed.len().to_string(),
+                        a.changed.to_string(),
+                        a.added.to_string(),
+                        a.removed.to_string(),
                     ]
                 })
                 .collect(),
         });
     }
-    for (label, class) in [
-        ("REPLACED FILES", Class::Replacement),
-        ("ADDED FILES", Class::Addition),
-    ] {
-        let items: Vec<String> = d
-            .files
-            .iter()
-            .filter(|f| f.class == class)
-            .map(|f| f.path.clone())
-            .collect();
+    for (label, items) in [("REPLACED FILES", &d.replaced), ("ADDED FILES", &d.added)] {
         if !items.is_empty() {
             out.push(Block::Names {
                 label: label.into(),
-                items,
+                items: items.clone(),
             });
         }
     }
@@ -454,32 +448,40 @@ struct Shown<'a> {
     on: bool,
     switchable: bool,
     exe: Option<&'a str>,
-    diff: Option<&'a Diff>,
-    wins: Vec<(&'a str, &'a Clash)>,
-    losses: Vec<(&'a str, &'a Clash)>,
+    diff: Option<&'a viewcache::Summary>,
+    wins: Vec<(&'a str, &'a Overlap)>,
+    losses: Vec<(&'a str, &'a Overlap)>,
+}
+
+fn targets(o: &Overlap) -> Vec<String> {
+    let mut items = o.sample.clone();
+    if o.count > items.len() {
+        items.push(format!("and {} more", o.count - items.len()));
+    }
+    items
 }
 
 fn conflicts(shown: &Shown) -> (Vec<Tag>, Vec<Block>) {
     let mut tags = Vec::new();
     let mut blocks = Vec::new();
-    for (name, c) in &shown.wins {
+    for (name, o) in &shown.wins {
         tags.push(Tag {
-            text: format!("Overrides {} in {name}", c.targets.len()),
+            text: format!("Overrides {} in {name}", o.count),
             tone: Tone::Accent,
         });
         blocks.push(Block::Names {
             label: format!("OVERRIDES {}", name.to_uppercase()),
-            items: c.targets.clone(),
+            items: targets(o),
         });
     }
-    for (name, c) in &shown.losses {
+    for (name, o) in &shown.losses {
         tags.push(Tag {
-            text: format!("{} overridden by {name}", c.targets.len()),
+            text: format!("{} overridden by {name}", o.count),
             tone: Tone::Warn,
         });
         blocks.push(Block::Names {
             label: format!("OVERRIDDEN BY {}", name.to_uppercase()),
-            items: c.targets.clone(),
+            items: targets(o),
         });
     }
     if !blocks.is_empty() {
@@ -585,12 +587,29 @@ impl Addon for Simplified {
         let exe = cx.game.and_then(|g| g.exe_version());
         let key = cx.game.map(|g| g.build_key());
         let library = Library::new(cx.data_dir);
-        let diffs: Vec<Option<Diff>> = loaded
+        let (summaries, overlaps) = match key.as_deref() {
+            Some(k) => {
+                let mut views = self.views.lock().unwrap_or_else(|e| e.into_inner());
+                let mut cache = match views.take() {
+                    Some(c) if c.build_key == k => c,
+                    _ => ViewCache::load(&library, k),
+                };
+                let (summaries, dirty) = cache.refresh(&library, &loaded.order);
+                if dirty && let Err(e) = cache.save(&library) {
+                    eprintln!("simplified: could not save the view cache: {e}");
+                }
+                let overlaps = cache.overlaps().to_vec();
+                *views = Some(cache);
+                (summaries, overlaps)
+            }
+            None => (vec![None; loaded.order.len()], Vec::new()),
+        };
+        let missing = loaded
             .order
             .iter()
-            .map(|(p, _)| key.as_deref().and_then(|k| library.cached(&p.id, k)))
-            .collect();
-        let missing = diffs.iter().filter(|d| d.is_none()).count();
+            .zip(&summaries)
+            .filter(|((p, _), d)| p.track.is_none() && d.is_none())
+            .count();
         if key.is_some() && missing > 0 {
             notices.push(Notice {
                 text: format!("{missing} mod(s) are not compared with this game build yet."),
@@ -598,14 +617,13 @@ impl Addon for Simplified {
                 action: Some(Button::new(COMPARE, "Compare")),
             });
         }
-        let on_diffs: Vec<Option<&Diff>> = loaded
-            .order
-            .iter()
-            .zip(&diffs)
-            .map(|((_, on), d)| d.as_ref().filter(|_| *on))
-            .collect();
-        let clashes = merge::clashes(&on_diffs);
-        let name = |i: usize| loaded.order[i].0.name.as_str();
+        let name = |id: &str| {
+            loaded
+                .order
+                .iter()
+                .find(|(p, _)| p.id == id)
+                .map_or("", |(p, _)| p.name.as_str())
+        };
         let body = if loaded.order.is_empty() {
             Body::Empty {
                 title: "No mods yet".into(),
@@ -618,23 +636,22 @@ impl Addon for Simplified {
                 rows: loaded
                     .order
                     .iter()
-                    .zip(&diffs)
-                    .enumerate()
-                    .map(|(i, ((p, on), d))| {
+                    .zip(&summaries)
+                    .map(|((p, on), d)| {
                         let shown = Shown {
                             on: *on,
                             switchable: !cx.profile.vanilla,
                             exe: exe.as_deref(),
                             diff: d.as_ref(),
-                            wins: clashes
+                            wins: overlaps
                                 .iter()
-                                .filter(|c| c.winner == i)
-                                .map(|c| (name(c.loser), c))
+                                .filter(|o| o.winner == p.id)
+                                .map(|o| (name(&o.loser), o))
                                 .collect(),
-                            losses: clashes
+                            losses: overlaps
                                 .iter()
-                                .filter(|c| c.loser == i)
-                                .map(|c| (name(c.winner), c))
+                                .filter(|o| o.loser == p.id)
+                                .map(|o| (name(&o.winner), o))
                                 .collect(),
                         };
                         row(p, shown)

@@ -124,6 +124,10 @@ impl Library {
         self.dir(id).join(DIFF).join(format!("{key}.{ext}"))
     }
 
+    pub fn diff_file(&self, id: &str, key: &str) -> PathBuf {
+        self.diff_path(id, key, "json")
+    }
+
     pub fn cached(&self, id: &str, key: &str) -> Option<Diff> {
         let bytes = std::fs::read(self.diff_path(id, key, "json")).ok()?;
         serde_json::from_slice::<Diff>(&bytes)
