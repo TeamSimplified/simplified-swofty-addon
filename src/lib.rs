@@ -18,7 +18,7 @@ use swofty_addon::manifest::{AddonManifest, Launcher};
 use swofty_addon::ops::{DbOp, ErpOp};
 use swofty_addon::view::{
     Art, Block, Body, Button, ButtonKind, Control, Effect, Event, Fact, Icon, Notice, Row, SectionSpec,
-    Style, Tag, Tone, View,
+    Style, Table, Tag, Tone, View,
 };
 use swofty_addon::{Error, Result};
 
@@ -356,10 +356,9 @@ fn changes(p: &Package, d: &viewcache::Summary, exe: Option<&str>) -> Vec<Block>
         ]));
     }
     if !d.text.is_empty() {
-        out.push(Block::Table {
-            columns: vec!["Language".into(), "Changed".into(), "Added".into()],
-            rows: d
-                .text
+        out.push(Block::Table(Table::plain(
+            vec!["Language".into(), "Changed".into(), "Added".into()],
+            d.text
                 .iter()
                 .map(|t| {
                     let language = match &t.from {
@@ -369,18 +368,17 @@ fn changes(p: &Package, d: &viewcache::Summary, exe: Option<&str>) -> Vec<Block>
                     vec![language, t.changed.to_string(), t.added.to_string()]
                 })
                 .collect(),
-        });
+        )));
     }
     if !d.archives.is_empty() {
-        out.push(Block::Table {
-            columns: vec![
+        out.push(Block::Table(Table::plain(
+            vec![
                 "Archive".into(),
                 "Changed".into(),
                 "Added".into(),
                 "Removed".into(),
             ],
-            rows: d
-                .archives
+            d.archives
                 .iter()
                 .map(|a| {
                     vec![
@@ -391,7 +389,7 @@ fn changes(p: &Package, d: &viewcache::Summary, exe: Option<&str>) -> Vec<Block>
                     ]
                 })
                 .collect(),
-        });
+        )));
     }
     for (label, items) in [("REPLACED FILES", &d.replaced), ("ADDED FILES", &d.added)] {
         if !items.is_empty() {
@@ -658,6 +656,7 @@ impl Addon for Simplified {
                     })
                     .collect(),
                 reorder: !cx.profile.vanilla,
+                search: None,
             }
         };
         Ok(View {
@@ -670,6 +669,7 @@ impl Addon for Simplified {
             notices,
             body,
             footer: Some(FOOTER.into()),
+            tick: false,
         })
     }
 
