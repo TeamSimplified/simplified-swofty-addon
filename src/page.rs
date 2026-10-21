@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use swofty_addon::launcher::{AddonInfo, Cx};
 use swofty_addon::view::{
-    Art, Block, Body, Button, ButtonKind, Card, Columns, Effect, Event, Grid, Hero, Icon, Notice, Pill,
+    Art, Block, Body, Button, ButtonKind, Card, Columns, Effect, Event, Fact, Grid, Hero, Icon, Notice, Pill,
     Style, Tone, View,
 };
 
@@ -64,10 +64,10 @@ fn art(cx: &Cx) -> Art {
     }
 }
 
-pub fn choose_button(primary: bool) -> Button {
+pub fn choose_button() -> Button {
     Button {
         icon: Some(Icon::Upload),
-        style: if primary { Style::Primary } else { Style::Outline },
+        style: Style::Primary,
         kind: ButtonKind::Pick {
             title: "Choose a mod".into(),
             extensions: vec!["zip".into(), "7z".into(), "rar".into(), "serps".into()],
@@ -173,10 +173,12 @@ fn team() -> Block {
             .map(|(id, label, _)| Button::new(format!("{LINK}{id}"), *label))
             .collect(),
     ));
-    blocks.push(Block::Names {
-        label: String::new(),
-        items: links.iter().map(|(_, _, url)| url.to_string()).collect(),
-    });
+    blocks.push(Block::Facts(
+        links
+            .iter()
+            .map(|(_, label, url)| Fact::new(*label, *url))
+            .collect(),
+    ));
     Block::Card(Card {
         title: Some("Team Simplified".into()),
         subtitle: Some("Modding tools for F1 25".into()),
@@ -191,7 +193,7 @@ fn choose() -> Block {
         subtitle: Some(
             "Drop a mod's zip, 7z, rar, .serps or folder anywhere on the window, or choose one.".into(),
         ),
-        buttons: vec![choose_button(true)],
+        buttons: vec![choose_button()],
         blocks: vec![Block::Text {
             text: "Each mod becomes a Swofty addon on the Addons page, turned on in this profile. Mods made with Simplified Studio and track zips import too. Importing a mod again replaces its addon.".into(),
             tone: Tone::Muted,
@@ -270,8 +272,14 @@ fn last(record: &Record) -> Option<Block> {
         }));
     }
     Some(Block::Card(Card {
-        title: Some("Last import".into()),
-        subtitle: Some(format!("{} · {}", date(last.at), last.files.join(", "))),
+        title: Some(match last.files.is_empty() {
+            true => "Library conversion".into(),
+            false => "Last import".into(),
+        }),
+        subtitle: Some(match last.files.is_empty() {
+            true => format!("{} · the mods in your library", date(last.at)),
+            false => format!("{} · {}", date(last.at), last.files.join(", ")),
+        }),
         blocks,
         ..Card::default()
     }))
@@ -421,7 +429,7 @@ pub fn view(cx: &Cx, open: bool) -> Result<View> {
     blocks.extend(converted(&record, installed.as_deref()));
     Ok(View {
         subtitle: format!("{count} mod(s) converted into addons · by Team Simplified"),
-        actions: vec![choose_button(false)],
+        actions: Vec::new(),
         notices: notices(cx, &pending),
         body: Body::Blocks(blocks),
         footer: Some(FOOTER.into()),

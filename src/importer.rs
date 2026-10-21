@@ -302,6 +302,15 @@ fn migrated(cx: &Cx, conv: &dyn Convert, progress: &dyn Progress) -> Result<(Vec
             "{failed} mod(s) still load through Simplified for Swofty's build step"
         ));
     }
+    if !todo.is_empty() {
+        record.last = Some(Last {
+            at: now(),
+            files: Vec::new(),
+            mods: todo.iter().map(|p| p.id.clone()).collect(),
+            errors: Vec::new(),
+        });
+        record.save(cx.data_dir)?;
+    }
     lines.extend(place(cx, addons, &record)?);
     Ok((lines, converted))
 }
