@@ -150,6 +150,8 @@ Every mod becomes a standalone Swofty data addon. `src/convert.rs` writes one ad
 3. Outside the vanilla profile, `set_addon_enabled` turns the addon on in the active profile and the profile records the mod as handed over.
 4. A `picked` event returns `{ "show_addon": "<addon id>" }` for the first addon, and the launcher switches to **Addons** with it highlighted. An import with no addon made returns a notice, and one where every file failed returns an error.
 5. `Re-import` and `Convert again` convert the library copy again and install it over the same addon id. The addon keeps its switch.
+6. Converting compares a mod with the game's own files. Without a game a mod stays in the library with no record entry, loads through the build hook and converts on a later import or `Convert now` with a game. Track packages convert without one.
+7. Report lines that start with `warning:` show as warnings on the page.
 
 The record is `addon-data/teamsimplified.mods/importer.json`:
 
@@ -173,7 +175,7 @@ The record is `addon-data/teamsimplified.mods/importer.json`:
 
 Libraries from before 0.7.0 convert once, on the first import or on `Convert now`, and each profile is handed over on its own.
 
-1. Each library mod without a record entry converts and installs, in the active profile's mod order, then the rest. The record is saved after each mod, and a later run converts only what is left.
+1. Each library mod without a record entry converts and installs, in the active profile's mod order, then the rest. The record is saved after each mod, and a later run converts only what is left. An import that runs the migration does not convert a mod the migration just made from the same files again.
 2. For the active profile, the addons of the mods it lists turn on or off as each mod was, in the profile's mod order. Set in order, they append to the profile's addon list in that order.
 3. A profile not handed over yet loads its mods through the build hook, as before, and the page offers `Convert now`.
 4. Mods that fail to convert stay in the library and in each profile's mod list, and the build hook keeps loading them.
