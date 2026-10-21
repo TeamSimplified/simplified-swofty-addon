@@ -15,6 +15,7 @@ use crate::{Loaded, Result, State, err, io_err, package};
 pub const RECORD: &str = "importer.json";
 const STAGING: &str = ".convert";
 pub const UPDATE: &str = "Update Swofty Launcher to 1.3.0 or later to turn mods into addons.";
+pub const NO_GAME: &str = "Mods turn into addons once Swofty Launcher finds F1 25.";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Made {
@@ -46,8 +47,16 @@ impl Convert for Converter {
             name: c.name,
             category: Some(c.category),
             kinds: c.kinds.into_iter().map(|k| kind(k).into()).collect(),
-            lines: c.report,
-            warnings: Vec::new(),
+            warnings: c
+                .report
+                .iter()
+                .filter_map(|l| l.strip_prefix("warning:").map(|w| w.trim().to_owned()))
+                .collect(),
+            lines: c
+                .report
+                .into_iter()
+                .filter(|l| !l.starts_with("warning:"))
+                .collect(),
         })
     }
 }
@@ -165,6 +174,11 @@ pub fn pending(cx: &Cx, record: &Record) -> Result<Pending> {
     Ok(Pending { convert, place })
 }
 
+// A mod converts by comparing it with the game's own files; a track package needs none.
+fn convertible(cx: &Cx, p: &Package) -> bool {
+    cx.game.is_some() || p.track.is_some()
+}
+
 fn staging(data: &Path, id: &str) -> PathBuf {
     data.join(STAGING).join(id)
 }
@@ -245,8 +259,12 @@ fn hand_over(cx: &Cx, id: &str) -> Result<()> {
 // Converts each library mod that has no addon yet, then hands the profile's mods
 // over to their addons. Runs again for each profile, converting nothing twice.
 pub fn migrate(cx: &Cx, conv: &dyn Convert, progress: &dyn Progress) -> Result<Vec<String>> {
+    Ok(migrated(cx, conv, progress)?.0)
+}
+
+fn migrated(cx: &Cx, conv: &dyn Convert, progress: &dyn Progress) -> Result<(Vec<String>, Vec<Package>)> {
     let Some(addons) = cx.addons() else {
-        return Ok(Vec::new());
+        return Ok(Default::default());
     };
     let library = Library::new(cx.data_dir);
     let mut record = Record::load(cx.data_dir)?;
@@ -254,9 +272,10 @@ pub fn migrate(cx: &Cx, conv: &dyn Convert, progress: &dyn Progress) -> Result<V
         .order
         .into_iter()
         .map(|(p, _)| p)
-        .filter(|p| !record.mods.contains_key(&p.id))
+        .filter(|p| !record.mods.contains_key(&p.id) && convertible(cx, p))
         .collect();
     let mut lines = Vec::new();
+    let mut converted = Vec::new();
     let (mut done, mut failed) = (0, 0);
     let total = todo.len() as f32;
     for (i, p) in todo.iter().enumerate() {
@@ -264,7 +283,10 @@ pub fn migrate(cx: &Cx, conv: &dyn Convert, progress: &dyn Progress) -> Result<V
             progress.report((i as f32 + f) / total, &format!("Converting {}: {text}", p.name))
         };
         match convert_one(cx, addons, conv, &library, p, &mut record, &mut report) {
-            Ok(_) => done += 1,
+            Ok(_) => {
+                done += 1;
+                converted.push(p.clone());
+            }
             Err(e) => {
                 failed += 1;
                 lines.push(format!("{} was not converted: {e}", p.name));
@@ -281,7 +303,7 @@ pub fn migrate(cx: &Cx, conv: &dyn Convert, progress: &dyn Progress) -> Result<V
         ));
     }
     lines.extend(place(cx, addons, &record)?);
-    Ok(lines)
+    Ok((lines, converted))
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -292,8 +314,9 @@ pub struct Done {
 }
 
 pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Convert) -> Result<Done> {
+    let (lines, fresh) = migrated(cx, conv, progress)?;
     let mut done = Done {
-        lines: migrate(cx, conv, progress)?,
+        lines,
         ..Done::default()
     };
     let library = Library::new(cx.data_dir);
@@ -328,8 +351,9 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
                     .push(format!("{}: not compared with the game: {e}", p.name));
             }
             last.mods.push(p.id.clone());
-            let Some(addons) = cx.addons() else {
-                done.lines.push(format!("Imported {}. {UPDATE}", p.name));
+            let Some(addons) = cx.addons().filter(|_| convertible(cx, p)) else {
+                let why = if cx.addons().is_none() { UPDATE } else { NO_GAME };
+                done.lines.push(format!("Imported {}. {why}", p.name));
                 if !known.contains(&p.id) {
                     kept.push(p.id.clone());
                 }
@@ -338,7 +362,19 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
             let mut report = |f: f32, text: &str| {
                 progress.report((i as f32 + 0.5 + f / 2.) / total, &format!("Converting {text}"))
             };
-            match convert_one(cx, addons, conv, &library, p, &mut record, &mut report) {
+            let same = |q: &Package| {
+                q.id == p.id
+                    && match (&q.sha256, &p.sha256) {
+                        (Some(a), Some(b)) => a == b,
+                        (None, None) => q.files == p.files,
+                        _ => false,
+                    }
+            };
+            let made = match (fresh.iter().any(same), record.addon(&p.id)) {
+                (true, Some(made)) => Ok(made.clone()),
+                _ => convert_one(cx, addons, conv, &library, p, &mut record, &mut report),
+            };
+            match made {
                 Ok(made) => {
                     done.lines
                         .push(format!("{} is now the addon {}", p.name, made.name));
@@ -597,13 +633,22 @@ mod tests {
     }
 
     fn with<T>(host: &Host, profile: &str, f: impl FnOnce(&Cx) -> T) -> T {
+        with_game(host, profile, Some(&NoStock), f)
+    }
+
+    fn with_game<T>(
+        host: &Host,
+        profile: &str,
+        game: Option<&dyn swofty_addon::launcher::GameFiles>,
+        f: impl FnOnce(&Cx) -> T,
+    ) -> T {
         let addons = host.addons(profile);
         let cx = Cx::new(
             ID,
             &host.profiles[profile],
             &host.data,
             &host.root,
-            None,
+            game,
             &host.states[profile],
         )
         .with_addons(&addons);
@@ -871,6 +916,93 @@ mod tests {
             "a failed mod is not pending: {:?}",
             view.notices
         );
+        std::fs::remove_dir_all(&host.root).ok();
+    }
+
+    struct NoStock;
+
+    impl swofty_addon::launcher::GameFiles for NoStock {
+        fn build_key(&self) -> String {
+            "test".into()
+        }
+
+        fn exe_version(&self) -> Option<String> {
+            None
+        }
+
+        fn is_stock(&self, _: &str) -> bool {
+            false
+        }
+
+        fn original(&self, rel: &str) -> Result<PathBuf> {
+            Err(err(format!("{rel} is not stock")))
+        }
+
+        fn original_lang(&self, code: &str) -> Result<PathBuf> {
+            Err(err(format!("{code} is not stock")))
+        }
+    }
+
+    #[test]
+    fn the_real_conversion_installs_an_addon_the_launcher_can_read() {
+        let host = Host::new("real", &["one"]);
+        let dir = host.root.join("src").join("helmet");
+        std::fs::create_dir_all(dir.join("F1 25/character_package/helmets")).unwrap();
+        std::fs::write(dir.join("F1 25/character_package/helmets/custom.dds"), "dds").unwrap();
+        std::fs::write(
+            dir.join(crate::serps::FILE),
+            r#"{"mod_name":"Helmet","author":"You"}"#,
+        )
+        .unwrap();
+        let addon = Simplified::new();
+        let pick = Event::Picked {
+            id: IMPORT.into(),
+            paths: vec![dir],
+        };
+        let effect = with_game(&host, "one", None, |cx| {
+            addon.event_with(cx, SECTION, pick.clone(), &Converter)
+        })
+        .unwrap();
+        assert!(
+            matches!(&effect, Effect::Notice(t) if t.contains(NO_GAME)),
+            "{effect:?}"
+        );
+        assert!(
+            Record::load(&host.data).unwrap().mods.is_empty(),
+            "without a game the mod stays pending"
+        );
+        let view = with_game(&host, "one", None, |cx| addon.view(cx, SECTION)).unwrap();
+        assert!(
+            view.notices.iter().any(|n| n.text.contains(NO_GAME)),
+            "{:?}",
+            view.notices
+        );
+        let id = crate::convert::addon_id(&Library::new(&host.data).get("you.helmet").unwrap());
+        let click = Event::Click {
+            id: page::CONVERT.into(),
+        };
+        let effect = with(&host, "one", |cx| {
+            addon.event_with(cx, SECTION, click, &Converter)
+        })
+        .unwrap();
+        assert!(
+            matches!(&effect, Effect::Notice(t) if t.starts_with("Converted 1 mod(s)")),
+            "{effect:?}"
+        );
+        assert_eq!(host.calls(), [format!("install {id}"), format!("on {id}")]);
+        let installed = host.installed.join(&id).join("swofty.json");
+        let manifest =
+            swofty_addon::manifest::AddonManifest::parse(&std::fs::read_to_string(installed).unwrap());
+        assert_eq!(manifest.unwrap().id, id);
+        let effect = with(&host, "one", |cx| addon.event_with(cx, SECTION, pick, &Converter)).unwrap();
+        assert_eq!(effect, Effect::ShowAddon(id.clone()));
+        assert_eq!(host.calls(), [format!("install {id}"), format!("on {id}")]);
+        let made = Record::load(&host.data)
+            .unwrap()
+            .addon("you.helmet")
+            .cloned()
+            .unwrap();
+        assert!(!made.lines.is_empty(), "the report is kept: {made:?}");
         std::fs::remove_dir_all(&host.root).ok();
     }
 }

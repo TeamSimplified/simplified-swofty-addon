@@ -95,14 +95,25 @@ fn notices(cx: &Cx, pending: &importer::Pending) -> Vec<Notice> {
         });
         return out;
     }
-    let text = match (pending.convert, pending.place) {
-        (0, 0) => return out,
-        (0, n) => {
-            format!("{n} mod(s) in this profile have addons now. Turn them on in the profile's mod order.")
-        }
-        (n, _) => format!(
+    if cx.game.is_none() && pending.convert > 0 {
+        out.push(Notice {
+            text: format!(
+                "{} mod(s) in your library are not addons yet. {}",
+                pending.convert,
+                importer::NO_GAME
+            ),
+            tone: Tone::Warn,
+            action: None,
+        });
+    }
+    let text = match (pending.convert, pending.place, cx.game.is_some()) {
+        (n, _, true) if n > 0 => format!(
             "{n} mod(s) in your library are not addons yet. Convert them once: each becomes an addon, on where the mod was on."
         ),
+        (_, n, _) if n > 0 => {
+            format!("{n} mod(s) in this profile have addons now. Turn them on in the profile's mod order.")
+        }
+        _ => return out,
     };
     out.push(Notice {
         text,
