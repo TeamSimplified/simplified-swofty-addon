@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use swofty_addon::launcher::{AddonStore, Cx, Progress};
-use swofty_addon::manifest::Category;
+use swofty_addon::manifest::{Category, Kind};
 
 use crate::library::{Library, Package};
 use crate::{Loaded, Result, State, err, io_err, package};
@@ -30,23 +30,35 @@ pub struct Made {
     pub warnings: Vec<String>,
 }
 
+pub type Report<'a> = &'a mut dyn FnMut(f32, &str);
+
 pub trait Convert {
-    fn convert(&self, cx: &Cx, library: &Library, package: &Package, out: &Path) -> Result<Made>;
+    fn convert(&self, cx: &Cx, library: &Library, p: &Package, out: &Path, progress: Report) -> Result<Made>;
 }
 
 pub struct Converter;
 
 impl Convert for Converter {
-    fn convert(&self, cx: &Cx, library: &Library, package: &Package, out: &Path) -> Result<Made> {
-        let c = crate::convert::convert(library, package, cx.game, out)?;
+    fn convert(&self, cx: &Cx, library: &Library, p: &Package, out: &Path, progress: Report) -> Result<Made> {
+        let c = crate::convert::convert(library, p, cx.game, out, progress)?;
         Ok(Made {
             id: c.id,
             name: c.name,
             category: Some(c.category),
-            kinds: c.kinds,
+            kinds: c.kinds.into_iter().map(|k| kind(k).into()).collect(),
             lines: c.report,
             warnings: Vec::new(),
         })
+    }
+}
+
+fn kind(k: Kind) -> &'static str {
+    match k {
+        Kind::Database => "Database",
+        Kind::Erp => "Archives",
+        Kind::Ui => "UI",
+        Kind::Files => "Files",
+        Kind::Native => "Code",
     }
 }
 
@@ -164,6 +176,7 @@ fn convert_one(
     library: &Library,
     p: &Package,
     record: &mut Record,
+    progress: Report,
 ) -> Result<Made> {
     let out = staging(cx.data_dir, &p.id);
     let made = (|| -> Result<Made> {
@@ -171,7 +184,7 @@ fn convert_one(
             std::fs::remove_dir_all(&out).map_err(io_err(&out))?;
         }
         std::fs::create_dir_all(&out).map_err(io_err(&out))?;
-        let mut made = conv.convert(cx, library, p, &out)?;
+        let mut made = conv.convert(cx, library, p, &out, progress)?;
         made.id = addons.install(&out)?.id;
         Ok(made)
     })();
@@ -245,9 +258,12 @@ pub fn migrate(cx: &Cx, conv: &dyn Convert, progress: &dyn Progress) -> Result<V
         .collect();
     let mut lines = Vec::new();
     let (mut done, mut failed) = (0, 0);
+    let total = todo.len() as f32;
     for (i, p) in todo.iter().enumerate() {
-        progress.report(i as f32 / todo.len() as f32, &format!("Converting {}", p.name));
-        match convert_one(cx, addons, conv, &library, p, &mut record) {
+        let mut report = |f: f32, text: &str| {
+            progress.report((i as f32 + f) / total, &format!("Converting {}: {text}", p.name))
+        };
+        match convert_one(cx, addons, conv, &library, p, &mut record, &mut report) {
             Ok(_) => done += 1,
             Err(e) => {
                 failed += 1;
@@ -319,7 +335,10 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
                 }
                 continue;
             };
-            match convert_one(cx, addons, conv, &library, p, &mut record) {
+            let mut report = |f: f32, text: &str| {
+                progress.report((i as f32 + 0.5 + f / 2.) / total, &format!("Converting {text}"))
+            };
+            match convert_one(cx, addons, conv, &library, p, &mut record, &mut report) {
                 Ok(made) => {
                     done.lines
                         .push(format!("{} is now the addon {}", p.name, made.name));
@@ -361,7 +380,7 @@ pub fn reimport(cx: &Cx, id: &str, conv: &dyn Convert) -> Result<Done> {
     let library = Library::new(cx.data_dir);
     let p = library.get(id)?;
     let mut record = Record::load(cx.data_dir)?;
-    let made = convert_one(cx, addons, conv, &library, &p, &mut record);
+    let made = convert_one(cx, addons, conv, &library, &p, &mut record, &mut |_, _| {});
     record.last = Some(Last {
         at: now(),
         files: vec![p.source.clone()],
@@ -472,7 +491,7 @@ mod tests {
     }
 
     impl Convert for Fake {
-        fn convert(&self, _: &Cx, _: &Library, p: &Package, out: &Path) -> Result<Made> {
+        fn convert(&self, _: &Cx, _: &Library, p: &Package, out: &Path, _: Report) -> Result<Made> {
             self.made.lock().unwrap().push(p.id.clone());
             if self.refuse.contains(&p.id.as_str()) {
                 return Err(err("its archives could not be read".into()));
