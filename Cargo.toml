@@ -27,3 +27,7 @@ unsafe_op_in_unsafe_fn = "deny"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
+
+[patch."https://github.com/Swofty-Developments/SwoftyLauncher"]
+swofty-addon = { path = "/mnt/work/VSC/F1ModManager-wt/r13/packages/addon-api" }
+swofty-formats = { path = "/mnt/work/VSC/F1ModManager-wt/r13/packages/formats" }
