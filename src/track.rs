@@ -20,12 +20,18 @@ pub struct Info {
     pub name: Option<String>,
     pub version: Option<String>,
     pub author: Option<String>,
+    pub base: Option<String>,
 }
 
 impl Info {
     pub fn read(dir: &Path) -> Option<Self> {
-        let v: Value = serde_json::from_slice(&std::fs::read(dir.join(MANIFEST)).ok()?).ok()?;
+        Self::parse(&std::fs::read(dir.join(MANIFEST)).ok()?)
+    }
+
+    pub fn parse(bytes: &[u8]) -> Option<Self> {
+        let v: Value = serde_json::from_slice(bytes).ok()?;
         let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+        let activation = |k: &str| v["activation"].get(k).and_then(Value::as_str).map(str::to_owned);
         let code = text("track_code").filter(|c| {
             !c.is_empty()
                 && c.bytes()
@@ -36,6 +42,7 @@ impl Info {
             name: text("track_name"),
             version: text("version"),
             author: text("author_name"),
+            base: activation("copy_from_track").or_else(|| activation("copy_slot")),
         })
     }
 }
