@@ -375,11 +375,15 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
 
 // Makes a library mod's addon again from the library copy, replacing the
 // installed one, and hands it over in the profile when the profile lists the mod.
+// An addon removed since, or a mod the profile never had, is turned on.
 pub fn reimport(cx: &Cx, id: &str, conv: &dyn Convert) -> Result<Done> {
     let addons = cx.addons().ok_or_else(|| err(UPDATE.into()))?;
     let library = Library::new(cx.data_dir);
     let p = library.get(id)?;
     let mut record = Record::load(cx.data_dir)?;
+    let removed = record
+        .addon(id)
+        .is_some_and(|m| addons.list().is_ok_and(|l| l.iter().all(|i| i.id != m.id)));
     let made = convert_one(cx, addons, conv, &library, &p, &mut record, &mut |_, _| {});
     record.last = Some(Last {
         at: now(),
@@ -390,6 +394,12 @@ pub fn reimport(cx: &Cx, id: &str, conv: &dyn Convert) -> Result<Done> {
     record.save(cx.data_dir)?;
     let made = made?;
     let mut lines = vec![format!("{} is now the addon {}", p.name, made.name)];
+    let state: State = cx.state()?;
+    let new = !state.addons.iter().any(|a| a == id) && !state.mods.iter().any(|s| s.id == id);
+    if (removed || new) && !cx.profile.vanilla {
+        addons.set_enabled(&made.id, true)?;
+        hand_over(cx, id)?;
+    }
     lines.extend(place(cx, addons, &record)?);
     Ok(Done {
         lines,
