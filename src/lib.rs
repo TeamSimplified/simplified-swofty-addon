@@ -1,7 +1,10 @@
+pub mod convert;
 pub mod diff;
+pub mod importer;
 pub mod library;
 pub mod merge;
 pub mod package;
+pub mod page;
 pub mod serps;
 pub mod texarray;
 pub mod track;
@@ -17,23 +20,17 @@ use swofty_addon::asset::{AssetBatch, AssetOp, LangOp, Op, Origin};
 use swofty_addon::launcher::{Addon, BuildCx, Builtin, Claim, CommandSpec, Cx, Importer, Progress, Summary};
 use swofty_addon::manifest::{AddonManifest, Launcher};
 use swofty_addon::ops::{DbOp, ErpOp};
-use swofty_addon::view::{
-    Art, Block, Body, Button, ButtonKind, Control, Effect, Event, Fact, Icon, Notice, Row, SectionSpec,
-    Style, Table, Tag, Tone, View,
-};
+use swofty_addon::view::{Button, Effect, Event, Notice, SectionSpec, Tone, View};
 use swofty_addon::{Error, Result};
 
+use crate::importer::{Converter, Record};
 use crate::library::{Library, Package};
-use crate::package::Class;
-use crate::viewcache::{Overlap, ViewCache};
 
 pub const ID: &str = "teamsimplified.mods";
 pub const SECTION: &str = "mods";
 const MANIFEST: &str = include_str!("../swofty.json");
-const FOOTER: &str = "Works with any F1 25 mod: its files go where copying them into the game folder would put them. Made by Team Simplified. Based on Simplified Suite by Team Simplified.";
 const IMPORT: &str = "import";
 const ENABLE: &str = "enable";
-const COMPARE: &str = "compare";
 const SHOW: &str = "show:";
 const REMOVE: &str = "remove:";
 
@@ -119,6 +116,9 @@ pub(crate) fn io_err(path: impl Into<PathBuf>) -> impl FnOnce(std::io::Error) ->
 pub struct State {
     #[serde(default)]
     pub mods: Vec<Slot>,
+    // The mods this profile loads as their addons, which the build hook leaves out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addons: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -129,7 +129,7 @@ pub struct Slot {
 
 pub struct Simplified {
     manifest: AddonManifest,
-    views: Mutex<Option<ViewCache>>,
+    open: Mutex<bool>,
 }
 
 impl Default for Simplified {
@@ -142,7 +142,7 @@ impl Simplified {
     pub fn new() -> Self {
         Self {
             manifest: AddonManifest::parse(MANIFEST).expect("the built-in manifest is valid"),
-            views: Mutex::new(None),
+            open: Mutex::new(false),
         }
     }
 
@@ -181,7 +181,8 @@ impl Loaded {
                 enabled: *on,
             })
             .collect();
-        cx.set_state(&State { mods })
+        let addons = cx.state::<State>()?.addons;
+        cx.set_state(&State { mods, addons })
     }
 
     fn find(&self, id: &str) -> Result<usize> {
@@ -204,70 +205,8 @@ impl Loaded {
         Ok(&self.order[to].0)
     }
 
-    // The Mods page lists the mods without the tracks, so its place `to` counts
-    // mods only, and the tracks between them keep their places.
-    fn move_among_mods(&mut self, id: &str, to: usize) -> Result<&Package> {
-        let entry = self.order.remove(self.find(id)?);
-        let mods: Vec<usize> = (0..self.order.len())
-            .filter(|&i| self.order[i].0.track.is_none())
-            .collect();
-        let at = match mods.get(to) {
-            Some(&i) => i,
-            None => mods.last().map_or(self.order.len(), |&i| i + 1),
-        };
-        self.order.insert(at, entry);
-        Ok(&self.order[at].0)
-    }
-
     fn enabled(&self) -> impl Iterator<Item = &Package> {
         self.order.iter().filter(|(_, on)| *on).map(|(p, _)| p)
-    }
-}
-
-fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress) -> Result<Vec<String>> {
-    let library = Library::new(cx.data_dir);
-    let known: Vec<String> = library.list()?.into_iter().map(|p| p.id).collect();
-    let mut done = Vec::new();
-    let mut added = Vec::new();
-    let mut failed = Vec::new();
-    let total = paths.len().max(1) as f32;
-    for (i, path) in paths.iter().enumerate() {
-        let mut report =
-            |f: f32, text: &str| progress.report((i as f32 + f) / total, &format!("Importing {text}"));
-        match library.import(path, cx.game, &mut report) {
-            Ok(imported) => {
-                for (n, p) in imported.packages.iter().enumerate() {
-                    let mut line = format!("Imported {}", p.name);
-                    if n == 0 && imported.refused > 0 {
-                        line.push_str(&format!(", {} unsafe path(s) left out", imported.refused));
-                    }
-                    if !p.skipped.is_empty() {
-                        line.push_str(&format!(", skipped {}", p.skipped.join(", ")));
-                    }
-                    if let Some(Err(e)) = cx.game.map(|g| library.diff(p, g)) {
-                        line.push_str(&format!(", not compared with the game: {e}"));
-                    }
-                    done.push(line);
-                    if !known.contains(&p.id) {
-                        added.push(p.id.clone());
-                    }
-                }
-            }
-            Err(e) => failed.push(format!("{}: {e}", package::file_name(path))),
-        }
-    }
-    if !added.is_empty() && !cx.profile.vanilla {
-        let mut loaded = Loaded::read(cx)?;
-        for id in &added {
-            loaded.set(id, true)?;
-        }
-        loaded.save(cx)?;
-    }
-    if failed.is_empty() {
-        Ok(done)
-    } else {
-        failed.extend(done);
-        Err(err(failed.join("\n")))
     }
 }
 
@@ -289,44 +228,12 @@ fn notices(cx: &Cx) -> Vec<Notice> {
     Vec::new()
 }
 
-fn import_button(primary: bool) -> Button {
-    Button {
-        icon: Some(Icon::Upload),
-        style: if primary { Style::Primary } else { Style::Outline },
-        kind: ButtonKind::Pick {
-            title: "Import mods".into(),
-            extensions: vec!["zip".into(), "7z".into(), "rar".into(), "serps".into()],
-            folders: true,
-            multiple: true,
-        },
-        ..Button::new(IMPORT, "Import…")
-    }
-}
-
 fn subtitle(p: &Package) -> String {
     [p.author.as_deref(), p.version.as_deref()]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
         .join(" · ")
-}
-
-fn monogram(name: &str) -> String {
-    let letters: String = name
-        .split_whitespace()
-        .filter_map(|w| w.chars().find(|c| c.is_alphanumeric()))
-        .take(2)
-        .collect();
-    letters.to_uppercase()
-}
-
-fn size(bytes: u64) -> String {
-    match bytes {
-        b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
-        b if b >= 1 << 20 => format!("{:.0} MB", b as f64 / (1u64 << 20) as f64),
-        b if b >= 1 << 10 => format!("{:.0} KB", b as f64 / (1u64 << 10) as f64),
-        b => format!("{b} B"),
-    }
 }
 
 fn date(secs: u64) -> String {
@@ -342,245 +249,6 @@ fn date(secs: u64) -> String {
     format!("{year}-{month:02}-{day:02}")
 }
 
-fn tags(p: &Package, exe: Option<&str>) -> Vec<Tag> {
-    let tag = |text: String, tone: Tone| Tag { text, tone };
-    let mut out = Vec::new();
-    if p.track.is_some() {
-        out.push(tag("Track".into(), Tone::Accent));
-        return out;
-    }
-    if p.count(Class::Database) > 0 {
-        out.push(tag("Database".into(), Tone::Muted));
-    }
-    if p.count(Class::Text) > 0 {
-        out.push(tag("Text".into(), Tone::Muted));
-    }
-    match p.count(Class::Archive) {
-        0 => {}
-        1 => out.push(tag("1 archive".into(), Tone::Muted)),
-        n => out.push(tag(format!("{n} archives"), Tone::Muted)),
-    }
-    match p.count(Class::Replacement) + p.count(Class::Addition) {
-        0 => {}
-        1 => out.push(tag("1 file".into(), Tone::Muted)),
-        n => out.push(tag(format!("{n} files"), Tone::Muted)),
-    }
-    if let (Some(made), Some(exe)) = (p.game_version.as_deref(), exe)
-        && made != exe
-    {
-        out.push(tag(format!("Made for {made}"), Tone::Warn));
-    }
-    out
-}
-
-fn changes(p: &Package, d: &viewcache::Summary, exe: Option<&str>) -> Vec<Block> {
-    let mut out = vec![Block::Label("WHAT IT CHANGES".into())];
-    if d.empty {
-        out.push(Block::Text {
-            text: "Nothing differs from the game.".into(),
-            tone: Tone::Muted,
-        });
-    }
-    if d.has_records() {
-        let [changed, added, removed] = d.records;
-        out.push(Block::Facts(vec![
-            Fact::new("RECORDS CHANGED", changed.to_string()),
-            Fact::new("RECORDS ADDED", added.to_string()),
-            Fact::new("RECORDS REMOVED", removed.to_string()),
-        ]));
-    }
-    if !d.text.is_empty() {
-        out.push(Block::Table(Table::plain(
-            vec!["Language".into(), "Changed".into(), "Added".into()],
-            d.text
-                .iter()
-                .map(|t| {
-                    let language = match &t.from {
-                        Some(from) => format!("{} (from {from})", t.language),
-                        None => t.language.clone(),
-                    };
-                    vec![language, t.changed.to_string(), t.added.to_string()]
-                })
-                .collect(),
-        )));
-    }
-    if !d.archives.is_empty() {
-        out.push(Block::Table(Table::plain(
-            vec![
-                "Archive".into(),
-                "Changed".into(),
-                "Added".into(),
-                "Removed".into(),
-            ],
-            d.archives
-                .iter()
-                .map(|a| {
-                    vec![
-                        a.path.clone(),
-                        a.changed.to_string(),
-                        a.added.to_string(),
-                        a.removed.to_string(),
-                    ]
-                })
-                .collect(),
-        )));
-    }
-    for (label, items) in [("REPLACED FILES", &d.replaced), ("ADDED FILES", &d.added)] {
-        if !items.is_empty() {
-            out.push(Block::Names {
-                label: label.into(),
-                items: items.clone(),
-            });
-        }
-    }
-    if d.dropped > 0 {
-        let made = p.game_version.as_deref().unwrap_or("an unknown version");
-        let game = exe.unwrap_or("unknown");
-        out.push(Block::Text {
-            text: format!(
-                "{} removal(s) left out: the package was made for {made} and the game is {game}.",
-                d.dropped
-            ),
-            tone: Tone::Warn,
-        });
-    }
-    out
-}
-
-fn files(p: &Package) -> Vec<Block> {
-    let groups = [
-        ("DATABASE", Class::Database),
-        ("LANGUAGES", Class::Text),
-        ("ARCHIVES", Class::Archive),
-        ("REPLACED FILES", Class::Replacement),
-        ("ADDED FILES", Class::Addition),
-    ];
-    let mut out = Vec::new();
-    for (label, class) in groups {
-        let items: Vec<String> = p
-            .files
-            .iter()
-            .filter(|f| f.class == class)
-            .map(|f| match class {
-                Class::Text => diff::language(&f.path).unwrap_or(&f.path).to_owned(),
-                _ => f.path.clone(),
-            })
-            .collect();
-        if !items.is_empty() {
-            out.push(Block::Names {
-                label: label.into(),
-                items,
-            });
-        }
-    }
-    out
-}
-
-struct Shown<'a> {
-    on: bool,
-    switchable: bool,
-    exe: Option<&'a str>,
-    diff: Option<&'a viewcache::Summary>,
-    wins: Vec<(&'a str, &'a Overlap)>,
-    losses: Vec<(&'a str, &'a Overlap)>,
-}
-
-fn targets(o: &Overlap) -> Vec<String> {
-    let mut items = o.sample.clone();
-    if o.count > items.len() {
-        items.push(format!("and {} more", o.count - items.len()));
-    }
-    items
-}
-
-fn conflicts(shown: &Shown) -> (Vec<Tag>, Vec<Block>) {
-    let mut tags = Vec::new();
-    let mut blocks = Vec::new();
-    for (name, o) in &shown.wins {
-        tags.push(Tag {
-            text: format!("Overrides {} in {name}", o.count),
-            tone: Tone::Accent,
-        });
-        blocks.push(Block::Names {
-            label: format!("OVERRIDES {}", name.to_uppercase()),
-            items: targets(o),
-        });
-    }
-    for (name, o) in &shown.losses {
-        tags.push(Tag {
-            text: format!("{} overridden by {name}", o.count),
-            tone: Tone::Warn,
-        });
-        blocks.push(Block::Names {
-            label: format!("OVERRIDDEN BY {}", name.to_uppercase()),
-            items: targets(o),
-        });
-    }
-    if !blocks.is_empty() {
-        blocks.insert(0, Block::Label("CONFLICTS".into()));
-    }
-    (tags, blocks)
-}
-
-fn row(p: &Package, shown: Shown) -> Row {
-    let (on, switchable, exe, diff) = (shown.on, shown.switchable, shown.exe, shown.diff);
-    let (clash_tags, clash_blocks) = conflicts(&shown);
-    let dash = |v: &Option<String>| v.clone().unwrap_or_else(|| "—".into());
-    let mut detail = vec![Block::Stats(vec![
-        Fact::new("STATUS", if on { "On" } else { "Off" }),
-        Fact::new("VERSION", dash(&p.version)),
-        Fact::new("AUTHOR", dash(&p.author)),
-        Fact::new("MADE FOR", dash(&p.game_version)),
-        Fact::new("STUDIO", dash(&p.studio_version)),
-        Fact::new("SIZE", size(p.size())),
-        Fact::new("IMPORTED", date(p.imported)),
-    ])];
-    match diff {
-        Some(d) => detail.extend(changes(p, d, exe)),
-        None => detail.extend(files(p)),
-    }
-    detail.extend(clash_blocks);
-    if !p.skipped.is_empty() {
-        detail.push(Block::Names {
-            label: "SKIPPED".into(),
-            items: p.skipped.clone(),
-        });
-    }
-    detail.push(Block::Buttons(vec![
-        Button {
-            icon: Some(Icon::FolderOpen),
-            ..Button::new(format!("{SHOW}{}", p.id), "Show files")
-        },
-        remove_button(p),
-    ]));
-    Row {
-        id: p.id.clone(),
-        title: p.name.clone(),
-        subtitle: subtitle(p),
-        art: Art::Monogram(monogram(&p.name)),
-        tags: tags(p, exe).into_iter().chain(clash_tags).collect(),
-        trailing: Some(Control::Switch {
-            id: p.id.clone(),
-            on,
-            enabled: switchable,
-        }),
-        detail,
-        menu: vec![remove_button(p)],
-    }
-}
-
-fn remove_button(p: &Package) -> Button {
-    Button {
-        icon: Some(Icon::Trash),
-        style: Style::Danger,
-        kind: ButtonKind::Confirm {
-            title: format!("Remove {}?", p.name),
-            text: "It is deleted from the library and turned off in every profile.".into(),
-        },
-        ..Button::new(format!("{REMOVE}{}", p.id), "Remove from library")
-    }
-}
-
 impl Addon for Simplified {
     fn manifest(&self) -> &AddonManifest {
         &self.manifest
@@ -590,163 +258,21 @@ impl Addon for Simplified {
         Some(include_bytes!("../icon.svg"))
     }
 
-    // The Mods page and the mods command are declared once, in swofty.json, which
-    // the launcher also reads when it runs this addon as a helper program.
+    // The Mod Importer page and the mods command are declared once, in swofty.json,
+    // which the launcher also reads when it runs this addon as a helper program.
     fn sections(&self) -> Vec<SectionSpec> {
         self.launcher().sections.clone()
     }
 
     fn view(&self, cx: &Cx, section: &str) -> Result<View> {
-        match section {
-            SECTION => {}
-            tracks::SECTION => return tracks::view(cx, notices(cx)),
-            _ => return Err(Error::NoSection(section.into())),
+        if section != SECTION {
+            return Err(Error::NoSection(section.into()));
         }
-        let loaded = Loaded::read(cx)?;
-        let mods = loaded.order.iter().filter(|(p, _)| p.track.is_none()).count();
-        let on = loaded.enabled().filter(|p| p.track.is_none()).count();
-        let mut notices = notices(cx);
-        let exe = cx.game.and_then(|g| g.exe_version());
-        let key = cx.game.map(|g| g.build_key());
-        let library = Library::new(cx.data_dir);
-        let (summaries, overlaps) = match key.as_deref() {
-            Some(k) => {
-                let mut views = self.views.lock().unwrap_or_else(|e| e.into_inner());
-                let mut cache = match views.take() {
-                    Some(c) if c.build_key == k => c,
-                    _ => ViewCache::load(&library, k),
-                };
-                let (summaries, dirty) = cache.refresh(&library, &loaded.order);
-                if dirty && let Err(e) = cache.save(&library) {
-                    eprintln!("simplified: could not save the view cache: {e}");
-                }
-                let overlaps = cache.overlaps().to_vec();
-                *views = Some(cache);
-                (summaries, overlaps)
-            }
-            None => (vec![None; loaded.order.len()], Vec::new()),
-        };
-        let missing = loaded
-            .order
-            .iter()
-            .zip(&summaries)
-            .filter(|((p, _), d)| p.track.is_none() && d.is_none())
-            .count();
-        if key.is_some() && missing > 0 {
-            notices.push(Notice {
-                text: format!("{missing} mod(s) are not compared with this game build yet."),
-                tone: Tone::Muted,
-                action: Some(Button::new(COMPARE, "Compare")),
-            });
-        }
-        let name = |id: &str| {
-            loaded
-                .order
-                .iter()
-                .find(|(p, _)| p.id == id)
-                .map_or("", |(p, _)| p.name.as_str())
-        };
-        let body = if mods == 0 {
-            Body::Empty {
-                title: "No mods yet".into(),
-                text: "Drop a mod on the window, or import its zip, 7z, rar or folder. Mods made with Simplified Studio import too."
-                    .into(),
-                action: Some(import_button(true)),
-            }
-        } else {
-            Body::List {
-                rows: loaded
-                    .order
-                    .iter()
-                    .zip(&summaries)
-                    .filter(|((p, _), _)| p.track.is_none())
-                    .map(|((p, on), d)| {
-                        let shown = Shown {
-                            on: *on,
-                            switchable: !cx.profile.vanilla,
-                            exe: exe.as_deref(),
-                            diff: d.as_ref(),
-                            wins: overlaps
-                                .iter()
-                                .filter(|o| o.winner == p.id)
-                                .map(|o| (name(&o.loser), o))
-                                .collect(),
-                            losses: overlaps
-                                .iter()
-                                .filter(|o| o.loser == p.id)
-                                .map(|o| (name(&o.winner), o))
-                                .collect(),
-                        };
-                        row(p, shown)
-                    })
-                    .collect(),
-                reorder: !cx.profile.vanilla,
-                search: None,
-            }
-        };
-        Ok(View {
-            subtitle: format!(
-                "{mods} in library · {on} on in {} · lower in the list wins",
-                cx.profile.name
-            ),
-            actions: vec![import_button(false)],
-            notices,
-            body,
-            footer: Some(FOOTER.into()),
-            tick: false,
-        })
+        page::view(cx, *self.open.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     fn event(&self, cx: &Cx, section: &str, event: Event) -> Result<Effect> {
-        match section {
-            SECTION => {}
-            tracks::SECTION => {
-                if let Some(effect) = tracks::event(cx, event.clone())? {
-                    return Ok(effect);
-                }
-            }
-            _ => return Err(Error::NoSection(section.into())),
-        }
-        match event {
-            Event::Toggle { id, on } => {
-                let mut loaded = Loaded::read(cx)?;
-                loaded.set(&id, on)?;
-                loaded.save(cx)?;
-                Ok(Effect::Reload)
-            }
-            Event::Move { row, to } => {
-                let mut loaded = Loaded::read(cx)?;
-                loaded.move_among_mods(&row, to)?;
-                loaded.save(cx)?;
-                Ok(Effect::Reload)
-            }
-            Event::Picked { id, paths } if id == IMPORT => {
-                Ok(Effect::Notice(import(cx, &paths, &NoProgress)?.join("\n")))
-            }
-            Event::Click { id } if id == ENABLE => Ok(Effect::SetAddonEnabled(true)),
-            Event::Click { id } if id == COMPARE => {
-                let game = cx
-                    .game
-                    .ok_or_else(|| err("no game was found to compare with".into()))?;
-                let library = Library::new(cx.data_dir);
-                for p in library.list()? {
-                    library.diff(&p, game)?;
-                }
-                Ok(Effect::Reload)
-            }
-            Event::Click { id } if id.starts_with(SHOW) => Ok(Effect::Open(tracks::files_dir(
-                &Library::new(cx.data_dir),
-                &id[SHOW.len()..],
-            ))),
-            Event::Click { id } if id.starts_with(REMOVE) => {
-                let p = Library::new(cx.data_dir).remove(&id[REMOVE.len()..])?;
-                if !cx.profile.vanilla {
-                    Loaded::read(cx)?.save(cx)?;
-                }
-                Ok(Effect::Notice(format!("Removed {} from the library", p.name)))
-            }
-            _ => Ok(Effect::None),
-        }
+        self.event_with(cx, section, event, &Converter)
     }
 
     fn importer(&self) -> Option<&dyn Importer> {
@@ -761,9 +287,10 @@ impl Addon for Simplified {
         };
         let library = Library::new(cx.data_dir);
         let loaded = Loaded::read(cx)?;
+        let addons = importer::handed_over(cx)?;
         let mut carried = Vec::new();
         let mut defaults = Vec::new();
-        for p in loaded.enabled() {
+        for p in loaded.enabled().filter(|p| !addons.contains(&p.id)) {
             if p.track.is_some() {
                 batch.lines.push(format!("{}: track {}", p.name, p.id));
                 batch.ops.push(Op {
@@ -874,6 +401,8 @@ impl Addon for Simplified {
                 if loaded.order.is_empty() {
                     return Ok("no mods in the library".into());
                 }
+                let record = Record::load(cx.data_dir)?;
+                let addons = importer::handed_over(cx)?;
                 let lines: Vec<String> = loaded
                     .order
                     .iter()
@@ -885,28 +414,32 @@ impl Addon for Simplified {
                         } else {
                             format!(" ({by})")
                         };
-                        format!(
-                            "{:>2}. [{}] {}  {}{by}",
-                            i + 1,
-                            if *on { "on " } else { "off" },
-                            p.id,
-                            p.name
-                        )
+                        let state = match (record.mods.get(&p.id), addons.contains(&p.id)) {
+                            (Some(e), true) => {
+                                format!("-> {}", e.made.as_ref().map_or("", |m| m.id.as_str()))
+                            }
+                            (Some(e), false) if e.made.is_some() => "addon".into(),
+                            (Some(e), false) => format!(
+                                "[{}] not converted: {}",
+                                if *on { "on " } else { "off" },
+                                e.error.as_deref().unwrap_or("")
+                            ),
+                            (None, _) => format!("[{}]", if *on { "on " } else { "off" }),
+                        };
+                        format!("{:>2}. {state} {}  {}{by}", i + 1, p.id, p.name)
                     })
                     .collect();
                 Ok(lines.join("\n"))
             }
             "import" => {
                 let paths: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
-                Ok(import(cx, &paths, &NoProgress)?.join("\n"))
-            }
-            "remove" => {
-                let p = Library::new(cx.data_dir).remove(arg(0)?)?;
-                if !cx.profile.vanilla {
-                    Loaded::read(cx)?.save(cx)?;
+                let done = importer::import(cx, &paths, &NoProgress, &Converter)?;
+                match done.failed {
+                    true => Err(err(done.lines.join("\n"))),
+                    false => Ok(done.lines.join("\n")),
                 }
-                Ok(format!("removed {} from the library", p.name))
             }
+            "remove" => Ok(format!("removed {} from the library", remove(cx, arg(0)?)?.name)),
             "enable" | "disable" => {
                 refuse_vanilla()?;
                 let on = verb == "enable";
@@ -941,9 +474,15 @@ impl Addon for Simplified {
             return None;
         }
         let loaded = Loaded::read(cx).ok()?;
-        Some(Summary {
+        let addons = importer::handed_over(cx).ok()?;
+        let items: Vec<String> = loaded
+            .enabled()
+            .filter(|p| !addons.contains(&p.id))
+            .map(|p| p.name.clone())
+            .collect();
+        (!items.is_empty()).then(|| Summary {
             label: "MODS".into(),
-            items: loaded.enabled().map(|p| p.name.clone()).collect(),
+            items,
         })
     }
 
@@ -964,11 +503,45 @@ impl Importer for Simplified {
     }
 
     fn import(&self, cx: &Cx, paths: &[PathBuf], progress: &dyn Progress) -> Result<Vec<String>> {
-        import(cx, paths, progress)
+        let done = importer::import(cx, paths, progress, &Converter)?;
+        match done.failed {
+            true => Err(err(done.lines.join("\n"))),
+            false => Ok(done.lines),
+        }
     }
 }
 
-struct NoProgress;
+impl Simplified {
+    fn event_with(
+        &self,
+        cx: &Cx,
+        section: &str,
+        event: Event,
+        conv: &dyn importer::Convert,
+    ) -> Result<Effect> {
+        if section != SECTION {
+            return Err(Error::NoSection(section.into()));
+        }
+        let mut open = *self.open.lock().unwrap_or_else(|e| e.into_inner());
+        let effect = page::event(cx, event, conv, &mut open)?;
+        *self.open.lock().unwrap_or_else(|e| e.into_inner()) = open;
+        Ok(effect.unwrap_or(Effect::None))
+    }
+}
+
+fn remove(cx: &Cx, id: &str) -> Result<Package> {
+    let p = Library::new(cx.data_dir).remove(id)?;
+    let mut record = Record::load(cx.data_dir)?;
+    if record.mods.remove(id).is_some() {
+        record.save(cx.data_dir)?;
+    }
+    if !cx.profile.vanilla {
+        Loaded::read(cx)?.save(cx)?;
+    }
+    Ok(p)
+}
+
+pub(crate) struct NoProgress;
 
 impl Progress for NoProgress {
     fn report(&self, _: f32, _: &str) {}
