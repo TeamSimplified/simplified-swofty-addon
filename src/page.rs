@@ -10,7 +10,7 @@ use swofty_addon::view::{
 
 use crate::importer::{self, Convert, Done, Entry, Record};
 use crate::library::Library;
-use crate::{ENABLE, IMPORT, Loaded, NoProgress, REMOVE, Result, SHOW, date, err, tracks};
+use crate::{ENABLE, IMPORT, Loaded, NoProgress, REMOVE, Result, SHOW, date, err, library, track};
 
 pub const CONVERT: &str = "convert-library";
 pub const TEAM: &str = "team-simplified";
@@ -438,6 +438,14 @@ pub fn view(cx: &Cx, open: bool) -> Result<View> {
     })
 }
 
+fn files_dir(library: &Library, id: &str) -> PathBuf {
+    let dir = library.dir(id);
+    match dir.join(track::TRACK).is_dir() {
+        true => dir.join(track::TRACK),
+        false => dir.join(library::FILES),
+    }
+}
+
 fn shown(done: Done) -> Result<Effect> {
     if done.failed {
         return Err(err(done.lines.join("\n")));
@@ -486,7 +494,7 @@ pub fn event(cx: &Cx, event: Event, conv: &dyn Convert, open: &mut bool) -> Resu
             Effect::Open(PathBuf::from(url))
         }
         Event::Click { id } if id.starts_with(SHOW) => {
-            Effect::Open(tracks::files_dir(&Library::new(cx.data_dir), &id[SHOW.len()..]))
+            Effect::Open(files_dir(&Library::new(cx.data_dir), &id[SHOW.len()..]))
         }
         Event::Click { id } if id.starts_with(REMOVE) => {
             let p = crate::remove(cx, &id[REMOVE.len()..])?;

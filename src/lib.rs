@@ -8,8 +8,6 @@ pub mod page;
 pub mod serps;
 pub mod texarray;
 pub mod track;
-pub mod tracks;
-pub mod viewcache;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
