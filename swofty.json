@@ -22,6 +22,11 @@
         "id": "mods",
         "title": "Mods",
         "icon": "package"
+      },
+      {
+        "id": "tracks",
+        "title": "Tracks",
+        "icon": "map"
       }
     ],
     "imports": [
