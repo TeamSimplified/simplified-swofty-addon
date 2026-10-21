@@ -8,7 +8,7 @@ How Simplified for Swofty, Team Simplified's Mod Importer, imports, stores and c
 
 - The crate `addons/simplified` (`swofty-addon-simplified`) is Rust and AGPL-3.0-or-later, like the rest of the repository. Its `mod.serps` reader, package root, content root and entry path checks are ported from the Simplified Launcher (GPL-3.0, used with Team Simplified's permission) and carry the Simplified Suite notice. `THIRD_PARTY.md` credits Team Simplified for the `.serps` format, the Simplified Suite and the logo, and the Mod Importer page shows the credit.
 - Import, the library, profile state, the section and `swofty mods` are built (work item 13), and so are the diffs (work item 14), the merge and conflicts (work item 15).
-- Manifest: id `teamsimplified.mods`, name `Simplified for Swofty`, author `Team Simplified`, version 0.7.0, `compat.launcher` `>=1.3.0`. No options and no native plugin.
+- Manifest: id `teamsimplified.mods`, name `Mod Importer`, author `Team Simplified`, version 0.7.0, `compat.launcher` `>=1.3.0`. No options and no native plugin.
 - Ships as a launcher plugin: `teamsimplified.mods.swoftyaddon` holds `swofty.json` and the helper program `bin/simplified-helper`, which hands the addon to `swofty_addon::helper::run_helper`. `swofty.json` declares the one section, id `mods`, titled `Mod Importer`, the `mods` command, the import extensions and the build hook, and the addon reads its sections and commands from it. `sections/mods.svg`, Team Simplified's mark, is the section's sidebar icon. The launcher can still build the crate in through `swofty-builtins`; built in, it is on by default in new profiles. Either way it can be turned off per profile, which hides its section.
 - It uses `swofty-addon` and `swofty-formats` only. Core has no code for it.
 
@@ -129,15 +129,17 @@ Team rename packages point the team name records at keys of their own, such as `
 
 The section `mods`, titled `Mod Importer`, is one of the launcher's big sidebar sections. Its body is blocks:
 
-- **Header.** Subtitle `<n> mod(s) converted into addons · by Team Simplified`. Action `Choose a mod…`, a picker for `.zip`, `.7z`, `.rar` and `.serps` files and folders, several at once.
-- **Notices.** The addon is off in this profile (button `Turn on`). The vanilla profile is active. The launcher has no addon host calls. Library mods are not converted yet, or this profile is not handed over yet (button `Convert now`).
+- **Header.** Subtitle `<n> mods converted into addons`. Action `Choose a mod…`, a picker for `.zip`, `.7z`, `.rar` and `.serps` files and folders, several at once.
+- **Notices.** The addon is off in this profile (button `Turn on`). The vanilla profile is active. The launcher has no addon host calls. Library mods are not converted yet and convert on the next start, or this profile is not handed over yet (button `Convert now`).
 - **Hero.** Team Simplified's logo (`art/team-simplified.png`, the Simplified Launcher's icon, written to the cache directory), the title `Mod Importer`, `By Team Simplified. Turns any F1 25 mod into a Swofty addon.`, a pill with the count converted and the `Team Simplified` button.
-- **Team Simplified panel.** The button toggles a card: who Team Simplified are, what the Mod Importer does, the Swofty addon format in two sentences, and buttons that open https://github.com/TeamSimplified, https://github.com/TeamSimplified/simplified-suite and https://github.com/TeamSimplified/SERPs-Launcher. `LINKS` in `src/page.rs` holds placeholders for a website and a Discord link, shown once they have a URL.
+- **Team Simplified panel.** The button toggles a card below `Import a mod`, closed at first: who Team Simplified are, what the Mod Importer does, the Swofty addon format in two sentences, and buttons that open https://github.com/TeamSimplified, https://github.com/TeamSimplified/simplified-suite and https://github.com/TeamSimplified/SERPs-Launcher. `LINKS` in `src/page.rs` holds placeholders for a website and a Discord link, shown once they have a URL.
 - **Import a mod.** A card with `Choose a mod…`: a drop anywhere on the window imports too.
-- **Last import.** The files of the last import, and for each mod the addon it became, its category and kinds, what became what (the conversion report) and warnings, with `Show in Addons`.
+- **Last import.** The date and files of the last import, a line per set of variants (`<mod>: <n> variants installed as addons; <variant> is on. Pick another on Addons.`), and one line per addon: `Became the addon <name> · <category> · <counts>`, such as `205 car assets`, with `· off` for a variant that is off. Warnings follow in plain words. `Details` shows what became what (the conversion report with op names and paths), and `Hide details` hides it.
 - **Not converted.** Each mod whose conversion failed, with the reason and `Convert again`, `Turn on` or `Turn off`, `Show files` and `Remove from library`.
-- **Converted from your library.** A card per converted mod: its addon id, category, kinds, whether the addon is on, or `Removed from Addons`, with `Show in Addons` and `Re-import`.
-- **Footer.** `Made by Team Simplified. Based on Simplified Suite by Team Simplified.`
+- **Converted from your library.** A card per converted mod: the date it converted, its category, kinds, whether the addon is on, or `Removed from Addons`, with `Show in Addons` and `Re-import`.
+- **Credit.** The last block is `Based on Simplified Suite by Team Simplified.`, part of the page, not a fixed footer.
+- **Vanilla.** The page shows the hero, `Last import` and `Converted from your library` without `Import a mod`, `Not converted` or `Re-import`, and a notice to switch profiles to import.
+- **Dates.** Local time, as `22 October 2026, 14:05`.
 - **Profile cards.** `summary` adds `MODS` with the enabled mods that still load through the build hook, and nothing when there are none.
 - **CLI.** `swofty mods list` shows each library mod with its addon or why it was not converted. `import <path>…` converts as the page does. `remove <id>` deletes a mod from the library and leaves its addon. `enable`, `disable` and `move` change the mods that load through the build hook.
 
@@ -152,6 +154,26 @@ Every mod becomes a standalone Swofty data addon. `src/convert.rs` writes one ad
 5. `Re-import` and `Convert again` convert the library copy again and install it over the same addon id. The addon keeps its switch.
 6. Converting compares a mod with the game's own files. Without a game a mod stays in the library with no record entry, loads through the build hook and converts on a later import or `Convert now` with a game. Track packages convert without one.
 7. Report lines that start with `warning:` show as warnings on the page.
+8. A mod already converted keeps its addon id, also when the importer now names its parts differently.
+
+#### Names and ids
+
+- A mod's name comes from `mod.serps`, else from the zip or folder name. A version at the end of that name, such as `v1.0.6` or `(V10.3)`, becomes the version, and `- By <author>` the author, when `mod.serps` gives none.
+- A part is named by the folders that tell it apart, innermost first, then the mod: `Pirelli Season 2011 · Default Weather Grip Track — Pirelli Tyres Collection`. Folders every part sits in and folders named like the mod are left out.
+- A part's library id is the mod's id, a dot and a slug of those folders, at most 32 characters, cut at a word with a 6-digit hash of the part's folder after it. Addon ids are `mod.<library id>`, at most 64 characters. A part imported under the old id, the mod id and a slug of its whole folder, keeps that id.
+- A track zip's `origin.sha256` is the zip's SHA-256.
+
+#### Variants
+
+Parts of one import that write mostly the same things are variants. Two parts are variants when the records, resources, text entries and files they both write are at least half of everything the two write. All variants install. The one on is the variant that was on before a re-import, else the first whose part name has the word `Default` or `Standard`, else the first; the rest install off. Parts that are not variants all turn on. The import notice and `Last import` say how many variants installed and which is on. A `Choose a mod…` import with variants returns that notice instead of `show_addon`.
+
+#### What the addon holds
+
+- Database records are `put-record` and `remove-record`. Archive resources go into overlay archives with `erp.overlay`, and removals are `remove-resource`. Loose files are `file.put`, and `.mipmaps` files `add-mipmaps`. A track is `track.add` with its package.
+- Text is `lang.set`. Text a mod fills in with the game's own text is `lang.default`, which never undoes another addon's rename.
+- Team logo texture arrays from `ui_texture*` archives ship in `logos/ui_textures.erp` as the mod has them, with one `erp.merge-slices` each into `2025_asset_groups/vfx_package/common.erp`; the launcher writes only the slices that differ from the game's. Texture array views (`.texarray`) go in whole with `put-resource`.
+- `kind` lists `database`, `erp`, `text` and `files` as the addon has them.
+- `category` comes from what the mod changes. A track package or mostly track resources is Tracks. 1000 or more records with car resources or team and driver text is Seasons. Mostly car resources is Cars, or Liveries when they are all textures and materials and not tyres. Then Audio, Drivers & teams, Database, UI and Other. The name decides only between Database and Seasons (`season`, `calendar`) and towards Liveries (`livery`).
 
 The record is `addon-data/teamsimplified.mods/importer.json`:
 
@@ -173,10 +195,13 @@ The record is `addon-data/teamsimplified.mods/importer.json`:
 
 #### Migration
 
-Libraries from before 0.7.0 convert once, on the first import or on `Convert now`, and each profile is handed over on its own.
+Libraries from before 0.7.0 convert once, on the first launcher start, the first import or `Convert now`, and each profile is handed over on its own.
+
+- `launcher.startup` in `swofty.json` asks the launcher for a `startup` event on each start. With nothing pending it returns `none` at once. Otherwise it runs the migration and returns a notice: `Converted <n> mods into addons`, the mods not converted, and how many are left.
+- A startup conversion starts no mod it expects to end past 270 seconds, at 40 MB a second, after the first. The rest convert on the next start or with `Convert now`.
 
 1. Each library mod without a record entry converts and installs, in the active profile's mod order, then the rest. The record is saved after each mod, and a later run converts only what is left. An import that runs the migration does not convert a mod the migration just made from the same files again.
-2. For the active profile, the addons of the mods it lists turn on or off as each mod was, in the profile's mod order, and append to the profile's addon list in that order. With the `move_addon` host call, each then moves to just after `teamsimplified.mods`, or after the addon of the mod before it, where the build hook loaded the mods. The current order comes from the profile file, `profiles/<profile>.json` two folders above the addon's data folder. A launcher without `move_addon` leaves them appended.
+2. For the active profile, the addons of the mods it lists turn on or off as each mod was, in the profile's mod order, and append to the profile's addon list in that order. With the `move_addon` host call, each then moves to just after `teamsimplified.mods`, or after the addon of the mod before it, where the build hook loaded the mods. The current order comes from each addon's `position` in the `addons` host call. A launcher before 1.3.0 gives no `position`, and the profile file, `profiles/<profile>.json` two folders above the addon's data folder, is read instead. A launcher without `move_addon` leaves them appended.
 3. A profile not handed over yet loads its mods through the build hook, as before, and the page offers `Convert now`.
 4. Mods that fail to convert stay in the library and in each profile's mod list, and the build hook keeps loading them.
 
