@@ -524,6 +524,7 @@ name = "swofty-addon-simplified"
 version = "0.7.0"
 dependencies = [
  "rars",
+ "semver",
  "serde",
  "serde_json",
  "sevenz-rust2",
