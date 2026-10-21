@@ -1,3 +1,4 @@
+pub mod convert;
 pub mod diff;
 pub mod library;
 pub mod merge;
