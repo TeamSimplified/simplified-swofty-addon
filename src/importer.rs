@@ -10,7 +10,7 @@ use swofty_addon::launcher::{AddonStore, Cx, Progress};
 use swofty_addon::manifest::{Category, Kind};
 
 use crate::library::{Library, Package};
-use crate::{Loaded, Result, State, err, io_err, package};
+use crate::{Loaded, Result, Slot, State, err, io_err, package};
 
 pub const RECORD: &str = "importer.json";
 const STAGING: &str = ".convert";
@@ -217,7 +217,7 @@ fn convert_one(
 }
 
 // Turns on, in the profile's mod order, the addons made from the mods the profile
-// lists, as each mod was on or off. Set in order, they append in that order.
+// lists, as each mod was on or off, then moves them to where the mods loaded.
 fn place(cx: &Cx, addons: &dyn AddonStore, record: &Record) -> Result<Vec<String>> {
     if cx.profile.vanilla {
         return Ok(Vec::new());
@@ -238,10 +238,57 @@ fn place(cx: &Cx, addons: &dyn AddonStore, record: &Record) -> Result<Vec<String
         }
     }
     if !placed.is_empty() {
+        settle(cx, addons, record, &state.mods, &placed);
         state.addons.extend(placed);
         cx.set_state(&state)?;
     }
     Ok(lines)
+}
+
+// The active profile's addon ids in load order, from the launcher's profile file
+// two folders above this addon's data folder.
+fn profile_order(cx: &Cx) -> Option<Vec<String>> {
+    let path = cx
+        .data_dir
+        .parent()?
+        .parent()?
+        .join("profiles")
+        .join(format!("{}.json", cx.profile.name));
+    let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    let ids = doc["addons"].as_array()?.iter();
+    Some(ids.filter_map(|a| Some(a["id"].as_str()?.to_owned())).collect())
+}
+
+// Moves each placed addon to just after the importer, or after the addon of the
+// mod before it in the profile's mod order: where the build hook loaded the mods.
+// Set in order, the addons are already in mod order at the end of the list, which
+// is where they stay on a launcher without move_addon.
+fn settle(cx: &Cx, addons: &dyn AddonStore, record: &Record, mods: &[Slot], placed: &[String]) {
+    let Some(mut order) = profile_order(cx) else {
+        return;
+    };
+    for id in placed {
+        let (Some(made), Some(j)) = (record.addon(id), mods.iter().position(|s| &s.id == id)) else {
+            continue;
+        };
+        let before: Vec<&str> = mods[..j]
+            .iter()
+            .filter_map(|s| record.addon(&s.id))
+            .map(|m| m.id.as_str())
+            .collect();
+        let Some(from) = order.iter().position(|a| *a == made.id) else {
+            continue;
+        };
+        let item = order.remove(from);
+        let after = order
+            .iter()
+            .rposition(|a| a == crate::ID || before.contains(&a.as_str()));
+        let to = after.map_or(from, |i| i + 1);
+        order.insert(to, item);
+        if to != from && addons.move_addon(&made.id, to as isize - from as isize).is_err() {
+            return;
+        }
+    }
 }
 
 fn hand_over(cx: &Cx, id: &str) -> Result<()> {
@@ -481,11 +528,33 @@ mod tests {
 
     // The launcher's addons: installed folders under `root`, shared by every
     // profile, and each profile's addon list in load order, as core keeps it.
+    // The launcher's addons: installed folders under `root`, shared by every
+    // profile, and each profile's addon list in load order, written to the
+    // profile file as core keeps it. Without `moves`, it is a launcher that
+    // can't reorder addons.
     struct Addons<'a> {
         root: &'a Path,
+        profiles: &'a Path,
         order: &'a Mutex<BTreeMap<String, Vec<(String, bool)>>>,
         profile: String,
         calls: &'a Mutex<Vec<String>>,
+        moves: bool,
+    }
+
+    impl Addons<'_> {
+        fn write(&self, list: &[(String, bool)]) {
+            let addons: Vec<Value> = list
+                .iter()
+                .map(|(id, on)| json!({"id": id, "enabled": on}))
+                .collect();
+            std::fs::create_dir_all(self.profiles).unwrap();
+            let doc = json!({"name": self.profile, "addons": addons});
+            std::fs::write(
+                self.profiles.join(format!("{}.json", self.profile)),
+                doc.to_string(),
+            )
+            .unwrap();
+        }
     }
 
     impl AddonStore for Addons<'_> {
@@ -529,6 +598,22 @@ mod tests {
                 Some(slot) => slot.1 = on,
                 None => list.push((id.into(), on)),
             }
+            self.write(list);
+            Ok(())
+        }
+
+        fn move_addon(&self, id: &str, delta: isize) -> Result<()> {
+            if !self.moves {
+                return Err(err("this launcher can't reorder addons".into()));
+            }
+            self.calls.lock().unwrap().push(format!("move {id} {delta}"));
+            let mut order = self.order.lock().unwrap();
+            let list = order.get_mut(&self.profile).unwrap();
+            let from = list.iter().position(|(a, _)| a == id).unwrap();
+            let to = from.saturating_add_signed(delta).clamp(1, list.len() - 1);
+            let item = list.remove(from);
+            list.insert(to, item);
+            self.write(list);
             Ok(())
         }
 
@@ -569,6 +654,8 @@ mod tests {
     struct Host {
         root: PathBuf,
         installed: PathBuf,
+        profiles_dir: PathBuf,
+        old: bool,
         data: PathBuf,
         order: Mutex<BTreeMap<String, Vec<(String, bool)>>>,
         calls: Mutex<Vec<String>>,
@@ -582,8 +669,10 @@ mod tests {
             std::fs::remove_dir_all(&root).ok();
             std::fs::create_dir_all(root.join("addons")).unwrap();
             Self {
-                data: root.join("data"),
+                data: root.join("addon-data").join(ID),
                 installed: root.join("addons"),
+                profiles_dir: root.join("profiles"),
+                old: false,
                 root,
                 order: Mutex::default(),
                 calls: Mutex::default(),
@@ -608,10 +697,18 @@ mod tests {
         fn addons(&self, profile: &str) -> Addons<'_> {
             Addons {
                 root: &self.installed,
+                profiles: &self.profiles_dir,
                 order: &self.order,
                 profile: profile.into(),
                 calls: &self.calls,
+                moves: !self.old,
             }
+        }
+
+        fn profile(&self, name: &str, addons: &[&str]) {
+            let list: Vec<(String, bool)> = addons.iter().map(|a| (a.to_string(), true)).collect();
+            self.addons(name).write(&list);
+            self.order.lock().unwrap().insert(name.into(), list);
         }
 
         fn mod_dir(&self, name: &str) -> PathBuf {
@@ -634,6 +731,10 @@ mod tests {
                 .get(profile)
                 .cloned()
                 .unwrap_or_default()
+        }
+
+        fn ids(&self, profile: &str) -> Vec<String> {
+            self.order(profile).into_iter().map(|(id, _)| id).collect()
         }
 
         fn calls(&self) -> Vec<String> {
@@ -703,6 +804,8 @@ mod tests {
             })
         })
         .unwrap();
+        host.profile("one", &["swofty.core", ID, "dbedit.pit"]);
+        host.profile("two", &["swofty.core", "dbedit.x", ID, "dbedit.y"]);
         let conv = Fake {
             refuse: vec!["b"],
             ..Fake::default()
@@ -729,10 +832,24 @@ mod tests {
                 "install imported.d",
                 "on imported.c",
                 "off imported.a",
-                "on imported.d"
+                "on imported.d",
+                "move imported.c -1",
+                "move imported.a -1",
+                "move imported.d -1"
             ]
         );
-        assert_eq!(host.order("one"), [on("c", true), on("a", false), on("d", true)]);
+        assert_eq!(
+            host.ids("one"),
+            [
+                "swofty.core",
+                ID,
+                "imported.c",
+                "imported.a",
+                "imported.d",
+                "dbedit.pit"
+            ]
+        );
+        assert_eq!(host.order("one")[3], on("a", false));
         let handed = with(&host, "one", handed_over).unwrap();
         assert_eq!(
             handed,
@@ -746,8 +863,26 @@ mod tests {
         assert_eq!(todo, Pending { convert: 0, place: 2 });
         with(&host, "two", |cx| migrate(cx, &conv, &NoProgress)).unwrap();
         assert_eq!(conv.made.lock().unwrap().len(), 4, "nothing converts twice");
-        assert_eq!(host.order("two"), [on("d", true), on("a", true)]);
-        assert_eq!(host.calls(), ["on imported.d", "on imported.a"]);
+        assert_eq!(
+            host.ids("two"),
+            [
+                "swofty.core",
+                "dbedit.x",
+                ID,
+                "imported.d",
+                "imported.a",
+                "dbedit.y"
+            ]
+        );
+        assert_eq!(
+            host.calls(),
+            [
+                "on imported.d",
+                "on imported.a",
+                "move imported.d -1",
+                "move imported.a -1"
+            ]
+        );
 
         with(&host, "one", |cx| migrate(cx, &conv, &NoProgress)).unwrap();
         assert!(host.calls().is_empty(), "a profile is handed over once");
@@ -769,6 +904,32 @@ mod tests {
             library.dir("b").is_dir() && library.dir("a").is_dir(),
             "the library stays"
         );
+        std::fs::remove_dir_all(&host.root).ok();
+    }
+
+    #[test]
+    fn a_launcher_that_cannot_reorder_gets_the_addons_appended_in_mod_order() {
+        let mut host = Host::new("append", &["one"]);
+        host.old = true;
+        let library = Library::new(&host.data);
+        for name in ["a", "b"] {
+            library.import(&host.mod_dir(name), None, &mut |_, _| {}).unwrap();
+        }
+        let mods = vec![slot("b", true), slot("a", true)];
+        with(&host, "one", |cx| {
+            cx.set_state(&State {
+                mods,
+                addons: Vec::new(),
+            })
+        })
+        .unwrap();
+        host.profile("one", &["swofty.core", ID, "dbedit.pit"]);
+        with(&host, "one", |cx| migrate(cx, &Fake::default(), &NoProgress)).unwrap();
+        assert_eq!(
+            host.ids("one"),
+            ["swofty.core", ID, "dbedit.pit", "imported.b", "imported.a"]
+        );
+        assert!(!host.calls().iter().any(|c| c.starts_with("move")));
         std::fs::remove_dir_all(&host.root).ok();
     }
 
