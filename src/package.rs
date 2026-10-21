@@ -469,16 +469,18 @@ fn part_segments(rel: &str) -> Vec<String> {
         .collect()
 }
 
+// A folder named like the game that holds game folders wins over one that only
+// starts with the game's name, such as "F1 25 with V10 Engines/F1 25/audio".
 pub fn content_root(root: &Path) -> Option<PathBuf> {
-    named_game(root).or_else(|| {
-        std::iter::once(root.to_path_buf())
-            .chain(walk(root))
-            .find(|d| subdirs(d).iter().any(|c| is_marker(&name(c))))
-    })
-}
-
-fn named_game(root: &Path) -> Option<PathBuf> {
-    walk(root).find(|d| is_game_folder(&name(d)))
+    let dirs: Vec<PathBuf> = walk(root).collect();
+    let holds_game = |d: &PathBuf| subdirs(d).iter().any(|c| is_marker(&name(c)));
+    let named = |d: &&PathBuf| is_game_folder(&name(d));
+    dirs.iter()
+        .filter(named)
+        .find(|d| holds_game(d))
+        .or_else(|| dirs.iter().find(named))
+        .cloned()
+        .or_else(|| std::iter::once(root.to_path_buf()).chain(dirs).find(holds_game))
 }
 
 // Mods name the game folder "F1 25", or "F1 25 (mod name)" and the like.
@@ -578,6 +580,14 @@ mod tests {
         let other = dir.join("photos/holiday");
         std::fs::create_dir_all(&other).unwrap();
         assert_eq!(claims(&dir.join("photos")), Claim::No);
+        tree(
+            &dir,
+            &["F1 25 with V10 Engines - By Jor (V10.3)/F1 25/audio/2025/bundles/ferrari_2025.bdl"],
+        );
+        assert_eq!(
+            content_root(&dir),
+            Some(dir.join("F1 25 with V10 Engines - By Jor (V10.3)/F1 25"))
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
