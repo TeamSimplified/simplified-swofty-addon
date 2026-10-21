@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::{Value, json};
-use swofty_addon::asset::{AssetOp, FileOp, Op, Origin, Root, Source, TrackOp};
+use swofty_addon::asset::{AssetOp, FileOp, LangOp, Op, Origin, Root, Source, TrackOp};
 use swofty_addon::launcher::GameFiles;
 use swofty_addon::manifest::{AddonManifest, Category, Kind, MANIFEST_FILE};
 use swofty_addon::ops::{DbOp, ErpOp};
@@ -27,6 +27,8 @@ pub const ERP_DIR: &str = "erp";
 pub const FILES_DIR: &str = "files";
 pub const LOGOS: &str = "logos/ui_textures.erp";
 const MIPMAPS: &str = ".mipmaps";
+const MAX_ID: usize = 64;
+const SEASON_RECORDS: usize = 1000;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Converted {
@@ -34,6 +36,7 @@ pub struct Converted {
     pub name: String,
     pub category: Category,
     pub kinds: Vec<Kind>,
+    pub summary: String,
     pub report: Vec<String>,
 }
 
@@ -41,7 +44,10 @@ pub fn addon_id(p: &Package) -> String {
     let parts: Vec<String> = p.id.split('.').map(slug).filter(|s| !s.is_empty()).collect();
     match parts.is_empty() {
         true => format!("{NAMESPACE}.mod"),
-        false => format!("{NAMESPACE}.{}", parts.join(".")),
+        false => format!(
+            "{NAMESPACE}.{}",
+            crate::library::capped(&parts.join("."), &p.id, MAX_ID - NAMESPACE.len() - 1)
+        ),
     }
 }
 
@@ -92,7 +98,8 @@ struct Writer {
     track: Vec<AssetOp>,
     report: Vec<String>,
     contents: Contents,
-    resources: usize,
+    written: BTreeSet<(String, String)>,
+    mips: usize,
 }
 
 #[derive(Serialize)]
@@ -108,6 +115,7 @@ struct Tally {
     sources: usize,
     mips: usize,
     logos: usize,
+    views: usize,
 }
 
 #[derive(Default)]
@@ -117,6 +125,7 @@ struct Contents {
     team_text: usize,
     areas: BTreeMap<Area, usize>,
     vehicle_art: usize,
+    tyres: usize,
     track: bool,
 }
 
@@ -136,11 +145,22 @@ pub fn convert(
     out: &Path,
     progress: &mut dyn FnMut(f32, &str),
 ) -> Result<Converted> {
+    convert_to(library, p, &addon_id(p), game, out, progress)
+}
+
+pub fn convert_to(
+    library: &Library,
+    p: &Package,
+    id: &str,
+    game: Option<&dyn GameFiles>,
+    out: &Path,
+    progress: &mut dyn FnMut(f32, &str),
+) -> Result<Converted> {
     if std::fs::read_dir(out).is_ok_and(|mut d| d.next().is_some()) {
         return Err(err(format!("{} is not empty", out.display())));
     }
     std::fs::create_dir_all(out).map_err(io_err(out))?;
-    let result = write_addon(library, p, game, out, progress);
+    let result = write_addon(library, p, id, game, out, progress);
     if result.is_err() {
         std::fs::remove_dir_all(out).ok();
     }
@@ -150,6 +170,7 @@ pub fn convert(
 fn write_addon(
     library: &Library,
     p: &Package,
+    id: &str,
     game: Option<&dyn GameFiles>,
     out: &Path,
     progress: &mut dyn FnMut(f32, &str),
@@ -179,7 +200,6 @@ fn write_addon(
             "skipped {path}: programs and EA AntiCheat files are never copied"
         ));
     }
-    let id = addon_id(p);
     let kinds = w.kinds();
     let category = w.contents.category(&p.name);
     if w.db.is_empty() && w.erp.is_empty() && w.text.is_empty() && w.files.is_empty() && w.track.is_empty() {
@@ -187,7 +207,7 @@ fn write_addon(
             .push("warning: the mod changes nothing in this game build".into());
     }
     let operations = w.write_ops()?;
-    let manifest = manifest(p, game, &id, &kinds, category, operations, &w)?;
+    let manifest = manifest(p, game, id, &kinds, category, operations, &w)?;
     let json = serde_json::to_vec_pretty(&manifest).expect("serialisable");
     let path = out.join(MANIFEST_FILE);
     std::fs::write(&path, json).map_err(io_err(&path))?;
@@ -199,10 +219,11 @@ fn write_addon(
     std::fs::write(&path, w.report.join("\n") + "\n").map_err(io_err(&path))?;
     progress(1.0, &p.name);
     Ok(Converted {
-        id,
+        id: id.to_owned(),
         name: p.name.clone(),
         category,
         kinds,
+        summary: w.counts().join(", "),
         report: w.report,
     })
 }
@@ -252,7 +273,7 @@ impl Writer {
         [
             (Kind::Database, track || !self.db.is_empty()),
             (Kind::Erp, track || !self.erp.is_empty()),
-            (Kind::Ui, !self.text.is_empty()),
+            (Kind::Text, !self.text.is_empty()),
             (Kind::Files, !self.files.is_empty()),
         ]
         .into_iter()
@@ -261,6 +282,15 @@ impl Writer {
     }
 
     fn description(&self, source: &str) -> String {
+        let parts = self.counts();
+        let what = match parts.is_empty() {
+            true => String::new(),
+            false => format!(": {}", parts.join(", ")),
+        };
+        format!("Converted from {source} by the Mod Importer{what}.")
+    }
+
+    fn counts(&self) -> Vec<String> {
         let mut parts = Vec::new();
         let mut count = |n: usize, one: &str, many: &str| {
             if n > 0 {
@@ -269,16 +299,19 @@ impl Writer {
         };
         count(self.db.len(), "database record", "database records");
         count(self.text.len(), "text entry", "text entries");
-        count(self.resources, "archive resource", "archive resources");
-        count(self.files.len(), "file", "files");
+        let mut assets: BTreeMap<Area, usize> = BTreeMap::new();
+        for (_, uri) in &self.written {
+            *assets.entry(area(&uri.to_ascii_lowercase())).or_default() += 1;
+        }
+        for (a, n) in assets {
+            let (one, many) = a.assets();
+            count(n, one, many);
+        }
+        count(self.files.len() + self.mips, "file", "files");
         if !self.track.is_empty() {
             parts.push("a track".into());
         }
-        let what = match parts.is_empty() {
-            true => String::new(),
-            false => format!(": {}", parts.join(", ")),
-        };
-        format!("Converted from {source} by the Mod Importer{what}.")
+        parts
     }
 
     fn track(&mut self, library: &Library, p: &Package, code: &str) -> Result<()> {
@@ -317,13 +350,19 @@ impl Writer {
             origin: origin.clone(),
         };
         let mut ops: Vec<Op> = std::mem::take(&mut merged.ops).into_iter().map(wrap).collect();
-        let defaults = crate::only_defaults(
+        let defaults: Vec<Op> = crate::only_defaults(
             std::mem::take(&mut merged.defaults)
                 .into_iter()
                 .map(wrap)
                 .collect(),
             &ops,
-        );
+        )
+        .into_iter()
+        .map(|op| Op {
+            op: fill_in(op.op),
+            origin: op.origin,
+        })
+        .collect();
         let mut tally = Tally {
             filled: defaults.len(),
             ..Tally::default()
@@ -362,9 +401,9 @@ impl Writer {
                     };
                     overlays[at].1.push((lib_files.join(r), resource));
                 }
-                AssetOp::Erp(op @ ErpOp::RemoveResource { .. }) => {
-                    self.resources += 1;
-                    self.erp.push(op);
+                AssetOp::Erp(ErpOp::RemoveResource { erp, resource }) => {
+                    self.written.insert((erp.clone(), resource.clone()));
+                    self.erp.push(ErpOp::RemoveResource { erp, resource });
                 }
                 AssetOp::File(FileOp::Put { source, target }) => {
                     let r = rel(&source).ok_or_else(|| err(format!("{target}: no source in the mod")))?;
@@ -389,68 +428,68 @@ impl Writer {
         }
         progress(0.5, &p.name);
         let mut sources = BTreeSet::new();
-        for (n, (_, resources)) in overlays.iter().enumerate() {
+        for (n, (erp, resources)) in overlays.iter().enumerate() {
             sources.extend(resources.iter().map(|(path, _)| path.clone()));
+            self.written
+                .extend(resources.iter().map(|(_, uri)| (erp.clone(), uri.clone())));
             tally.put += write_overlay(resources, &self.dir.join(overlay_name(n)))?;
         }
         tally.sources = sources.len();
         progress(0.8, &p.name);
-        tally.logos = self.logos(library, p, &diff, game)?;
-        self.resources += tally.put + tally.logos;
+        (tally.logos, tally.views) = self.logos(library, p, &diff)?;
+        self.mips = tally.mips;
         self.contents.read(&diff);
         self.report_package(p, &diff, &merged, &tally);
         Ok(())
     }
 
-    fn logos(&mut self, library: &Library, p: &Package, diff: &Diff, game: &dyn GameFiles) -> Result<usize> {
-        let carried: Vec<texarray::Carried> = diff
-            .archives
-            .iter()
-            .filter(|a| texarray::carrier(&a.path) && !a.added.is_empty())
-            .map(|a| texarray::Carried {
-                item: p.name.clone(),
-                erp: library.dir(&p.id).join(FILES).join(&a.path),
-                uris: a
-                    .added
+    // Team logo arrays ride in the mod's ui_texture shader archives. Each goes into
+    // the boot archive with merge-slices, which writes only the slices that differ
+    // from the game's over what earlier addons wrote; their views go in whole.
+    fn logos(&mut self, library: &Library, p: &Package, diff: &Diff) -> Result<(usize, usize)> {
+        let mut resources = Vec::new();
+        for a in diff.archives.iter().filter(|a| texarray::carrier(&a.path)) {
+            let erp = library.dir(&p.id).join(FILES).join(&a.path);
+            resources.extend(
+                a.added
                     .iter()
                     .filter(|uri| texarray::merged_by_slice(uri) && !merge::studio_only(uri))
-                    .cloned()
-                    .collect(),
-            })
-            .filter(|c| !c.uris.is_empty())
-            .collect();
-        if carried.is_empty() {
-            return Ok(0);
+                    .map(|uri| (erp.clone(), uri.clone())),
+            );
         }
-        let built = texarray::build(game, &carried, &self.dir.join(LOGOS))?;
-        let n = built.ops.len();
-        for op in built.ops {
-            if let AssetOp::Erp(ErpOp::PutResource {
-                erp,
-                resource,
-                rename,
-                ..
-            }) = op
-            {
-                self.erp.push(ErpOp::PutResource {
-                    erp,
-                    resource,
-                    source: Source::addon(LOGOS),
-                    rename,
-                });
+        if resources.is_empty() {
+            return Ok((0, 0));
+        }
+        write_overlay(&resources, &self.dir.join(LOGOS))?;
+        let mut seen = BTreeSet::new();
+        let (mut arrays, mut views) = (0, 0);
+        for (_, uri) in resources {
+            if !seen.insert(uri.clone()) {
+                continue;
             }
+            let (erp, source) = (merge::BOOT_ERP.to_owned(), Source::addon(LOGOS));
+            self.written.insert((erp.clone(), uri.clone()));
+            self.erp.push(match texarray::is_array(&uri) {
+                true => {
+                    arrays += 1;
+                    ErpOp::MergeSlices {
+                        erp,
+                        resource: uri,
+                        source,
+                    }
+                }
+                false => {
+                    views += 1;
+                    ErpOp::PutResource {
+                        erp,
+                        resource: uri,
+                        source,
+                        rename: None,
+                    }
+                }
+            });
         }
-        self.report.extend(built.lines);
-        self.report
-            .extend(built.warnings.into_iter().map(|w| format!("warning: {w}")));
-        if n > 0 {
-            self.report.push(format!(
-                "warning: {n} team logo texture array resource(s) ship whole from {LOGOS}, merged slice by slice \
-                 with this game build's arrays; another addon that changes the same array later in the load \
-                 order replaces it whole instead of merging slices"
-            ));
-        }
-        Ok(n)
+        Ok((arrays, views))
     }
 
     fn report_package(&mut self, p: &Package, diff: &Diff, merged: &merge::Merged, t: &Tally) {
@@ -467,8 +506,8 @@ impl Writer {
         }
         if diff.dropped > 0 {
             self.report.push(format!(
-                "warning: {} removal(s) left out: the mod was made for {}, not this game version",
-                diff.dropped,
+                "warning: {} left out: the mod was made for {}, not this game version",
+                crate::plural(diff.dropped, "removal", "removals"),
                 p.game_version.as_deref().unwrap_or("an unknown version")
             ));
         }
@@ -493,8 +532,7 @@ impl Writer {
         }
         if t.filled > 0 {
             self.report.push(format!(
-                "warning: {} text entr(ies) the mod fills in with the game's own text → lang.set before \
-                 its other text; loaded after another addon that renames the same key, they undo that rename",
+                "text: {} entr(ies) the mod fills in with the game's own text → lang.default in {TEXT_OPS}",
                 t.filled
             ));
         }
@@ -540,8 +578,16 @@ impl Writer {
         }
         if t.logos > 0 {
             self.report.push(format!(
-                "archives: {} team logo texture array resource(s) → put-resource from {LOGOS}",
-                t.logos
+                "logos: {} team logo texture array(s) → erp.merge-slices into {} from {LOGOS}",
+                t.logos,
+                merge::BOOT_ERP
+            ));
+        }
+        if t.views > 0 {
+            self.report.push(format!(
+                "logos: {} texture array view(s) → put-resource into {} from {LOGOS}",
+                t.views,
+                merge::BOOT_ERP
             ));
         }
         let count = |class| diff.files.iter().filter(|f| f.class == class).count();
@@ -625,9 +671,14 @@ impl Contents {
         if area == Area::Vehicle && art(&lower) {
             self.vehicle_art += 1;
         }
+        if area == Area::Vehicle && ["tyre", "tire", "/wheel"].iter().any(|w| lower.contains(w)) {
+            self.tyres += 1;
+        }
         *self.areas.entry(area).or_default() += 1;
     }
 
+    // What the mod changes decides; its name only settles between two categories
+    // its contents fit equally.
     fn category(&self, name: &str) -> Category {
         let n = |a| self.areas.get(&a).copied().unwrap_or(0);
         let (track, vehicle, ui, audio, other) = (
@@ -637,27 +688,47 @@ impl Contents {
             n(Area::Audio),
             n(Area::Other),
         );
-        let season = name.to_lowercase().contains("season");
-        if self.track || track > 0 && track >= vehicle {
+        let name = name.to_lowercase();
+        let named = |words: &[&str]| words.iter().any(|w| name.contains(w));
+        if self.track || track > 0 && track >= vehicle + ui {
             Category::Tracks
-        } else if season && self.records + vehicle > 0 || vehicle > 0 && self.records >= 1000 {
+        } else if self.records >= SEASON_RECORDS && (vehicle > 0 || self.team_text > 0) {
             Category::Seasons
-        } else if vehicle > 0 && self.vehicle_art == vehicle {
-            Category::Liveries
-        } else if vehicle > 0 {
-            Category::Cars
+        } else if vehicle > 0 && vehicle >= ui.max(audio).max(other) {
+            let liveries = self.vehicle_art == vehicle
+                || named(&["livery", "liveries"]) && self.vehicle_art * 2 >= vehicle;
+            match self.tyres * 2 < vehicle && liveries {
+                true => Category::Liveries,
+                false => Category::Cars,
+            }
         } else if audio > 0 && audio >= ui + other {
             Category::Audio
         } else if self.records > 0 && self.team_text > 0 {
             Category::DriversTeams
+        } else if self.records > 0 && named(&["season", "calendar"]) {
+            Category::Seasons
         } else if self.records > 0 {
             Category::Database
         } else if self.text > 0 || ui > 0 {
             Category::Ui
+        } else if vehicle > 0 {
+            Category::Cars
         } else if audio > 0 {
             Category::Audio
         } else {
             Category::Other
+        }
+    }
+}
+
+impl Area {
+    fn assets(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Track => ("track asset", "track assets"),
+            Self::Vehicle => ("car asset", "car assets"),
+            Self::Ui => ("UI asset", "UI assets"),
+            Self::Audio => ("sound asset", "sound assets"),
+            Self::Other => ("game asset", "game assets"),
         }
     }
 }
@@ -692,6 +763,15 @@ fn art(lower: &str) -> bool {
         || ["livery", "/textures/", "decal"]
             .iter()
             .any(|w| lower.contains(w))
+}
+
+fn fill_in(op: AssetOp) -> AssetOp {
+    match op {
+        AssetOp::Lang(LangOp::Set { language, key, value }) => {
+            AssetOp::Lang(LangOp::Default { language, key, value })
+        }
+        other => other,
+    }
 }
 
 fn overlay_name(n: usize) -> String {

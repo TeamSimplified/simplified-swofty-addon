@@ -42,7 +42,11 @@ pub fn carrier(rel: &str) -> bool {
 }
 
 pub fn merged_by_slice(uri: &str) -> bool {
-    uri.ends_with(IMAGE) || uri.ends_with(".texarray")
+    is_array(uri) || uri.ends_with(".texarray")
+}
+
+pub fn is_array(uri: &str) -> bool {
+    uri.ends_with(IMAGE)
 }
 
 pub struct Carried {

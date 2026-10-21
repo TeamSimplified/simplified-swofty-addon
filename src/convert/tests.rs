@@ -9,6 +9,8 @@ use swofty_formats::erp::{Erp, ErpFile, Fragment, HEADER_LEN, MAGIC, Resource};
 use swofty_formats::gvdb::{Gvdb, Record, ValueType};
 use swofty_formats::lng::Lng;
 
+use sha2::Digest;
+
 use super::*;
 use crate::package::DATABASE;
 
@@ -275,14 +277,46 @@ fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
         .collect()
 }
 
-fn apply(ops: &[AssetOp], stock: Option<&Gvdb>, resolve: &dyn Fn(&Source) -> PathBuf) -> Applied {
+// Applies ops as the launcher's build does: merge-slices writes the slices that
+// differ from the game's over the game's array, and a lang.default holds only where
+// no lang.set gives the key.
+fn apply(
+    ops: &[AssetOp],
+    stock: Option<&Gvdb>,
+    game: &dyn GameFiles,
+    resolve: &dyn Fn(&Source) -> PathBuf,
+) -> Applied {
+    static MERGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let mut out = Applied::default();
     let mut db_ops = Vec::new();
+    let mut defaults = Vec::new();
     for op in ops {
         match op {
             AssetOp::Db(op) => db_ops.push(op.clone()),
             AssetOp::Lang(LangOp::Set { language, key, value }) => {
                 out.text.insert((language.clone(), key.clone()), value.clone());
+            }
+            AssetOp::Lang(LangOp::Default { language, key, value }) => {
+                defaults.push(((language.clone(), key.clone()), value.clone()));
+            }
+            AssetOp::Erp(ErpOp::MergeSlices {
+                erp,
+                resource,
+                source,
+            }) => {
+                let n = MERGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let to =
+                    std::env::temp_dir().join(format!("simplified-merge-{}-{n}.erp", std::process::id()));
+                let carried = texarray::Carried {
+                    item: "addon".into(),
+                    erp: resolve(source),
+                    uris: vec![resource.clone()],
+                };
+                if !texarray::build(game, &[carried], &to).unwrap().ops.is_empty() {
+                    out.resources
+                        .insert((erp.clone(), resource.clone()), Some(load(&to, resource)));
+                    std::fs::remove_file(&to).ok();
+                }
             }
             AssetOp::File(FileOp::Put { source, target })
             | AssetOp::Erp(ErpOp::AddMipmaps { source, target }) => {
@@ -315,6 +349,9 @@ fn apply(ops: &[AssetOp], stock: Option<&Gvdb>, resolve: &dyn Fn(&Source) -> Pat
             other => panic!("unexpected op {other:?}"),
         }
     }
+    for (key, value) in defaults {
+        out.text.entry(key).or_insert(value);
+    }
     if let Some(stock) = stock {
         let mut db = stock.clone();
         let ops = DbOps {
@@ -331,8 +368,9 @@ fn apply(ops: &[AssetOp], stock: Option<&Gvdb>, resolve: &dyn Fn(&Source) -> Pat
 
 fn check(case: &Case, p: &Package, out: &Path, stock: Option<&Gvdb>) -> (AddonManifest, Applied) {
     let (m, ops) = addon_ops(out);
-    let expected = apply(&case.oracle(p), stock, &|s| case.resolve(s, out));
-    let got = apply(&ops, stock, &|s| {
+    let game: &dyn GameFiles = &case.game;
+    let expected = apply(&case.oracle(p), stock, game, &|s| case.resolve(s, out));
+    let got = apply(&ops, stock, game, &|s| {
         assert_eq!(s.root, Root::Addon, "{s:?} reads outside the addon");
         case.resolve(s, out)
     });
@@ -405,7 +443,7 @@ fn a_team_rename_becomes_database_and_text_ops() {
     let (c, out) = case.convert(&p, Some(game));
     assert_eq!(c.id, "mod.venturi.cupra-racing-bulls");
     assert_eq!(c.category, Category::DriversTeams);
-    assert_eq!(c.kinds, [Kind::Database, Kind::Ui]);
+    assert_eq!(c.kinds, [Kind::Database, Kind::Text]);
     let stock = Gvdb::parse(&stock_db).unwrap();
     let (m, got) = check(&case, &p, &out, Some(&stock));
     assert_eq!(sorted(got.db.as_deref().unwrap()), sorted(&mod_db));
@@ -422,7 +460,15 @@ fn a_team_rename_becomes_database_and_text_ops() {
     assert_eq!((origin.tool.as_str(), origin.file.as_deref()), (ID, Some("Mod")));
     assert_eq!(m.category, Some(Category::DriversTeams));
     assert!(reported(&c, "database: 3 changed, 1 added, 1 removed"));
-    assert!(reported(&c, "warning: 3 text entr(ies) the mod fills in"));
+    assert!(reported(&c, "text: 3 entr(ies) the mod fills in"));
+    assert!(!c.report.iter().any(|l| l.starts_with("warning:")));
+    let (_, ops) = addon_ops(&out);
+    let filled = ops
+        .iter()
+        .filter(|op| matches!(op, AssetOp::Lang(LangOp::Default { .. })))
+        .count();
+    assert_eq!(filled, 3, "the game's own text fills in with lang.default");
+    assert_eq!(c.summary, "5 database records, 6 text entries");
     assert!(reported(&c, "text: kor take the mod's eng text"));
     assert!(out.join(REPORT).is_file());
 }
@@ -562,8 +608,45 @@ fn team_logo_arrays_ship_merged_with_the_game_s_arrays() {
             .contains_key(&(merge::BOOT_ERP.to_owned(), LOGO_ARRAY.to_owned()))
     );
     assert!(out.join(LOGOS).is_file());
-    assert!(reported(&c, "Team Logos: 1 logo slice(s)"));
-    assert!(reported(&c, "warning: 2 team logo texture array"));
+    let (_, ops) = addon_ops(&out);
+    let logo_ops: Vec<&AssetOp> = ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                AssetOp::Erp(ErpOp::MergeSlices { .. } | ErpOp::PutResource { rename: None, .. })
+            )
+        })
+        .collect();
+    assert_eq!(
+        logo_ops,
+        [
+            &AssetOp::Erp(ErpOp::MergeSlices {
+                erp: merge::BOOT_ERP.into(),
+                resource: image.clone(),
+                source: Source::addon(LOGOS),
+            }),
+            &AssetOp::Erp(ErpOp::PutResource {
+                erp: merge::BOOT_ERP.into(),
+                resource: LOGO_ARRAY.into(),
+                source: Source::addon(LOGOS),
+                rename: None,
+            }),
+        ]
+    );
+    let shipped = ErpFile::open(&out.join(LOGOS)).unwrap();
+    let theirs = shipped.load(shipped.erp.find(&image).unwrap()).unwrap();
+    assert_eq!(
+        theirs.fragments[1].data().unwrap(),
+        [[1; 4], [9; 4], [3; 4]].concat(),
+        "the addon ships the mod's array; the launcher merges it"
+    );
+    assert!(reported(
+        &c,
+        "logos: 1 team logo texture array(s) → erp.merge-slices"
+    ));
+    assert!(reported(&c, "logos: 1 texture array view(s) → put-resource"));
+    assert!(!c.report.iter().any(|l| l.starts_with("warning:")));
 }
 
 #[test]
@@ -685,6 +768,78 @@ fn versions_become_semver_and_ids_get_a_namespace() {
     assert_eq!(addon_id(&p), "mod.okayama_gp");
     p.id = "rm-designs.scuderia-alphatauri-orlen.tyres".into();
     assert_eq!(addon_id(&p), "mod.rm-designs.scuderia-alphatauri-orlen.tyres");
+    p.id = "pirelli-tyres-collection-v1-0-6.pirelli-tyres-collection-v1-0-6-default-weather-grip-track-pirelli-season-2011".into();
+    let long = addon_id(&p);
+    assert!(long.len() <= 64, "{long}");
+    assert!(long.starts_with("mod.pirelli-tyres-collection-v1-0-6."), "{long}");
+    assert_eq!(addon_id(&p), long);
+    p.id.push('2');
+    assert_ne!(addon_id(&p), long);
+}
+
+#[test]
+fn categories_come_from_contents_and_names_only_settle_ties() {
+    let contents = |uris: &[&str]| {
+        let mut c = Contents::default();
+        for uri in uris {
+            c.count(uri);
+        }
+        c
+    };
+    let tyres = contents(&[
+        "eaid://f1_2026_vehicle_package/shared/tyres/textures/slick_diffuse.tif.image",
+        "eaid://f1_2026_vehicle_package/shared/tyres/idf/tyres.idf?lod=all&ib=0",
+        "eaid://f1_2026_vehicle_package/teams/fom_car/handling/fom_car.vtf",
+    ]);
+    let pirelli = "Pirelli Season 2011 · Default Weather Grip Track — Pirelli Tyres Collection";
+    assert_eq!(tyres.category(pirelli), Category::Cars);
+    let livery = contents(&["eaid://f1_2026_vehicle_package/teams/mclaren/paint.tif.image"]);
+    assert_eq!(livery.category("Season 2026 McLaren"), Category::Liveries);
+    let rules = Contents {
+        records: 40,
+        ..Contents::default()
+    };
+    assert_eq!(rules.category("2026 Season calendar"), Category::Seasons);
+    assert_eq!(rules.category("Faster pit stops"), Category::Database);
+    let season = Contents {
+        records: 5000,
+        team_text: 12,
+        ..Contents::default()
+    };
+    assert_eq!(season.category("Grid"), Category::Seasons);
+    let sounds = contents(&["audio/2025/bundles/ferrari_2025.bdl"]);
+    assert_eq!(sounds.category("Track day sounds"), Category::Audio);
+    let ring = contents(&["eaid://environment_package/tracks/ring/a.tif.image"]);
+    assert_eq!(ring.category("Ring"), Category::Tracks);
+}
+
+#[test]
+fn a_track_zip_keeps_its_sha256() {
+    let case = Case::new("track-zip");
+    let zip = case.root.join("Test Ring.zip");
+    std::fs::create_dir_all(&case.root).unwrap();
+    let mut w = zip::ZipWriter::new(std::fs::File::create(&zip).unwrap());
+    for (name, data) in [
+        (
+            "manifest.json",
+            &br#"{"track_code":"test_ring","track_name":"Test Ring"}"#[..],
+        ),
+        ("test_ring.erp", b"track archive"),
+    ] {
+        w.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut w, data).unwrap();
+    }
+    w.finish().unwrap();
+    let p = case.library().import_track(&zip, &mut |_, _| {}).unwrap();
+    let want: String = sha2::Sha256::digest(std::fs::read(&zip).unwrap())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(p.sha256.as_deref(), Some(want.as_str()));
+    let (_, out) = case.convert(&p, None);
+    let m = AddonManifest::load(&out).unwrap();
+    assert_eq!(m.origin.unwrap().sha256.as_deref(), Some(want.as_str()));
 }
 
 #[test]
@@ -811,12 +966,12 @@ fn a_real_team_logo_array_merges_one_slice_into_the_game_s() {
     let merged = ErpFile::open(&out.join(LOGOS)).unwrap();
     let r = merged.load(merged.erp.find(&logos.name).unwrap()).unwrap();
     assert_eq!(r.fragments[1].data().unwrap(), pixels);
-    assert!(
-        got.resources
-            .contains_key(&(merge::BOOT_ERP.to_owned(), logos.name.clone()))
-    );
+    let applied = got.resources[&(merge::BOOT_ERP.to_owned(), logos.name.clone())]
+        .as_ref()
+        .unwrap();
+    assert_eq!(applied.2[1].3, pixels, "one slice merges into the game's");
     assert!(reported(
         &c,
-        "Real Logos: 1 logo slice(s) in 1 texture array(s) merged"
+        "logos: 1 team logo texture array(s) → erp.merge-slices"
     ));
 }
