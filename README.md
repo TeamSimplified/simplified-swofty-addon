@@ -20,7 +20,7 @@ How it works is in [docs/design.md](docs/design.md).
 
 ## Mods imported before 0.7.0
 
-The library converts into addons once, on the first import or on **Convert now** on the page, when the launcher has found the game. Each profile then turns the addons on in its own mod order, on where the mod was on. A profile that hasn't been handed over yet loads its mods through the build step, as before. Mods that fail to convert stay in the library and keep loading through the build step. The library is never deleted. Track packages convert into track addons; the Tracks page is gone.
+The library converts into addons once, on the first import or on **Convert now** on the page, when the launcher has found the game. Each profile then turns the addons on in its own mod order, on where the mod was on, and puts them where Simplified for Swofty loaded its mods in the load order. A profile that hasn't been handed over yet loads its mods through the build step, as before. Mods that fail to convert stay in the library and keep loading through the build step. The library is never deleted. Track packages convert into track addons; the Tracks page is gone.
 
 ## Using it in Swofty Launcher
 
@@ -35,7 +35,7 @@ swofty addons enable teamsimplified.mods
 
 Its id is `teamsimplified.mods`, the same id the launcher's built-in copy used, so the mod library and each profile's mod list carry over. A launcher that still builds that copy in refuses to install this one ("teamsimplified.mods is built in").
 
-The helper speaks the launcher's helper protocol through `swofty_addon::helper::run_helper`. Version 0.7.0 needs Swofty Launcher 1.3.0 or later: it installs and turns on addons with the addon host calls (`install_addon`, `set_addon_enabled`, `addons`) and asks the launcher to show an addon with the `show_addon` effect. The helper decides which dropped files and folders it imports, checking them by their contents.
+The helper speaks the launcher's helper protocol through `swofty_addon::helper::run_helper`. Version 0.7.0 needs Swofty Launcher 1.3.0 or later: it installs, turns on and orders addons with the addon host calls (`install_addon`, `set_addon_enabled`, `addons`, `move_addon`) and asks the launcher to show an addon with the `show_addon` effect. The helper decides which dropped files and folders it imports, checking them by their contents.
 
 `sections/mods.svg` gives the Mod Importer its sidebar icon, Team Simplified's mark.
 

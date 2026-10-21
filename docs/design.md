@@ -176,7 +176,7 @@ The record is `addon-data/teamsimplified.mods/importer.json`:
 Libraries from before 0.7.0 convert once, on the first import or on `Convert now`, and each profile is handed over on its own.
 
 1. Each library mod without a record entry converts and installs, in the active profile's mod order, then the rest. The record is saved after each mod, and a later run converts only what is left. An import that runs the migration does not convert a mod the migration just made from the same files again.
-2. For the active profile, the addons of the mods it lists turn on or off as each mod was, in the profile's mod order. Set in order, they append to the profile's addon list in that order.
+2. For the active profile, the addons of the mods it lists turn on or off as each mod was, in the profile's mod order, and append to the profile's addon list in that order. With the `move_addon` host call, each then moves to just after `teamsimplified.mods`, or after the addon of the mod before it, where the build hook loaded the mods. The current order comes from the profile file, `profiles/<profile>.json` two folders above the addon's data folder. A launcher without `move_addon` leaves them appended.
 3. A profile not handed over yet loads its mods through the build hook, as before, and the page offers `Convert now`.
 4. Mods that fail to convert stay in the library and in each profile's mod list, and the build hook keeps loading them.
 
