@@ -1,7 +1,7 @@
 [package]
 name = "swofty-addon-simplified"
-description = "Team Simplified: .serps mods for Swofty Launcher for F1 25"
-version = "0.6.0"
+description = "Team Simplified's Mod Importer: any F1 25 mod as a Swofty Launcher addon"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.95"
 license = "AGPL-3.0-or-later"
