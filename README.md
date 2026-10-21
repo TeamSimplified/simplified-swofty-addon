@@ -1,8 +1,9 @@
 # Simplified for Swofty
 
-Simplified for Swofty is the built-in addon, made by Team Simplified, that loads F1 25 mods in [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). It shows as **Mods** in the launcher and as `swofty mods` on the command line.
+Simplified for Swofty is the built-in addon, made by Team Simplified, that loads F1 25 mods in [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). It shows as **Mods** and **Tracks** in the launcher and as `swofty mods` on the command line.
 
 - Works with any mod: drop its zip, 7z, rar or folder on the launcher, and its files go where copying them into the game folder would put them. The game folders can sit at the top or up to three folders down, or in a folder named like `F1 25`. Mods made with Simplified Studio (`.serps`) and community track zips import too.
+- Keeps every track on the **Tracks** page, whichever way it came: a track package (a zip with `manifest.json`, as made for the EGO GameDatabases Editor) or a data addon whose asset ops add a track with `track.add`. Each row shows the track's name, what it replaces or adds, a switch and **Remove**, and two tracks on with the same code are flagged.
 - Keeps one library for every profile, and each profile's mods in load order. Lower in the list wins.
 - Compares each mod with the game's own files and merges only what it changes: database records, text, archive resources and files. Several mods load together, and the Mods page shows where they overlap.
 - Loads mods that Simplified Studio packed into the shader archives. Their resources load at boot, as they do with the Simplified Launcher.
@@ -10,6 +11,16 @@ Simplified for Swofty is the built-in addon, made by Team Simplified, that loads
 - Keeps team names a mod fills in from the game from undoing another mod's rename.
 
 How it works is in [docs/design.md](docs/design.md).
+
+## Tracks
+
+The **Tracks** page's **Import…** takes a track package as a zip or folder, or a data addon as a `.swoftyaddon`, a zip holding one or a folder with `swofty.json`. A track package goes into the library, like a track zip dropped on the window. A data addon is installed and turned on through the launcher, and is on the **Addons** page too: its switch and **Remove** here do the same as there. Anything else is refused with the reason, such as a mod (import it on the **Mods** page) or an addon that adds no track.
+
+A data addon counts as a track when an op file in its `operations.assets` holds a `track.add` whose `source` folder has a track `manifest.json`. Its row takes the name the addon gives the track with `lang.set` and a `db.set` on `TrackNameData_0.title` ([A track with its own name](https://f1.swofty.net/reference/data/track-names)), or else the package's `track_name`.
+
+Tracks imported before 0.6.0 move from the **Mods** page to the **Tracks** page as they are: same files in the library, same switch and place in each profile.
+
+Listing, installing, switching and removing data addons needs a launcher with the addon host calls ([SwoftyLauncher#199](https://github.com/Swofty-Developments/SwoftyLauncher/pull/199), in the release after 1.2.2). On an older launcher the page lists track packages only and says so, and a data addon installs by dropping it on the window.
 
 ## Using it in Swofty Launcher
 
