@@ -5,6 +5,7 @@ pub mod package;
 pub mod serps;
 pub mod texarray;
 pub mod track;
+pub mod tracks;
 pub mod viewcache;
 
 use std::collections::{HashMap, HashSet};
@@ -203,6 +204,21 @@ impl Loaded {
         Ok(&self.order[to].0)
     }
 
+    // The Mods page lists the mods without the tracks, so its place `to` counts
+    // mods only, and the tracks between them keep their places.
+    fn move_among_mods(&mut self, id: &str, to: usize) -> Result<&Package> {
+        let entry = self.order.remove(self.find(id)?);
+        let mods: Vec<usize> = (0..self.order.len())
+            .filter(|&i| self.order[i].0.track.is_none())
+            .collect();
+        let at = match mods.get(to) {
+            Some(&i) => i,
+            None => mods.last().map_or(self.order.len(), |&i| i + 1),
+        };
+        self.order.insert(at, entry);
+        Ok(&self.order[at].0)
+    }
+
     fn enabled(&self) -> impl Iterator<Item = &Package> {
         self.order.iter().filter(|(_, on)| *on).map(|(p, _)| p)
     }
@@ -253,6 +269,24 @@ fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress) -> Result<Vec<Str
         failed.extend(done);
         Err(err(failed.join("\n")))
     }
+}
+
+fn notices(cx: &Cx) -> Vec<Notice> {
+    if cx.profile.vanilla {
+        return vec![Notice {
+            text: "The vanilla profile plays without addons or mods.".into(),
+            tone: Tone::Muted,
+            action: None,
+        }];
+    }
+    if !cx.profile.enabled {
+        return vec![Notice {
+            text: format!("Simplified for Swofty is off in {}.", cx.profile.name),
+            tone: Tone::Warn,
+            action: Some(Button::new(ENABLE, "Turn on")),
+        }];
+    }
+    Vec::new()
 }
 
 fn import_button(primary: bool) -> Button {
@@ -563,25 +597,15 @@ impl Addon for Simplified {
     }
 
     fn view(&self, cx: &Cx, section: &str) -> Result<View> {
-        if section != SECTION {
-            return Err(Error::NoSection(section.into()));
+        match section {
+            SECTION => {}
+            tracks::SECTION => return tracks::view(cx, notices(cx)),
+            _ => return Err(Error::NoSection(section.into())),
         }
         let loaded = Loaded::read(cx)?;
-        let on = loaded.enabled().count();
-        let mut notices = Vec::new();
-        if cx.profile.vanilla {
-            notices.push(Notice {
-                text: "The vanilla profile plays without addons or mods.".into(),
-                tone: Tone::Muted,
-                action: None,
-            });
-        } else if !cx.profile.enabled {
-            notices.push(Notice {
-                text: format!("Simplified for Swofty is off in {}.", cx.profile.name),
-                tone: Tone::Warn,
-                action: Some(Button::new(ENABLE, "Turn on")),
-            });
-        }
+        let mods = loaded.order.iter().filter(|(p, _)| p.track.is_none()).count();
+        let on = loaded.enabled().filter(|p| p.track.is_none()).count();
+        let mut notices = notices(cx);
         let exe = cx.game.and_then(|g| g.exe_version());
         let key = cx.game.map(|g| g.build_key());
         let library = Library::new(cx.data_dir);
@@ -622,7 +646,7 @@ impl Addon for Simplified {
                 .find(|(p, _)| p.id == id)
                 .map_or("", |(p, _)| p.name.as_str())
         };
-        let body = if loaded.order.is_empty() {
+        let body = if mods == 0 {
             Body::Empty {
                 title: "No mods yet".into(),
                 text: "Drop a mod on the window, or import its zip, 7z, rar or folder. Mods made with Simplified Studio import too."
@@ -635,6 +659,7 @@ impl Addon for Simplified {
                     .order
                     .iter()
                     .zip(&summaries)
+                    .filter(|((p, _), _)| p.track.is_none())
                     .map(|((p, on), d)| {
                         let shown = Shown {
                             on: *on,
@@ -661,8 +686,7 @@ impl Addon for Simplified {
         };
         Ok(View {
             subtitle: format!(
-                "{} in library · {on} on in {} · lower in the list wins",
-                loaded.order.len(),
+                "{mods} in library · {on} on in {} · lower in the list wins",
                 cx.profile.name
             ),
             actions: vec![import_button(false)],
@@ -674,8 +698,14 @@ impl Addon for Simplified {
     }
 
     fn event(&self, cx: &Cx, section: &str, event: Event) -> Result<Effect> {
-        if section != SECTION {
-            return Err(Error::NoSection(section.into()));
+        match section {
+            SECTION => {}
+            tracks::SECTION => {
+                if let Some(effect) = tracks::event(cx, event.clone())? {
+                    return Ok(effect);
+                }
+            }
+            _ => return Err(Error::NoSection(section.into())),
         }
         match event {
             Event::Toggle { id, on } => {
@@ -686,7 +716,7 @@ impl Addon for Simplified {
             }
             Event::Move { row, to } => {
                 let mut loaded = Loaded::read(cx)?;
-                loaded.move_to(&row, to)?;
+                loaded.move_among_mods(&row, to)?;
                 loaded.save(cx)?;
                 Ok(Effect::Reload)
             }
@@ -704,12 +734,10 @@ impl Addon for Simplified {
                 }
                 Ok(Effect::Reload)
             }
-            Event::Click { id } if id.starts_with(SHOW) => {
-                let dir = Library::new(cx.data_dir)
-                    .dir(&id[SHOW.len()..])
-                    .join(library::FILES);
-                Ok(Effect::Open(dir))
-            }
+            Event::Click { id } if id.starts_with(SHOW) => Ok(Effect::Open(tracks::files_dir(
+                &Library::new(cx.data_dir),
+                &id[SHOW.len()..],
+            ))),
             Event::Click { id } if id.starts_with(REMOVE) => {
                 let p = Library::new(cx.data_dir).remove(&id[REMOVE.len()..])?;
                 if !cx.profile.vanilla {
