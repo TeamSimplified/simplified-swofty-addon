@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "teamsimplified.mods",
-  "name": "Simplified for Swofty",
+  "name": "Mod Importer",
   "version": "0.7.0",
   "author": "Team Simplified",
   "description": "The Mod Importer: turns any F1 25 mod, from a zip, 7z, rar, .serps or folder, into a Swofty addon, including mods made with Simplified Studio and track zips",
@@ -32,6 +32,7 @@
     ],
     "build": true,
     "claims": true,
+    "startup": true,
     "commands": [
       {
         "name": "mods",

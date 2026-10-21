@@ -3,7 +3,7 @@
 // stays as the source each addon is made from again.
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use swofty_addon::launcher::{AddonStore, Cx, Progress};
@@ -25,6 +25,8 @@ pub struct Made {
     pub category: Option<Category>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kinds: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -34,19 +36,36 @@ pub struct Made {
 pub type Report<'a> = &'a mut dyn FnMut(f32, &str);
 
 pub trait Convert {
-    fn convert(&self, cx: &Cx, library: &Library, p: &Package, out: &Path, progress: Report) -> Result<Made>;
+    fn convert(
+        &self,
+        cx: &Cx,
+        library: &Library,
+        p: &Package,
+        id: &str,
+        out: &Path,
+        progress: Report,
+    ) -> Result<Made>;
 }
 
 pub struct Converter;
 
 impl Convert for Converter {
-    fn convert(&self, cx: &Cx, library: &Library, p: &Package, out: &Path, progress: Report) -> Result<Made> {
-        let c = crate::convert::convert(library, p, cx.game, out, progress)?;
+    fn convert(
+        &self,
+        cx: &Cx,
+        library: &Library,
+        p: &Package,
+        id: &str,
+        out: &Path,
+        progress: Report,
+    ) -> Result<Made> {
+        let c = crate::convert::convert_to(library, p, id, cx.game, out, progress)?;
         Ok(Made {
             id: c.id,
             name: c.name,
             category: Some(c.category),
             kinds: c.kinds.into_iter().map(|k| kind(k).into()).collect(),
+            summary: c.summary,
             warnings: c
                 .report
                 .iter()
@@ -65,6 +84,7 @@ fn kind(k: Kind) -> &'static str {
     match k {
         Kind::Database => "Database",
         Kind::Erp => "Archives",
+        Kind::Text => "Text",
         Kind::Ui => "UI",
         Kind::Files => "Files",
         Kind::Native => "Code",
@@ -99,6 +119,33 @@ pub struct Last {
     pub mods: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<Variants>,
+}
+
+// Parts of one mod that write mostly the same things: alternatives, all installed
+// and only `on` turned on.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Variants {
+    pub of: String,
+    pub mods: Vec<String>,
+    pub on: String,
+}
+
+impl Variants {
+    pub fn line(&self, record: &Record) -> String {
+        let on = record
+            .mods
+            .get(&self.on)
+            .and_then(|e| e.made.as_ref())
+            .map_or(self.on.as_str(), |m| m.name.as_str());
+        let on = on.strip_suffix(&format!(" — {}", self.of)).unwrap_or(on);
+        format!(
+            "{}: {} variants installed as addons; {on} is on. Pick another on Addons.",
+            self.of,
+            self.mods.len()
+        )
+    }
 }
 
 impl Record {
@@ -198,7 +245,10 @@ fn convert_one(
             std::fs::remove_dir_all(&out).map_err(io_err(&out))?;
         }
         std::fs::create_dir_all(&out).map_err(io_err(&out))?;
-        let mut made = conv.convert(cx, library, p, &out, progress)?;
+        let id = record
+            .addon(&p.id)
+            .map_or_else(|| crate::convert::addon_id(p), |m| m.id.clone());
+        let mut made = conv.convert(cx, library, p, &id, &out, progress)?;
         made.id = addons.install(&out)?.id;
         Ok(made)
     })();
@@ -245,9 +295,23 @@ fn place(cx: &Cx, addons: &dyn AddonStore, record: &Record) -> Result<Vec<String
     Ok(lines)
 }
 
-// The active profile's addon ids in load order, from the launcher's profile file
-// two folders above this addon's data folder.
-fn profile_order(cx: &Cx) -> Option<Vec<String>> {
+// The active profile's addon ids in load order, from each addon's position; a
+// launcher before 1.3.0 gives none, and its profile file two folders above this
+// addon's data folder is read instead.
+fn profile_order(cx: &Cx, addons: &dyn AddonStore) -> Option<Vec<String>> {
+    let placed: Vec<(usize, String)> = addons
+        .list()
+        .ok()?
+        .into_iter()
+        .filter_map(|a| Some((a.position?, a.id)))
+        .collect();
+    if let Some(len) = placed.iter().map(|(at, _)| at + 1).max() {
+        let mut order = vec![String::new(); len];
+        for (at, id) in placed {
+            order[at] = id;
+        }
+        return Some(order);
+    }
     let path = cx
         .data_dir
         .parent()?
@@ -264,7 +328,7 @@ fn profile_order(cx: &Cx) -> Option<Vec<String>> {
 // Set in order, the addons are already in mod order at the end of the list, which
 // is where they stay on a launcher without move_addon.
 fn settle(cx: &Cx, addons: &dyn AddonStore, record: &Record, mods: &[Slot], placed: &[String]) {
-    let Some(mut order) = profile_order(cx) else {
+    let Some(mut order) = profile_order(cx, addons) else {
         return;
     };
     for id in placed {
@@ -306,13 +370,61 @@ fn hand_over(cx: &Cx, id: &str) -> Result<()> {
 // Converts each library mod that has no addon yet, then hands the profile's mods
 // over to their addons. Runs again for each profile, converting nothing twice.
 pub fn migrate(cx: &Cx, conv: &dyn Convert, progress: &dyn Progress) -> Result<Vec<String>> {
-    Ok(migrated(cx, conv, progress)?.0)
+    Ok(migrated(cx, conv, progress, None)?.lines)
 }
 
-fn migrated(cx: &Cx, conv: &dyn Convert, progress: &dyn Progress) -> Result<(Vec<String>, Vec<Package>)> {
+// The launcher's budget for an event is 300 seconds. A startup conversion starts no
+// mod it expects to end past this, leaving the rest for the next start.
+pub const BUDGET: Duration = Duration::from_secs(270);
+const BYTES_PER_SEC: u64 = 40 << 20;
+
+// The startup event: converts what is pending within the budget, and says so.
+pub fn startup(
+    cx: &Cx,
+    conv: &dyn Convert,
+    progress: &dyn Progress,
+    budget: Duration,
+) -> Result<Option<String>> {
+    if cx.addons().is_none() || !pending(cx, &Record::load(cx.data_dir)?)?.any() {
+        return Ok(None);
+    }
+    let m = migrated(cx, conv, progress, Some(budget))?;
+    let mut parts = Vec::new();
+    match m.converted.len() {
+        0 => {}
+        1 => parts.push("Converted 1 mod into an addon".to_owned()),
+        n => parts.push(format!("Converted {n} mods into addons")),
+    }
+    if !m.failed.is_empty() {
+        parts.push(format!("not converted: {}", m.failed.join(", ")));
+    }
+    if m.left > 0 {
+        parts.push(format!(
+            "{} more convert at the next start, or with Convert now on the Mod Importer",
+            m.left
+        ));
+    }
+    Ok((!parts.is_empty()).then(|| parts.join("; ")))
+}
+
+#[derive(Default)]
+struct Migrated {
+    lines: Vec<String>,
+    converted: Vec<Package>,
+    failed: Vec<String>,
+    left: usize,
+}
+
+fn migrated(
+    cx: &Cx,
+    conv: &dyn Convert,
+    progress: &dyn Progress,
+    budget: Option<Duration>,
+) -> Result<Migrated> {
     let Some(addons) = cx.addons() else {
-        return Ok(Default::default());
+        return Ok(Migrated::default());
     };
+    let started = Instant::now();
     let library = Library::new(cx.data_dir);
     let mut record = Record::load(cx.data_dir)?;
     let todo: Vec<Package> = Loaded::read(cx)?
@@ -321,45 +433,60 @@ fn migrated(cx: &Cx, conv: &dyn Convert, progress: &dyn Progress) -> Result<(Vec
         .map(|(p, _)| p)
         .filter(|p| !record.mods.contains_key(&p.id) && convertible(cx, p))
         .collect();
-    let mut lines = Vec::new();
-    let mut converted = Vec::new();
-    let (mut done, mut failed) = (0, 0);
+    let mut m = Migrated::default();
     let total = todo.len() as f32;
+    let mut tried = Vec::new();
     for (i, p) in todo.iter().enumerate() {
+        let expected = Duration::from_secs(p.size() / BYTES_PER_SEC);
+        if budget.is_some_and(|b| !tried.is_empty() && started.elapsed() + expected > b) {
+            m.left = todo.len() - i;
+            break;
+        }
+        tried.push(p.id.clone());
         let mut report = |f: f32, text: &str| {
             progress.report((i as f32 + f) / total, &format!("Converting {}: {text}", p.name))
         };
         match convert_one(cx, addons, conv, &library, p, &mut record, &mut report) {
-            Ok(_) => {
-                done += 1;
-                converted.push(p.clone());
-            }
+            Ok(_) => m.converted.push(p.clone()),
             Err(e) => {
-                failed += 1;
-                lines.push(format!("{} was not converted: {e}", p.name));
+                m.failed.push(p.name.clone());
+                m.lines.push(format!("{} was not converted: {e}", p.name));
             }
         }
         record.save(cx.data_dir)?;
     }
-    if done > 0 {
-        lines.insert(0, format!("Converted {done} mod(s) from the library into addons"));
+    if !m.converted.is_empty() {
+        m.lines.insert(
+            0,
+            format!(
+                "Converted {} from the library into addons",
+                crate::plural(m.converted.len(), "mod", "mods")
+            ),
+        );
     }
-    if failed > 0 {
-        lines.push(format!(
-            "{failed} mod(s) still load through Simplified for Swofty's build step"
+    if !m.failed.is_empty() {
+        m.lines.push(format!(
+            "{} still {} through the Mod Importer's build step",
+            crate::plural(m.failed.len(), "mod", "mods"),
+            if m.failed.len() == 1 { "loads" } else { "load" }
         ));
     }
-    if !todo.is_empty() {
+    if m.left > 0 {
+        m.lines.push(format!(
+            "{} more convert at the next start",
+            crate::plural(m.left, "mod", "mods")
+        ));
+    }
+    if !tried.is_empty() {
         record.last = Some(Last {
             at: now(),
-            files: Vec::new(),
-            mods: todo.iter().map(|p| p.id.clone()).collect(),
-            errors: Vec::new(),
+            mods: tried,
+            ..Last::default()
         });
         record.save(cx.data_dir)?;
     }
-    lines.extend(place(cx, addons, &record)?);
-    Ok((lines, converted))
+    m.lines.extend(place(cx, addons, &record)?);
+    Ok(m)
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -367,10 +494,15 @@ pub struct Done {
     pub lines: Vec<String>,
     pub show: Option<String>,
     pub failed: bool,
+    pub variants: bool,
 }
 
 pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Convert) -> Result<Done> {
-    let (lines, fresh) = migrated(cx, conv, progress)?;
+    let Migrated {
+        lines,
+        converted: fresh,
+        ..
+    } = migrated(cx, conv, progress, None)?;
     let mut done = Done {
         lines,
         ..Done::default()
@@ -397,9 +529,12 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
             }
         };
         if imported.refused > 0 {
-            done.lines
-                .push(format!("{file}: {} unsafe path(s) left out", imported.refused));
+            done.lines.push(format!(
+                "{file}: {} left out",
+                crate::plural(imported.refused, "unsafe path", "unsafe paths")
+            ));
         }
+        let groups = variants(cx, &library, &record, &imported.packages);
         for p in &imported.packages {
             progress.report((i as f32 + 0.5) / total, &format!("Converting {}", p.name));
             if let Some(Err(e)) = cx.game.map(|g| library.diff(p, g)) {
@@ -430,17 +565,23 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
                 (true, Some(made)) => Ok(made.clone()),
                 _ => convert_one(cx, addons, conv, &library, p, &mut record, &mut report),
             };
+            let group = groups.iter().find(|g| g.mods.contains(&p.id));
+            let on = group.is_none_or(|g| g.on == p.id);
             match made {
                 Ok(made) => {
-                    done.lines
-                        .push(format!("{} is now the addon {}", p.name, made.name));
+                    if group.is_none() {
+                        done.lines
+                            .push(format!("{} is now the addon {}", p.name, made.name));
+                    }
                     if !cx.profile.vanilla {
-                        if let Err(e) = addons.set_enabled(&made.id, true) {
-                            done.lines.push(format!("{}: not turned on: {e}", made.name));
+                        if let Err(e) = addons.set_enabled(&made.id, on) {
+                            done.lines.push(format!("{}: not switched: {e}", made.name));
                         }
                         hand_over(cx, &p.id)?;
                     }
-                    done.show.get_or_insert(made.id);
+                    if on {
+                        done.show.get_or_insert(made.id);
+                    }
                 }
                 Err(e) => {
                     done.lines.push(format!("{} was not converted: {e}", p.name));
@@ -449,6 +590,11 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
                     }
                 }
             }
+        }
+        for g in groups {
+            done.variants = true;
+            done.lines.push(g.line(&record));
+            last.variants.push(g);
         }
     }
     if !kept.is_empty() && !cx.profile.vanilla {
@@ -463,6 +609,89 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
     record.last = Some(last);
     record.save(cx.data_dir)?;
     Ok(done)
+}
+
+const OVERLAP: f64 = 0.5;
+
+// Parts of one mod that write mostly the same records, resources, text and files
+// are alternatives. The one on is the one on before a re-import, else the first
+// named Default or Standard, else the first.
+fn variants(cx: &Cx, library: &Library, record: &Record, packages: &[Package]) -> Vec<Variants> {
+    let Some(game) = cx.game.filter(|_| packages.len() > 1) else {
+        return Vec::new();
+    };
+    let targets: Vec<HashSet<String>> = packages
+        .iter()
+        .map(|p| match p.track {
+            Some(_) => HashSet::new(),
+            None => library
+                .diff(p, game)
+                .map(|d| crate::merge::targets(&d).into_iter().collect())
+                .unwrap_or_default(),
+        })
+        .collect();
+    let mut group: Vec<usize> = (0..packages.len()).collect();
+    fn root(group: &mut [usize], mut i: usize) -> usize {
+        while group[i] != i {
+            group[i] = group[group[i]];
+            i = group[i];
+        }
+        i
+    }
+    for a in 0..packages.len() {
+        for b in a + 1..packages.len() {
+            let (x, y) = (&targets[a], &targets[b]);
+            let shared = x.intersection(y).count();
+            let all = x.len() + y.len() - shared;
+            if shared > 0 && shared as f64 >= OVERLAP * all as f64 {
+                let (ra, rb) = (root(&mut group, a), root(&mut group, b));
+                group[rb.max(ra)] = ra.min(rb);
+            }
+        }
+    }
+    let mut clusters: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..packages.len() {
+        let r = root(&mut group, i);
+        clusters.entry(r).or_default().push(i);
+    }
+    let enabled: HashSet<String> = cx
+        .addons()
+        .and_then(|a| a.list().ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| a.enabled)
+        .map(|a| a.id)
+        .collect();
+    let standard = |p: &Package| {
+        let name = p.part.as_ref().map_or(p.name.as_str(), |part| part.name.as_str());
+        name.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|w| w == "default" || w == "standard")
+    };
+    clusters
+        .into_values()
+        .filter(|c| c.len() > 1)
+        .map(|c| {
+            let was_on = c.iter().find(|&&i| {
+                record
+                    .addon(&packages[i].id)
+                    .is_some_and(|m| enabled.contains(&m.id))
+            });
+            let on = was_on
+                .or_else(|| c.iter().find(|&&i| standard(&packages[i])))
+                .unwrap_or(&c[0]);
+            let first = &packages[c[0]];
+            Variants {
+                of: first
+                    .name
+                    .rsplit_once(" — ")
+                    .map_or(first.name.as_str(), |(_, of)| of)
+                    .to_owned(),
+                mods: c.iter().map(|&i| packages[i].id.clone()).collect(),
+                on: packages[*on].id.clone(),
+            }
+        })
+        .collect()
 }
 
 // Makes a library mod's addon again from the library copy, replacing the
@@ -481,7 +710,7 @@ pub fn reimport(cx: &Cx, id: &str, conv: &dyn Convert) -> Result<Done> {
         at: now(),
         files: vec![p.source.clone()],
         mods: vec![p.id.clone()],
-        errors: Vec::new(),
+        ..Last::default()
     });
     record.save(cx.data_dir)?;
     let made = made?;
@@ -496,7 +725,7 @@ pub fn reimport(cx: &Cx, id: &str, conv: &dyn Convert) -> Result<Done> {
     Ok(Done {
         lines,
         show: Some(made.id),
-        failed: false,
+        ..Done::default()
     })
 }
 
@@ -527,11 +756,9 @@ mod tests {
     }
 
     // The launcher's addons: installed folders under `root`, shared by every
-    // profile, and each profile's addon list in load order, as core keeps it.
-    // The launcher's addons: installed folders under `root`, shared by every
-    // profile, and each profile's addon list in load order, written to the
-    // profile file as core keeps it. Without `moves`, it is a launcher that
-    // can't reorder addons.
+    // profile, and each profile's addon list in load order. With `positions` each
+    // addon says its place in that list; without, the list is only in the profile
+    // file, as core kept it before 1.3.0. Without `moves`, it can't reorder addons.
     struct Addons<'a> {
         root: &'a Path,
         profiles: &'a Path,
@@ -539,10 +766,14 @@ mod tests {
         profile: String,
         calls: &'a Mutex<Vec<String>>,
         moves: bool,
+        positions: bool,
     }
 
     impl Addons<'_> {
         fn write(&self, list: &[(String, bool)]) {
+            if self.positions {
+                return;
+            }
             let addons: Vec<Value> = list
                 .iter()
                 .map(|(id, on)| json!({"id": id, "enabled": on}))
@@ -561,15 +792,27 @@ mod tests {
         fn list(&self) -> Result<Vec<AddonInfo>> {
             let order = self.order.lock().unwrap();
             let on = order.get(&self.profile).cloned().unwrap_or_default();
+            let mut ids: Vec<String> = std::fs::read_dir(self.root)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|d| d.file_name().to_string_lossy().into_owned())
+                .collect();
+            let listed: Vec<String> = on
+                .iter()
+                .map(|(a, _)| a.clone())
+                .filter(|a| !ids.contains(a))
+                .collect();
+            ids.extend(listed);
             let mut out = Vec::new();
-            for dir in std::fs::read_dir(self.root).into_iter().flatten().flatten() {
-                let id = dir.file_name().to_string_lossy().into_owned();
+            for id in ids {
                 out.push(AddonInfo {
                     enabled: on.iter().any(|(a, e)| *a == id && *e),
+                    position: on.iter().position(|(a, _)| *a == id).filter(|_| self.positions),
                     name: id.clone(),
                     version: "1.0.0".into(),
                     author: "Team Simplified".into(),
-                    dir: dir.path(),
+                    dir: self.root.join(&id),
                     id,
                 });
             }
@@ -631,7 +874,7 @@ mod tests {
     }
 
     impl Convert for Fake {
-        fn convert(&self, _: &Cx, _: &Library, p: &Package, out: &Path, _: Report) -> Result<Made> {
+        fn convert(&self, _: &Cx, _: &Library, p: &Package, _: &str, out: &Path, _: Report) -> Result<Made> {
             self.made.lock().unwrap().push(p.id.clone());
             if self.refuse.contains(&p.id.as_str()) {
                 return Err(err("its archives could not be read".into()));
@@ -645,6 +888,7 @@ mod tests {
                 name: p.name.clone(),
                 category: Some(Category::Liveries),
                 kinds: vec!["archives".into()],
+                summary: "1 archive resource".into(),
                 lines: vec![format!("2025_asset_groups/{}.erp: 1 resource", p.id)],
                 warnings: Vec::new(),
             })
@@ -656,6 +900,7 @@ mod tests {
         installed: PathBuf,
         profiles_dir: PathBuf,
         old: bool,
+        positions: bool,
         data: PathBuf,
         order: Mutex<BTreeMap<String, Vec<(String, bool)>>>,
         calls: Mutex<Vec<String>>,
@@ -673,6 +918,7 @@ mod tests {
                 installed: root.join("addons"),
                 profiles_dir: root.join("profiles"),
                 old: false,
+                positions: true,
                 root,
                 order: Mutex::default(),
                 calls: Mutex::default(),
@@ -702,6 +948,7 @@ mod tests {
                 profile: profile.into(),
                 calls: &self.calls,
                 moves: !self.old,
+                positions: self.positions && !self.old,
             }
         }
 
@@ -817,7 +1064,7 @@ mod tests {
         .unwrap();
         assert_eq!(todo, Pending { convert: 4, place: 0 });
         let lines = with(&host, "one", |cx| migrate(cx, &conv, &NoProgress)).unwrap();
-        assert_eq!(lines[0], "Converted 3 mod(s) from the library into addons");
+        assert_eq!(lines[0], "Converted 3 mods from the library into addons");
         assert!(
             lines
                 .iter()
@@ -850,6 +1097,10 @@ mod tests {
             ]
         );
         assert_eq!(host.order("one")[3], on("a", false));
+        assert!(
+            !host.profiles_dir.exists(),
+            "the order comes from the addons' positions"
+        );
         let handed = with(&host, "one", handed_over).unwrap();
         assert_eq!(
             handed,
@@ -933,6 +1184,181 @@ mod tests {
         std::fs::remove_dir_all(&host.root).ok();
     }
 
+    #[test]
+    fn a_launcher_without_positions_is_read_from_its_profile_file() {
+        let mut host = Host::new("file", &["one"]);
+        host.positions = false;
+        let library = Library::new(&host.data);
+        for name in ["a", "b"] {
+            library.import(&host.mod_dir(name), None, &mut |_, _| {}).unwrap();
+        }
+        let mods = vec![slot("b", true), slot("a", true)];
+        with(&host, "one", |cx| {
+            cx.set_state(&State {
+                mods,
+                addons: Vec::new(),
+            })
+        })
+        .unwrap();
+        host.profile("one", &["swofty.core", ID, "dbedit.pit"]);
+        with(&host, "one", |cx| migrate(cx, &Fake::default(), &NoProgress)).unwrap();
+        assert_eq!(
+            host.ids("one"),
+            ["swofty.core", ID, "imported.b", "imported.a", "dbedit.pit"]
+        );
+        assert!(host.profiles_dir.join("one.json").is_file());
+        std::fs::remove_dir_all(&host.root).ok();
+    }
+
+    fn library_of(host: &Host, names: &[&str], mods: Vec<Slot>) -> Library {
+        let library = Library::new(&host.data);
+        for name in names {
+            library.import(&host.mod_dir(name), None, &mut |_, _| {}).unwrap();
+        }
+        with(host, "one", |cx| {
+            cx.set_state(&State {
+                mods,
+                addons: Vec::new(),
+            })
+        })
+        .unwrap();
+        host.profile("one", &["swofty.core", ID]);
+        library
+    }
+
+    #[test]
+    fn a_startup_converts_what_is_pending_once() {
+        let host = Host::new("startup", &["one"]);
+        library_of(
+            &host,
+            &["a", "b", "c"],
+            vec![slot("a", true), slot("b", false), slot("c", true)],
+        );
+        let conv = Fake {
+            refuse: vec!["c"],
+            ..Fake::default()
+        };
+        let addon = Simplified::new();
+        let startup = || {
+            with(&host, "one", |cx| {
+                addon.event_with(cx, SECTION, Event::Startup {}, &conv)
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            startup(),
+            Effect::Notice("Converted 2 mods into addons; not converted: c".into())
+        );
+        assert_eq!(
+            host.order("one"),
+            [
+                ("swofty.core".to_owned(), true),
+                (ID.to_owned(), true),
+                on("a", true),
+                on("b", false)
+            ]
+        );
+        assert_eq!(startup(), Effect::None);
+        assert_eq!(conv.made.lock().unwrap().len(), 3, "nothing converts twice");
+        std::fs::remove_dir_all(&host.root).ok();
+    }
+
+    #[test]
+    fn a_startup_leaves_what_does_not_fit_its_budget_for_the_next() {
+        let host = Host::new("budget", &["one"]);
+        library_of(&host, &["a", "b"], vec![slot("a", true), slot("b", true)]);
+        let conv = Fake::default();
+        let start = || with(&host, "one", |cx| startup(cx, &conv, &NoProgress, Duration::ZERO)).unwrap();
+        assert_eq!(
+            start().as_deref(),
+            Some(
+                "Converted 1 mod into an addon; 1 more convert at the next start, or with Convert now on the Mod Importer"
+            )
+        );
+        assert_eq!(start().as_deref(), Some("Converted 1 mod into an addon"));
+        assert_eq!(start(), None);
+        assert_eq!(host.ids("one")[2..], [on("a", true).0, on("b", true).0]);
+        std::fs::remove_dir_all(&host.root).ok();
+    }
+
+    #[test]
+    fn parts_that_write_the_same_things_are_variants_with_one_on() {
+        let host = Host::new("variants", &["one"]);
+        let src = host.root.join("src").join("Pack");
+        for rel in [
+            "Pack v1.0/Extra/F1 25/2025_asset_groups/extra.erp",
+            "Pack v1.0/Bright Grip/Season A/F1 25/2025_asset_groups/tyres.erp",
+            "Pack v1.0/Standard Grip/Season B/F1 25/2025_asset_groups/tyres.erp",
+        ] {
+            std::fs::create_dir_all(src.join(rel).parent().unwrap()).unwrap();
+            std::fs::write(src.join(rel), "erp").unwrap();
+        }
+        std::fs::write(src.join(crate::serps::FILE), r#"{"mod_name":"Pack"}"#).unwrap();
+        let (extra, a, b) = (
+            "imported.pack.extra",
+            "imported.pack.season-a-bright-grip",
+            "imported.pack.season-b-standard-grip",
+        );
+        let addon = Simplified::new();
+        let pick = || {
+            with(&host, "one", |cx| {
+                let pick = Event::Picked {
+                    id: IMPORT.into(),
+                    paths: vec![src.clone()],
+                };
+                addon.event_with(cx, SECTION, pick, &Fake::default())
+            })
+            .unwrap()
+        };
+        let line =
+            |on: &str| format!("Pack: 2 variants installed as addons; {on} is on. Pick another on Addons.");
+        let effect = pick();
+        assert!(
+            matches!(&effect, Effect::Notice(t) if t.ends_with(&line("Season B · Standard Grip"))),
+            "{effect:?}"
+        );
+        assert_eq!(
+            host.calls(),
+            [
+                format!("install {extra}"),
+                format!("on {extra}"),
+                format!("install {a}"),
+                format!("off {a}"),
+                format!("install {b}"),
+                format!("on {b}"),
+            ]
+        );
+        let record = Record::load(&host.data).unwrap();
+        let last = record.last.as_ref().unwrap();
+        assert_eq!(
+            last.variants,
+            [Variants {
+                of: "Pack".into(),
+                mods: vec![
+                    "pack.season-a-bright-grip".into(),
+                    "pack.season-b-standard-grip".into()
+                ],
+                on: "pack.season-b-standard-grip".into(),
+            }]
+        );
+        assert_eq!(
+            record.addon("pack.season-a-bright-grip").unwrap().name,
+            "Season A · Bright Grip — Pack"
+        );
+
+        let addons = host.addons("one");
+        addons.set_enabled(a, true).unwrap();
+        addons.set_enabled(b, false).unwrap();
+        host.calls();
+        let effect = pick();
+        assert!(
+            matches!(&effect, Effect::Notice(t) if t.ends_with(&line("Season A · Bright Grip"))),
+            "{effect:?}"
+        );
+        assert!(host.calls().contains(&format!("off {b}")), "the pick is kept");
+        std::fs::remove_dir_all(&host.root).ok();
+    }
+
     fn cards(view: &swofty_addon::view::View) -> Vec<String> {
         match &view.body {
             Body::Blocks(blocks) => blocks
@@ -945,6 +1371,34 @@ mod tests {
                 .collect(),
             _ => Vec::new(),
         }
+    }
+
+    fn texts(blocks: &[Block], out: &mut Vec<String>) {
+        for b in blocks {
+            match b {
+                Block::Text { text, .. } | Block::Label(text) => out.push(text.clone()),
+                Block::Names { label, items } => {
+                    out.push(label.clone());
+                    out.extend(items.iter().cloned());
+                }
+                Block::Buttons(buttons) => out.extend(buttons.iter().map(|b| format!("[{}]", b.label))),
+                Block::Card(c) => {
+                    out.extend(c.title.iter().chain(&c.subtitle).cloned());
+                    out.extend(c.buttons.iter().map(|b| format!("[{}]", b.label)));
+                    texts(&c.blocks, out);
+                }
+                Block::Grid(g) => texts(&g.blocks, out),
+                _ => {}
+            }
+        }
+    }
+
+    fn all_text(view: &swofty_addon::view::View) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Body::Blocks(blocks) = &view.body {
+            texts(blocks, &mut out);
+        }
+        out
     }
 
     #[test]
@@ -992,6 +1446,27 @@ mod tests {
             ]
         );
         assert!(view.notices.is_empty(), "{:?}", view.notices);
+        let text = all_text(&view);
+        assert!(
+            text.contains(&"Became the addon livery · Liveries · 1 archive resource".to_owned()),
+            "{text:?}"
+        );
+        assert!(!text.iter().any(|t| t.contains("2025_asset_groups")), "{text:?}");
+        assert!(text.contains(&"[Details]".to_owned()));
+        assert_eq!(view.footer, None);
+        assert_eq!(text.last().map(String::as_str), Some(page::FOOTER));
+        let details = Event::Click {
+            id: page::DETAILS.into(),
+        };
+        with(&host, "one", |cx| {
+            addon.event_with(cx, SECTION, details.clone(), &conv)
+        })
+        .unwrap();
+        let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
+        let text = all_text(&view);
+        assert!(text.contains(&"2025_asset_groups/livery.erp: 1 resource".to_owned()));
+        assert!(text.contains(&"[Hide details]".to_owned()));
+        with(&host, "one", |cx| addon.event_with(cx, SECTION, details, &conv)).unwrap();
 
         let effect = with(&host, "one", |cx| {
             addon.event_with(cx, SECTION, pick(vec![livery.clone()]), &conv)
@@ -1035,7 +1510,15 @@ mod tests {
         .unwrap();
         assert_eq!(effect, Effect::Reload);
         let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
-        assert!(cards(&view).contains(&"Team Simplified".to_owned()));
+        assert_eq!(
+            cards(&view)[..3],
+            ["Mod Importer", "Import a mod", "Team Simplified"],
+            "the panel opens below the import card"
+        );
+        assert!(
+            !all_text(&view).iter().any(|t| t.contains("https://")),
+            "links show once, as buttons"
+        );
         let effect = with(&host, "one", |cx| {
             addon.event_with(cx, SECTION, click(format!("{}suite", page::LINK)), &conv)
         })
@@ -1043,6 +1526,35 @@ mod tests {
         assert_eq!(
             effect,
             Effect::Open("https://github.com/TeamSimplified/simplified-suite".into())
+        );
+        std::fs::remove_dir_all(&host.root).ok();
+    }
+
+    #[test]
+    fn vanilla_shows_the_addons_made_before_without_importing() {
+        let mut host = Host::new("vanilla", &["one", "vanilla"]);
+        host.profiles.get_mut("vanilla").unwrap().vanilla = true;
+        let addon = Simplified::new();
+        let pick = Event::Picked {
+            id: IMPORT.into(),
+            paths: vec![host.mod_dir("livery")],
+        };
+        with(&host, "one", |cx| {
+            addon.event_with(cx, SECTION, pick, &Fake::default())
+        })
+        .unwrap();
+        let view = with(&host, "vanilla", |cx| addon.view(cx, SECTION)).unwrap();
+        assert_eq!(
+            cards(&view),
+            ["Mod Importer", "Last import", "Converted from your library"]
+        );
+        let text = all_text(&view);
+        assert!(text.contains(&"[Show in Addons]".to_owned()));
+        assert!(!text.contains(&"[Re-import]".to_owned()), "{text:?}");
+        assert!(
+            view.notices[0]
+                .text
+                .starts_with("The vanilla profile plays without")
         );
         std::fs::remove_dir_all(&host.root).ok();
     }
@@ -1156,7 +1668,7 @@ mod tests {
         })
         .unwrap();
         assert!(
-            matches!(&effect, Effect::Notice(t) if t.starts_with("Converted 1 mod(s)")),
+            matches!(&effect, Effect::Notice(t) if t.starts_with("Converted 1 mod from")),
             "{effect:?}"
         );
         assert_eq!(host.calls(), [format!("install {id}"), format!("on {id}")]);
@@ -1164,7 +1676,10 @@ mod tests {
         let manifest =
             swofty_addon::manifest::AddonManifest::parse(&std::fs::read_to_string(installed).unwrap());
         assert_eq!(manifest.unwrap().id, id);
-        let effect = with(&host, "one", |cx| addon.event_with(cx, SECTION, pick, &Converter)).unwrap();
+        let effect = with(&host, "one", |cx| {
+            addon.event_with(cx, SECTION, pick.clone(), &Converter)
+        })
+        .unwrap();
         assert_eq!(effect, Effect::ShowAddon(id.clone()));
         assert_eq!(host.calls(), [format!("install {id}"), format!("on {id}")]);
         let made = Record::load(&host.data)
@@ -1173,6 +1688,25 @@ mod tests {
             .cloned()
             .unwrap();
         assert!(!made.lines.is_empty(), "the report is kept: {made:?}");
+
+        let mut record = Record::load(&host.data).unwrap();
+        let old = "mod.you.helmet.from-an-older-importer";
+        record
+            .mods
+            .get_mut("you.helmet")
+            .unwrap()
+            .made
+            .as_mut()
+            .unwrap()
+            .id = old.into();
+        record.save(&host.data).unwrap();
+        let effect = with(&host, "one", |cx| addon.event_with(cx, SECTION, pick, &Converter)).unwrap();
+        assert_eq!(effect, Effect::ShowAddon(old.into()));
+        assert_eq!(
+            host.calls(),
+            [format!("install {old}"), format!("on {old}")],
+            "a mod converted before keeps its addon's id"
+        );
         std::fs::remove_dir_all(&host.root).ok();
     }
 }

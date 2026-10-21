@@ -128,6 +128,7 @@ pub struct Slot {
 pub struct Simplified {
     manifest: AddonManifest,
     open: Mutex<bool>,
+    details: Mutex<bool>,
 }
 
 impl Default for Simplified {
@@ -141,6 +142,7 @@ impl Simplified {
         Self {
             manifest: AddonManifest::parse(MANIFEST).expect("the built-in manifest is valid"),
             open: Mutex::new(false),
+            details: Mutex::new(false),
         }
     }
 
@@ -211,14 +213,14 @@ impl Loaded {
 fn notices(cx: &Cx) -> Vec<Notice> {
     if cx.profile.vanilla {
         return vec![Notice {
-            text: "The vanilla profile plays without addons or mods.".into(),
+            text: "The vanilla profile plays without addons or mods. Switch to another profile to import mods; the addons made before are listed here.".into(),
             tone: Tone::Muted,
             action: None,
         }];
     }
     if !cx.profile.enabled {
         return vec![Notice {
-            text: format!("Simplified for Swofty is off in {}.", cx.profile.name),
+            text: format!("The Mod Importer is off in {}.", cx.profile.name),
             tone: Tone::Warn,
             action: Some(Button::new(ENABLE, "Turn on")),
         }];
@@ -234,17 +236,22 @@ fn subtitle(p: &Package) -> String {
         .join(" · ")
 }
 
+pub(crate) fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 fn date(secs: u64) -> String {
-    let days = (secs / 86_400) as i64 + 719_468;
-    let era = days.div_euclid(146_097);
-    let doe = days.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year}-{month:02}-{day:02}")
+    stamp(secs, &chrono::Local)
+}
+
+fn stamp<Tz: chrono::TimeZone>(secs: u64, tz: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    tz.timestamp_opt(secs as i64, 0)
+        .single()
+        .map(|t| t.format("%-d %B %Y, %H:%M").to_string())
+        .unwrap_or_default()
 }
 
 impl Addon for Simplified {
@@ -266,7 +273,8 @@ impl Addon for Simplified {
         if section != SECTION {
             return Err(Error::NoSection(section.into()));
         }
-        page::view(cx, *self.open.lock().unwrap_or_else(|e| e.into_inner()))
+        let flag = |m: &Mutex<bool>| *m.lock().unwrap_or_else(|e| e.into_inner());
+        page::view(cx, flag(&self.open), flag(&self.details))
     }
 
     fn event(&self, cx: &Cx, section: &str, event: Event) -> Result<Effect> {
@@ -520,9 +528,21 @@ impl Simplified {
         if section != SECTION {
             return Err(Error::NoSection(section.into()));
         }
-        let mut open = *self.open.lock().unwrap_or_else(|e| e.into_inner());
-        let effect = page::event(cx, event, conv, &mut open)?;
-        *self.open.lock().unwrap_or_else(|e| e.into_inner()) = open;
+        let lock = |m: &Mutex<bool>| *m.lock().unwrap_or_else(|e| e.into_inner());
+        let before = page::Panels {
+            team: lock(&self.open),
+            details: lock(&self.details),
+        };
+        let mut panels = before.clone();
+        let effect = page::event(cx, event, conv, &mut panels)?;
+        for (m, (was, now)) in [
+            (&self.open, (before.team, panels.team)),
+            (&self.details, (before.details, panels.details)),
+        ] {
+            if was != now {
+                *m.lock().unwrap_or_else(|e| e.into_inner()) = now;
+            }
+        }
         Ok(effect.unwrap_or(Effect::None))
     }
 }
@@ -548,6 +568,16 @@ impl Progress for NoProgress {
 #[cfg(test)]
 mod merge_tests {
     use super::*;
+
+    #[test]
+    fn dates_show_in_local_time() {
+        let at = 1_792_629_000;
+        let melbourne = chrono::FixedOffset::east_opt(11 * 3600).unwrap();
+        assert_eq!(stamp(at, &melbourne), "22 October 2026, 11:30");
+        assert_eq!(stamp(at, &chrono::Utc), "22 October 2026, 00:30");
+        assert_eq!(plural(1, "mod", "mods"), "1 mod");
+        assert_eq!(plural(16, "mod", "mods"), "16 mods");
+    }
 
     fn set(item: &str, key: &str, value: &str) -> Op {
         Op {
