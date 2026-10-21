@@ -24,6 +24,7 @@ const LOGO_ARRAY: &str =
 struct Game {
     dir: PathBuf,
     database: Option<PathBuf>,
+    installed: Option<PathBuf>,
 }
 
 impl GameFiles for Game {
@@ -40,8 +41,9 @@ impl GameFiles for Game {
     }
 
     fn original(&self, rel: &str) -> Result<PathBuf> {
-        let path = match (&self.database, rel == DATABASE) {
-            (Some(db), true) => db.clone(),
+        let path = match (&self.database, rel == DATABASE, &self.installed) {
+            (Some(db), true, _) => db.clone(),
+            (_, _, Some(game)) if !self.dir.join(rel).is_file() => game.join(rel),
             _ => self.dir.join(rel),
         };
         match path.is_file() {
@@ -72,6 +74,7 @@ impl Case {
             game: Game {
                 dir: root.join("game"),
                 database: None,
+                installed: None,
             },
             root,
         }
@@ -236,7 +239,7 @@ fn addon_ops(dir: &Path) -> (AddonManifest, Vec<AssetOp>) {
     (m, ops)
 }
 
-type Res = (Vec<u8>, Vec<u8>, Vec<(String, u32, Vec<u8>)>);
+type Res = (Vec<u8>, Vec<u8>, Vec<(String, u32, u8, Vec<u8>)>, [u8; 16]);
 
 #[derive(Debug, Default, PartialEq)]
 struct Applied {
@@ -251,9 +254,9 @@ fn res(r: &Resource) -> Res {
     let fragments = r
         .fragments
         .iter()
-        .map(|f| (f.name(), f.flags, f.data().unwrap()))
+        .map(|f| (f.name(), f.flags, f.compression, f.raw.clone()))
         .collect();
-    (r.kind.to_vec(), r.unk.clone(), fragments)
+    (r.kind.to_vec(), r.unk.clone(), fragments, r.hash)
 }
 
 fn load(path: &Path, uri: &str) -> Res {
@@ -481,7 +484,7 @@ fn archive_changes_become_one_overlay_and_remove_resource_ops() {
     );
     assert_eq!(got.resources[&key(CAR, &uri("old"))], None);
     let paint = got.resources[&key(boot, &uri("paint"))].as_ref().unwrap();
-    assert_eq!(paint.2[1].2, b"a much bigger texture");
+    assert_eq!(paint.2[1].3, b"a much bigger texture");
     let (_, ops) = addon_ops(&out);
     let overlays: Vec<&AssetOp> = ops
         .iter()
@@ -520,7 +523,7 @@ fn a_resource_a_mod_carries_twice_keeps_its_last_copy() {
     let r = got.resources[&(merge::BOOT_ERP.to_owned(), texture_uri.to_owned())]
         .as_ref()
         .unwrap();
-    assert_eq!(r.2[1].2, b"second");
+    assert_eq!(r.2[1].3, b"second");
     let overlay = ErpFile::open(&out.join(overlay_name(0))).unwrap();
     assert_eq!(overlay.erp.resources.len(), 1);
 }
@@ -553,7 +556,7 @@ fn team_logo_arrays_ship_merged_with_the_game_s_arrays() {
     let merged = got.resources[&(merge::BOOT_ERP.to_owned(), image.clone())]
         .as_ref()
         .unwrap();
-    assert_eq!(merged.2[1].2, [[1; 4], [9; 4], [3; 4]].concat());
+    assert_eq!(merged.2[1].3, [[1; 4], [9; 4], [3; 4]].concat());
     assert!(
         got.resources
             .contains_key(&(merge::BOOT_ERP.to_owned(), LOGO_ARRAY.to_owned()))
@@ -721,5 +724,99 @@ fn a_real_database_round_trips_through_the_addon() {
     assert!(reported(
         &c,
         &format!("database: {changed} changed, 1 added, 1 removed")
+    ));
+}
+
+fn installed() -> Option<PathBuf> {
+    let dir = PathBuf::from(std::env::var_os("F1_25_GAME")?);
+    dir.join("F1_25.exe").is_file().then_some(dir)
+}
+
+#[test]
+fn a_mod_of_a_real_archive_round_trips_through_the_overlay() {
+    let Some(game_dir) = installed() else {
+        eprintln!("F1_25_GAME is not set; skipped");
+        return;
+    };
+    let rel = "2025_asset_groups/ui_package/flow_steering_screen.erp";
+    let mut case = Case::new("real-erp");
+    case.game.installed = Some(game_dir.clone());
+    let mut erp = Erp::parse(&std::fs::read(game_dir.join(rel)).unwrap()).unwrap();
+    assert!(erp.resources.len() >= 3, "{rel} has too few resources");
+    let changed = erp.resources[0].name.clone();
+    let mut data = erp.resources[0].fragments[0].data().unwrap();
+    data.extend_from_slice(b"swofty");
+    erp.resources[0].set_fragment(0, &data).unwrap();
+    let mut copy = erp.resources[1].clone();
+    copy.name = "eaid://ui_package/swofty/convert_test.tif".into();
+    erp.resources.push(copy);
+    let removed = erp.resources.remove(erp.resources.len() - 2).name;
+    let p = case.import(&[(rel, erp.to_bytes())], &serps("Steering Screen", "1"));
+    let game: &dyn GameFiles = &case.game;
+    let (c, out) = case.convert(&p, Some(game));
+    let (_, got) = check(&case, &p, &out, None);
+    let boot = merge::BOOT_ERP.to_owned();
+    assert!(got.resources[&(boot.clone(), changed.clone())].is_some());
+    assert!(got.resources[&(boot, "eaid://ui_package/swofty/convert_test.tif".into())].is_some());
+    assert_eq!(got.resources[&(rel.to_owned(), removed)], None);
+    let overlay = Erp::parse(&std::fs::read(out.join(overlay_name(0))).unwrap()).unwrap();
+    assert_eq!(overlay.resources.len(), 2);
+    assert_eq!(
+        res(overlay.find(&changed).unwrap()),
+        res(erp.find(&changed).unwrap())
+    );
+    assert!(reported(&c, "archives: 2 resource(s) → erp.overlay"));
+}
+
+#[test]
+fn a_real_team_logo_array_merges_one_slice_into_the_game_s() {
+    let Some(game_dir) = installed() else {
+        eprintln!("F1_25_GAME is not set; skipped");
+        return;
+    };
+    let stock = [
+        "2025_asset_groups/ui_package/common_front_end.erp",
+        "2025_asset_groups/ui_package/flow_frontend.erp",
+    ];
+    let found = stock.iter().find_map(|rel| {
+        let file = ErpFile::open(&game_dir.join(rel)).ok()?;
+        let r = file
+            .erp
+            .resources
+            .iter()
+            .find(|r| r.name.contains("team_logos") && r.name.ends_with(".texarray.image"))?;
+        Some(file.load(r).unwrap())
+    });
+    let Some(logos) = found else {
+        eprintln!("no team logo array in the game's ui archives; skipped");
+        return;
+    };
+    let mut case = Case::new("real-logos");
+    case.game.installed = Some(game_dir.clone());
+    let head = logos.fragments[0].data().unwrap();
+    let count = u32::from_le_bytes(head[28..32].try_into().unwrap()) as usize;
+    let mut pixels = logos.fragments[1].data().unwrap();
+    let slice = pixels.len() / count;
+    for b in &mut pixels[slice..2 * slice] {
+        *b = !*b;
+    }
+    let mut ours = logos.clone();
+    ours.set_fragment(1, &pixels).unwrap();
+    let mut carrier = Erp::parse(&std::fs::read(game_dir.join(UI_TEXTURE)).unwrap()).unwrap();
+    carrier.resources.push(ours);
+    let p = case.import(&[(UI_TEXTURE, carrier.to_bytes())], &serps("Real Logos", "1"));
+    let game: &dyn GameFiles = &case.game;
+    let (c, out) = case.convert(&p, Some(game));
+    let (_, got) = check(&case, &p, &out, None);
+    let merged = ErpFile::open(&out.join(LOGOS)).unwrap();
+    let r = merged.load(merged.erp.find(&logos.name).unwrap()).unwrap();
+    assert_eq!(r.fragments[1].data().unwrap(), pixels);
+    assert!(
+        got.resources
+            .contains_key(&(merge::BOOT_ERP.to_owned(), logos.name.clone()))
+    );
+    assert!(reported(
+        &c,
+        "Real Logos: 1 logo slice(s) in 1 texture array(s) merged"
     ));
 }
