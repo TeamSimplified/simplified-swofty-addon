@@ -240,14 +240,15 @@ fn last(record: &Record) -> Option<Block> {
         }
         if let Some(made) = &e.made {
             items.push(Block::Text {
-                text: format!("{} is the addon {} ({}).", e.name, made.name, made.id),
+                text: format!("Became the addon {} ({}).", made.name, made.id),
                 tone: Tone::Good,
             });
             if !made.lines.is_empty() {
-                items.push(Block::Names {
-                    label: "WHAT BECAME WHAT".into(),
-                    items: made.lines.clone(),
-                });
+                items.push(Block::Label("WHAT BECAME WHAT".into()));
+                items.extend(made.lines.iter().map(|line| Block::Text {
+                    text: line.clone(),
+                    tone: Tone::Neutral,
+                }));
             }
             for w in &made.warnings {
                 items.push(Block::Text {
