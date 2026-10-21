@@ -405,6 +405,7 @@ pub fn package_root(dir: &Path) -> Option<PathBuf> {
 pub struct PartDir {
     pub rel: String,
     pub name: String,
+    pub segments: Vec<String>,
 }
 
 pub fn parts(root: &Path) -> Result<Vec<PartDir>> {
@@ -441,15 +442,19 @@ pub fn parts(root: &Path) -> Result<Vec<PartDir>> {
     }
     Ok(kept
         .into_iter()
-        .map(|rel| PartDir {
-            name: part_name(&rel),
-            rel,
+        .map(|rel| {
+            let segments = part_segments(&rel);
+            PartDir {
+                name: segments.join(" › "),
+                segments,
+                rel,
+            }
         })
         .collect())
 }
 
 // "Liveries -c/Ferrari -x" shows as "Liveries › Ferrari", as in the Simplified Launcher.
-fn part_name(rel: &str) -> String {
+fn part_segments(rel: &str) -> Vec<String> {
     let mut segs: Vec<&str> = rel.split('/').filter(|s| !s.is_empty()).collect();
     if segs.last().is_some_and(|s| is_game_folder(s)) {
         segs.pop();
@@ -459,9 +464,9 @@ fn part_name(rel: &str) -> String {
             s.strip_suffix(" -c")
                 .or_else(|| s.strip_suffix(" -x"))
                 .unwrap_or(s)
+                .to_owned()
         })
-        .collect::<Vec<_>>()
-        .join(" › ")
+        .collect()
 }
 
 pub fn content_root(root: &Path) -> Option<PathBuf> {

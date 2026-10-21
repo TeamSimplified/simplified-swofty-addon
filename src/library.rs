@@ -217,13 +217,14 @@ impl Library {
         only_tracks: bool,
     ) -> Result<Imported> {
         let source = package::file_name(src);
+        let sha256 = src.is_file().then(|| sha256(src)).transpose()?;
         let unpacked = staging.join("unpacked");
         let refused = package::unpack(src, &unpacked, &mut |done| progress(done * 0.7, &source))?;
         if let Some((dir, info)) = track::find(&unpacked)? {
             progress(0.85, &source);
             let out = staging.join("package");
             let id = track::library_id(&self.root(), &info.code);
-            let package = track::store(&dir, &info, &id, source, &out)?;
+            let package = track::store(&dir, &info, &id, source, sha256, &out)?;
             self.place(&package, &out)?;
             progress(1.0, &package.name);
             return Ok(Imported {
@@ -247,15 +248,21 @@ impl Library {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let label = match src.is_dir() {
+            true => package::file_name(src),
+            false => stem.clone(),
+        };
+        let (plain, stem_version) = plain_name(&label);
+        let (plain, by) = byline(plain);
         let base = Package {
             id: id(&info, &stem),
-            name: info.title().unwrap_or(&stem).to_owned(),
-            author: info.author().map(str::to_owned),
-            version: info.version().map(str::to_owned),
+            name: info.title().unwrap_or(plain).to_owned(),
+            author: info.author().or(by).map(str::to_owned),
+            version: info.version().or(stem_version).map(str::to_owned),
             game_version: info.game_version().map(str::to_owned),
             studio_version: info.studio_version().map(str::to_owned),
             source: source.clone(),
-            sha256: src.is_file().then(|| sha256(src)).transpose()?,
+            sha256,
             imported: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs()),
@@ -276,15 +283,21 @@ impl Library {
             })?;
             packages.push((base.clone(), content));
         } else {
-            for part in &parts {
+            for (part, named) in parts.iter().zip(named_parts(&base, &label, &parts)) {
                 let dir = root.join(&part.rel);
                 let content = package::content_root(&dir).unwrap_or(dir);
+                let legacy = format!("{}.{}", base.id, slug(&part.rel));
+                let known = |id: &str| self.dir(id).join(PACKAGE_FILE).is_file();
+                let id = match !known(&named.id) && known(&legacy) {
+                    true => legacy,
+                    false => named.id,
+                };
                 let p = Package {
-                    id: format!("{}.{}", base.id, slug(&part.rel)),
-                    name: format!("{} › {}", base.name, part.name),
+                    id,
+                    name: named.name,
                     part: Some(Part {
                         of: base.id.clone(),
-                        name: part.name.clone(),
+                        name: named.part,
                     }),
                     ..base.clone()
                 };
@@ -393,6 +406,123 @@ pub fn id(info: &ModInfo, fallback: &str) -> String {
     }
 }
 
+const PART_SLUG: usize = 32;
+
+struct Named {
+    id: String,
+    name: String,
+    part: String,
+}
+
+// A part is named by the folders that tell it apart, the innermost first, then the
+// mod: folders every part sits in and folders named like the mod say nothing.
+fn named_parts(base: &Package, stem: &str, parts: &[package::PartDir]) -> Vec<Named> {
+    let common = parts
+        .iter()
+        .map(|p| p.segments.as_slice())
+        .reduce(|a, b| &a[..a.iter().zip(b).take_while(|(x, y)| x == y).count()])
+        .map_or(0, <[String]>::len);
+    let mut named: Vec<Named> = parts
+        .iter()
+        .map(|p| {
+            let own: Vec<&str> = p.segments[common.min(p.segments.len())..]
+                .iter()
+                .map(String::as_str)
+                .filter(|s| !same(s, &base.name) && !same(s, stem))
+                .rev()
+                .collect();
+            let own = match own.is_empty() {
+                true => p.segments.iter().rev().map(String::as_str).take(1).collect(),
+                false => own,
+            };
+            let part = own.join(" · ");
+            Named {
+                id: format!("{}.{}", base.id, capped(&slug(&own.join(" ")), &p.rel, PART_SLUG)),
+                name: match part.is_empty() {
+                    true => base.name.clone(),
+                    false => format!("{part} — {}", base.name),
+                },
+                part,
+            }
+        })
+        .collect();
+    let ids: Vec<String> = named.iter().map(|n| n.id.clone()).collect();
+    for (n, p) in named.iter_mut().zip(parts) {
+        if ids.iter().filter(|id| **id == n.id).count() > 1 {
+            n.id = format!("{}-{}", n.id, short_hash(&p.rel));
+        }
+    }
+    named
+}
+
+fn same(a: &str, b: &str) -> bool {
+    let key = |s: &str| -> String {
+        plain_name(s)
+            .0
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    key(a) == key(b)
+}
+
+// "Pirelli Tyres Collection v1.0.6" is the mod "Pirelli Tyres Collection" at 1.0.6.
+pub fn plain_name(name: &str) -> (&str, Option<&str>) {
+    let name = name.trim();
+    let Some((head, last)) = name.rsplit_once(char::is_whitespace) else {
+        return (name, None);
+    };
+    let v = last.trim_matches(['(', ')', '[', ']']);
+    let numeric = |s: &str| {
+        s.split('.')
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let version = match v.strip_prefix(['v', 'V']) {
+        Some(bare) => numeric(bare),
+        None => v.contains('.') && numeric(v),
+    };
+    match version {
+        true => (head.trim_end_matches([' ', '-', '_']), Some(v)),
+        false => (name, None),
+    }
+}
+
+// "F1 25 with V10 Engines - By Jor" is the mod "F1 25 with V10 Engines" by Jor.
+pub fn byline(name: &str) -> (&str, Option<&str>) {
+    let Some(at) = name.to_ascii_lowercase().rfind(" by ") else {
+        return (name, None);
+    };
+    let author = name[at + 4..].trim_matches(['(', ')', '[', ']', '-', ' ']);
+    let head = name[..at].trim_end_matches(['(', '[', '-', '_', ' ']);
+    match author.is_empty() || head.is_empty() || author.split_whitespace().count() > 3 {
+        true => (name, None),
+        false => (head, Some(author)),
+    }
+}
+
+pub fn short_hash(key: &str) -> String {
+    Sha256::digest(key.as_bytes())[..3]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+// A slug longer than `max` keeps its first words and gets a hash of `key`, so it
+// stays short and the same for the same `key`.
+pub fn capped(slug: &str, key: &str, max: usize) -> String {
+    if slug.len() <= max {
+        return slug.to_owned();
+    }
+    let room = max - 7;
+    let cut = slug[..=room].rfind(['-', '.']).unwrap_or(room);
+    let head = slug[..cut].trim_end_matches(['-', '.']);
+    match head.is_empty() {
+        true => short_hash(key),
+        false => format!("{head}-{}", short_hash(key)),
+    }
+}
+
 fn slug(text: &str) -> String {
     let mut out = String::new();
     for c in text.chars().flat_map(char::to_lowercase) {
@@ -477,12 +607,8 @@ mod tests {
         assert_eq!(
             got,
             [
-                (
-                    "venturi.realism-patch.broadcast-c",
-                    "Realism Patch › Broadcast",
-                    1
-                ),
-                ("venturi.realism-patch.tyres", "Realism Patch › Tyres", 2),
+                ("venturi.realism-patch.broadcast", "Broadcast — Realism Patch", 1),
+                ("venturi.realism-patch.tyres", "Tyres — Realism Patch", 2),
             ]
         );
         let part = imported.packages[1].part.as_ref().unwrap();
@@ -499,10 +625,83 @@ mod tests {
             )
             .unwrap()
         };
-        assert_eq!(ui("venturi.realism-patch.broadcast-c"), b"ui");
+        assert_eq!(ui("venturi.realism-patch.broadcast"), b"ui");
         assert_eq!(ui("venturi.realism-patch.tyres"), b"tyres");
         assert_eq!(library.list().unwrap().len(), 2);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn parts_are_named_by_what_tells_them_apart() {
+        let root = std::env::temp_dir().join(format!("simplified-import-names-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let src = root.join("Pirelli Tyres Collection v1.0.6");
+        for grip in ["Default Weather Grip Track", "Improved Weather Grip Track"] {
+            for season in ["Pirelli Season 2011", "Pirelli Season 2026"] {
+                let p = src
+                    .join("Pirelli Tyres Collection v1.0.6")
+                    .join(grip)
+                    .join(season)
+                    .join("F1 25/2025_asset_groups/f1_2026_vehicle_package/teams/common.erp");
+                std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+                std::fs::write(p, season).unwrap();
+            }
+        }
+        let library = Library::new(&root.join("data"));
+        let imported = library.import(&src, None, &mut |_, _| {}).unwrap();
+        let first = &imported.packages[0];
+        assert_eq!(
+            first.name,
+            "Pirelli Season 2011 · Default Weather Grip Track — Pirelli Tyres Collection"
+        );
+        assert_eq!(first.version.as_deref(), Some("v1.0.6"));
+        assert_eq!(
+            first.part.as_ref().unwrap().name,
+            "Pirelli Season 2011 · Default Weather Grip Track"
+        );
+        let ids: Vec<&str> = imported.packages.iter().map(|p| p.id.as_str()).collect();
+        assert!(ids.iter().all(|id| id.len() <= 64), "{ids:?}");
+        let of = first.part.as_ref().unwrap().of.clone();
+        assert!(
+            ids[0].starts_with(&format!("{of}.pirelli-season-2011-")),
+            "{ids:?}"
+        );
+        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 4);
+
+        let legacy =
+            format!("{of}.pirelli-tyres-collection-v1-0-6-default-weather-grip-track-pirelli-season-2011");
+        std::fs::rename(library.dir(ids[0]), library.dir(&legacy)).unwrap();
+        let again = library.import(&src, None, &mut |_, _| {}).unwrap();
+        assert_eq!(
+            again.packages[0].id, legacy,
+            "a part imported before keeps its id"
+        );
+        assert_eq!(library.list().unwrap().len(), 4);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn versions_come_off_the_name() {
+        assert_eq!(
+            plain_name("Pirelli Tyres Collection v1.0.6"),
+            ("Pirelli Tyres Collection", Some("v1.0.6"))
+        );
+        assert_eq!(
+            plain_name("F1 25 with V10 Engines - By Jor (V10.3)"),
+            ("F1 25 with V10 Engines - By Jor", Some("V10.3"))
+        );
+        assert_eq!(plain_name("Mod 1.2"), ("Mod", Some("1.2")));
+        assert_eq!(plain_name("Season 2021"), ("Season 2021", None));
+        assert_eq!(plain_name("V10"), ("V10", None));
+        assert_eq!(
+            byline("F1 25 with V10 Engines - By Jor"),
+            ("F1 25 with V10 Engines", Some("Jor"))
+        );
+        let long = "Liveries made by the community of F1 modders";
+        assert_eq!(byline(long), (long, None));
+        assert_eq!(capped("short", "k", 32), "short");
+        let long = capped("pirelli-season-2011-default-weather-grip-track", "k", 32);
+        assert_eq!(long, format!("pirelli-season-2011-{}", short_hash("k")));
     }
 
     #[test]

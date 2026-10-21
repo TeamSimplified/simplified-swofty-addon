@@ -99,7 +99,14 @@ pub fn find(dir: &Path) -> Result<Option<(PathBuf, Info)>> {
     }
 }
 
-pub fn store(from: &Path, info: &Info, id: &str, source: String, out: &Path) -> Result<Package> {
+pub fn store(
+    from: &Path,
+    info: &Info,
+    id: &str,
+    source: String,
+    sha256: Option<String>,
+    out: &Path,
+) -> Result<Package> {
     let track = out.join(TRACK);
     std::fs::create_dir_all(out).map_err(io_err(out))?;
     if from != track {
@@ -123,7 +130,7 @@ pub fn store(from: &Path, info: &Info, id: &str, source: String, out: &Path) -> 
         game_version: None,
         studio_version: None,
         source,
-        sha256: None,
+        sha256,
         imported: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs()),
@@ -202,7 +209,7 @@ pub fn migrate(data: &Path) -> Result<Vec<String>> {
             std::fs::remove_dir_all(&staging).map_err(io_err(&staging))?;
         }
         std::fs::remove_dir_all(dir.join(".art")).ok();
-        store(&dir, &info, &id, source, &staging)?;
+        store(&dir, &info, &id, source, None, &staging)?;
         let dest = lib.join(&id);
         std::fs::rename(&staging, &dest).map_err(io_err(&dest))?;
         notes.push(format!("moved {} to {}", dir.display(), dest.display()));
