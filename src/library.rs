@@ -181,6 +181,21 @@ impl Library {
         game: Option<&dyn GameFiles>,
         progress: &mut dyn FnMut(f32, &str),
     ) -> Result<Imported> {
+        self.import_as(src, game, progress, false)
+    }
+
+    pub fn import_track(&self, src: &Path, progress: &mut dyn FnMut(f32, &str)) -> Result<Package> {
+        let mut imported = self.import_as(src, None, progress, true)?;
+        Ok(imported.packages.remove(0))
+    }
+
+    fn import_as(
+        &self,
+        src: &Path,
+        game: Option<&dyn GameFiles>,
+        progress: &mut dyn FnMut(f32, &str),
+        only_tracks: bool,
+    ) -> Result<Imported> {
         if self.data.starts_with(src) {
             return Err(err(format!("{} holds the mod library", src.display())));
         }
@@ -188,7 +203,7 @@ impl Library {
         sweep(&self.data);
         sweep(&self.root());
         let staging = free(&self.data, ".import-");
-        let result = self.stage(src, &staging, game, progress);
+        let result = self.stage(src, &staging, game, progress, only_tracks);
         std::fs::remove_dir_all(&staging).ok();
         result
     }
@@ -199,6 +214,7 @@ impl Library {
         staging: &Path,
         game: Option<&dyn GameFiles>,
         progress: &mut dyn FnMut(f32, &str),
+        only_tracks: bool,
     ) -> Result<Imported> {
         let source = package::file_name(src);
         let unpacked = staging.join("unpacked");
@@ -214,6 +230,12 @@ impl Library {
                 packages: vec![package],
                 refused,
             });
+        }
+        if only_tracks {
+            return Err(err(format!(
+                "{source} holds no track package: no {} with a track_code",
+                track::MANIFEST
+            )));
         }
         let root = package::package_root(&unpacked).unwrap_or_else(|| unpacked.clone());
         let serps_path = root.join(serps::FILE);
