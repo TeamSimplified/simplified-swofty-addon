@@ -4,13 +4,13 @@ use std::path::PathBuf;
 
 use swofty_addon::launcher::{AddonInfo, Cx};
 use swofty_addon::view::{
-    Art, Block, Body, Button, ButtonKind, Card, Columns, Effect, Event, Fact, Grid, Hero, Icon, Notice, Pill,
+    Art, Block, Body, Button, ButtonKind, Card, Columns, Effect, Event, Grid, Hero, Icon, Notice, Pill,
     Style, Tone, View,
 };
 
-use crate::importer::{self, Convert, Done, Entry, Record};
+use crate::importer::{self, Convert, Done, Entry, Made, Record};
 use crate::library::Library;
-use crate::{ENABLE, IMPORT, Loaded, NoProgress, REMOVE, Result, SHOW, date, err, library, track};
+use crate::{ENABLE, IMPORT, Loaded, NoProgress, REMOVE, Result, SHOW, date, err, library, plural, track};
 
 pub const CONVERT: &str = "convert-library";
 pub const TEAM: &str = "team-simplified";
@@ -18,9 +18,10 @@ pub const SHOW_ADDON: &str = "show-addon:";
 pub const REIMPORT: &str = "reimport:";
 pub const TOGGLE: &str = "toggle:";
 pub const LINK: &str = "link:";
+pub const DETAILS: &str = "details";
 const ART: &[u8] = include_bytes!("../art/team-simplified.png");
 const ART_FILE: &str = "team-simplified.png";
-pub const FOOTER: &str = "Made by Team Simplified. Based on Simplified Suite by Team Simplified.";
+pub const FOOTER: &str = "Based on Simplified Suite by Team Simplified.";
 const ABOUT: &str = "Team Simplified make modding tools for F1 25: Simplified Studio, the SERPs Launcher, a track installer, swappers, editors and a database merger, open source in the Simplified Suite.";
 const IMPORTER: &str =
     "The Mod Importer is their part of Swofty Launcher: it turns any F1 25 mod into a Swofty addon.";
@@ -98,8 +99,9 @@ fn notices(cx: &Cx, pending: &importer::Pending) -> Vec<Notice> {
     if cx.game.is_none() && pending.convert > 0 {
         out.push(Notice {
             text: format!(
-                "{} mod(s) in your library are not addons yet. {}",
-                pending.convert,
+                "{} in your library {} not addons yet. {}",
+                plural(pending.convert, "mod", "mods"),
+                if pending.convert == 1 { "is" } else { "are" },
                 importer::NO_GAME
             ),
             tone: Tone::Warn,
@@ -108,11 +110,16 @@ fn notices(cx: &Cx, pending: &importer::Pending) -> Vec<Notice> {
     }
     let text = match (pending.convert, pending.place, cx.game.is_some()) {
         (n, _, true) if n > 0 => format!(
-            "{n} mod(s) in your library are not addons yet. Convert them once: each becomes an addon, on where the mod was on."
+            "{} in your library {} not addons yet. They convert on the next start, or now: each becomes an addon, on where the mod was on.",
+            plural(n, "mod", "mods"),
+            if n == 1 { "is" } else { "are" }
         ),
-        (_, n, _) if n > 0 => {
-            format!("{n} mod(s) in this profile have addons now. Turn them on in the profile's mod order.")
-        }
+        (_, n, _) if n > 0 => format!(
+            "{} in {} {} addons now. Turn them on in the profile's mod order.",
+            plural(n, "mod", "mods"),
+            cx.profile.name,
+            if n == 1 { "has" } else { "have" }
+        ),
         _ => return out,
     };
     out.push(Notice {
@@ -163,20 +170,15 @@ fn team() -> Block {
         },
         Block::Label("LINKS".into()),
     ];
-    let links: Vec<(&str, &str, &str)> = LINKS
+    let links: Vec<(&str, &str)> = LINKS
         .iter()
-        .filter_map(|(id, label, url)| url.map(|u| (*id, *label, u)))
+        .filter(|(_, _, url)| url.is_some())
+        .map(|(id, label, _)| (*id, *label))
         .collect();
     blocks.push(Block::Buttons(
         links
             .iter()
-            .map(|(id, label, _)| Button::new(format!("{LINK}{id}"), *label))
-            .collect(),
-    ));
-    blocks.push(Block::Facts(
-        links
-            .iter()
-            .map(|(_, label, url)| Fact::new(*label, *url))
+            .map(|(id, label)| Button::new(format!("{LINK}{id}"), *label))
             .collect(),
     ));
     Block::Card(Card {
@@ -187,15 +189,18 @@ fn team() -> Block {
     })
 }
 
-fn choose() -> Block {
+fn choose(profile: &str) -> Block {
     Block::Card(Card {
         title: Some("Import a mod".into()),
         subtitle: Some(
-            "Drop a mod's zip, 7z, rar, .serps or folder anywhere on the window, or choose one.".into(),
+            "Drop a mod's zip, 7z, RAR or .serps file, or its folder, anywhere on the window, or choose one."
+                .into(),
         ),
         buttons: vec![choose_button()],
         blocks: vec![Block::Text {
-            text: "Each mod becomes a Swofty addon on the Addons page, turned on in this profile. Mods made with Simplified Studio and track zips import too. Importing a mod again replaces its addon.".into(),
+            text: format!(
+                "Each mod becomes a Swofty addon on the Addons page, turned on in {profile}. Mods made with Simplified Studio and track zips import too. Importing a mod again replaces its addon."
+            ),
             tone: Tone::Muted,
         }],
         ..Card::default()
@@ -221,7 +226,23 @@ fn kinds(e: &Entry) -> Vec<Pill> {
         .collect()
 }
 
-fn last(record: &Record) -> Option<Block> {
+fn summary(made: &Made) -> String {
+    let what = match made.summary.is_empty() {
+        true => made.kinds.join(", "),
+        false => made.summary.clone(),
+    };
+    [
+        Some(format!("Became the addon {}", made.name)),
+        made.category.map(|c| c.label().to_owned()),
+        (!what.is_empty()).then_some(what),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ")
+}
+
+fn last(record: &Record, details: bool) -> Option<Block> {
     let last = record.last.as_ref()?;
     let mut blocks = Vec::new();
     for text in &last.errors {
@@ -230,47 +251,63 @@ fn last(record: &Record) -> Option<Block> {
             tone: Tone::Bad,
         });
     }
+    for v in &last.variants {
+        blocks.push(Block::Text {
+            text: v.line(record),
+            tone: Tone::Accent,
+        });
+    }
+    let mut technical = Vec::new();
+    let mut first = None;
     for id in &last.mods {
         let Some(e) = record.mods.get(id) else {
             continue;
         };
-        let mut items: Vec<Block> = Vec::new();
-        if !kinds(e).is_empty() {
-            items.push(Block::Pills(kinds(e)));
-        }
         if let Some(made) = &e.made {
-            items.push(Block::Text {
-                text: format!("Became the addon {} ({}).", made.name, made.id),
-                tone: Tone::Good,
+            let off = last.variants.iter().any(|v| v.on != *id && v.mods.contains(id));
+            blocks.push(Block::Text {
+                text: match off {
+                    true => format!("{} · off", summary(made)),
+                    false => summary(made),
+                },
+                tone: if off { Tone::Muted } else { Tone::Good },
             });
+            blocks.extend(made.warnings.iter().map(|w| Block::Text {
+                text: format!("{}: {w}", made.name),
+                tone: Tone::Warn,
+            }));
             if !made.lines.is_empty() {
-                items.push(Block::Label("WHAT BECAME WHAT".into()));
-                items.extend(made.lines.iter().map(|line| Block::Text {
-                    text: line.clone(),
-                    tone: Tone::Neutral,
-                }));
-            }
-            for w in &made.warnings {
-                items.push(Block::Text {
-                    text: w.clone(),
-                    tone: Tone::Warn,
+                technical.push(Block::Names {
+                    label: made.name.clone(),
+                    items: made.lines.clone(),
                 });
+            }
+            if !off {
+                first.get_or_insert(made.id.clone());
             }
         }
         if let Some(error) = &e.error {
-            items.push(Block::Text {
-                text: format!("Not converted: {error}"),
+            blocks.push(Block::Text {
+                text: format!("{} was not converted: {error}", e.name),
                 tone: Tone::Bad,
             });
         }
-        let buttons: Vec<Button> = e.made.iter().map(|m| show_button(&m.id)).collect();
-        blocks.push(Block::Card(Card {
-            title: Some(e.name.clone()),
-            subtitle: Some(id.clone()),
-            buttons,
-            blocks: items,
-            ..Card::default()
-        }));
+    }
+    let mut buttons = Vec::new();
+    if !technical.is_empty() {
+        buttons.push(Button {
+            icon: Some(Icon::Info),
+            style: if details { Style::Primary } else { Style::Outline },
+            ..Button::new(DETAILS, if details { "Hide details" } else { "Details" })
+        });
+    }
+    buttons.extend(first.map(|id| show_button(&id)));
+    if details && !technical.is_empty() {
+        blocks.push(Block::Label("WHAT BECAME WHAT".into()));
+        blocks.extend(technical);
+    }
+    if !buttons.is_empty() {
+        blocks.push(Block::Buttons(buttons));
     }
     Some(Block::Card(Card {
         title: Some(match last.files.is_empty() {
@@ -286,7 +323,7 @@ fn last(record: &Record) -> Option<Block> {
     }))
 }
 
-fn converted(record: &Record, installed: Option<&[AddonInfo]>) -> Option<Block> {
+fn converted(record: &Record, installed: Option<&[AddonInfo]>, editable: bool) -> Option<Block> {
     let cards: Vec<Block> = record
         .mods
         .iter()
@@ -313,10 +350,12 @@ fn converted(record: &Record, installed: Option<&[AddonInfo]>) -> Option<Block> 
             if present {
                 buttons.push(show_button(&made.id));
             }
-            buttons.push(Button {
-                icon: Some(Icon::Refresh),
-                ..Button::new(format!("{REIMPORT}{id}"), "Re-import")
-            });
+            if editable {
+                buttons.push(Button {
+                    icon: Some(Icon::Refresh),
+                    ..Button::new(format!("{REIMPORT}{id}"), "Re-import")
+                });
+            }
             let mut blocks = vec![Block::Pills(pills)];
             if let Some(error) = &e.error {
                 blocks.push(Block::Text {
@@ -327,7 +366,7 @@ fn converted(record: &Record, installed: Option<&[AddonInfo]>) -> Option<Block> 
             blocks.push(Block::Buttons(buttons));
             Block::Card(Card {
                 title: Some(e.name.clone()),
-                subtitle: Some(format!("Addon {} · {}", made.id, date(e.at))),
+                subtitle: Some(format!("Converted {}", date(e.at))),
                 blocks,
                 ..Card::default()
             })
@@ -385,7 +424,7 @@ fn failed(cx: &Cx, record: &Record) -> Result<Option<Block>> {
         cards.push(Block::Card(Card {
             title: Some(p.name.clone()),
             subtitle: Some(format!(
-                "{} in {} · loads through Simplified for Swofty's build step",
+                "{} in {} · loads through the Mod Importer's build step",
                 if *on { "On" } else { "Off" },
                 cx.profile.name
             )),
@@ -412,7 +451,13 @@ fn failed(cx: &Cx, record: &Record) -> Result<Option<Block>> {
     })))
 }
 
-pub fn view(cx: &Cx, open: bool) -> Result<View> {
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Panels {
+    pub team: bool,
+    pub details: bool,
+}
+
+pub fn view(cx: &Cx, open: bool, details: bool) -> Result<View> {
     let record = Record::load(cx.data_dir)?;
     let pending = importer::pending(cx, &record)?;
     let installed = match cx.addons() {
@@ -420,20 +465,33 @@ pub fn view(cx: &Cx, open: bool) -> Result<View> {
         None => None,
     };
     let count = record.mods.values().filter(|e| e.made.is_some()).count();
+    let vanilla = cx.profile.vanilla;
     let mut blocks = vec![hero(cx, count, open)];
+    if !vanilla {
+        blocks.push(choose(&cx.profile.name));
+    }
     if open {
         blocks.push(team());
     }
-    blocks.push(choose());
-    blocks.extend(last(&record));
-    blocks.extend(failed(cx, &record)?);
-    blocks.extend(converted(&record, installed.as_deref()));
+    blocks.extend(last(&record, details));
+    if !vanilla {
+        blocks.extend(failed(cx, &record)?);
+    }
+    blocks.extend(converted(&record, installed.as_deref(), !vanilla));
+    blocks.push(Block::Text {
+        text: FOOTER.into(),
+        tone: Tone::Muted,
+    });
+    let notices = match vanilla {
+        true => crate::notices(cx),
+        false => notices(cx, &pending),
+    };
     Ok(View {
-        subtitle: format!("{count} mod(s) converted into addons · by Team Simplified"),
+        subtitle: format!("{} converted into addons", plural(count, "mod", "mods")),
         actions: Vec::new(),
-        notices: notices(cx, &pending),
+        notices,
         body: Body::Blocks(blocks),
-        footer: Some(FOOTER.into()),
+        footer: None,
         tick: false,
     })
 }
@@ -450,19 +508,27 @@ fn shown(done: Done) -> Result<Effect> {
     if done.failed {
         return Err(err(done.lines.join("\n")));
     }
-    Ok(match done.show {
+    Ok(match done.show.filter(|_| !done.variants) {
         Some(id) => Effect::ShowAddon(id),
         None => Effect::Notice(done.lines.join("\n")),
     })
 }
 
-pub fn event(cx: &Cx, event: Event, conv: &dyn Convert, open: &mut bool) -> Result<Option<Effect>> {
+pub fn event(cx: &Cx, event: Event, conv: &dyn Convert, panels: &mut Panels) -> Result<Option<Effect>> {
     let effect = match event {
+        Event::Startup {} => match importer::startup(cx, conv, &NoProgress, importer::BUDGET)? {
+            Some(text) => Effect::Notice(text),
+            None => Effect::None,
+        },
         Event::Picked { id, paths } if id == IMPORT => {
             shown(importer::import(cx, &paths, &NoProgress, conv)?)?
         }
         Event::Click { id } if id == TEAM => {
-            *open = !*open;
+            panels.team = !panels.team;
+            Effect::Reload
+        }
+        Event::Click { id } if id == DETAILS => {
+            panels.details = !panels.details;
             Effect::Reload
         }
         Event::Click { id } if id == CONVERT => {
