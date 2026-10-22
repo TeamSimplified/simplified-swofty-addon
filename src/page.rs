@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use swofty_addon::launcher::Cx;
 use swofty_addon::view::{
     Art, Block, Body, Button, ButtonKind, ButtonSize, Card, DropZone, Effect, Event, Hero, Icon, Notice,
-    Pill, Shown, Style, Tone, View,
+    Shown, Style, Tone, View,
 };
 
 use crate::importer::{self, Convert, Done, Record};
@@ -125,18 +125,14 @@ fn notices(cx: &Cx, pending: &importer::Pending) -> Vec<Notice> {
     out
 }
 
-fn hero(cx: &Cx, converted: usize, open: bool) -> Block {
+fn hero(cx: &Cx, open: bool) -> Block {
     Block::Hero(Hero {
         title: "Simplified Importer".into(),
         subtitle: Some(
             "By Team Simplified. Mods convert into Swofty addons using the Simplified Importer.".into(),
         ),
         art: art(cx),
-        pills: vec![Pill {
-            text: format!("{converted} converted"),
-            tone: Tone::Muted,
-            ..Pill::default()
-        }],
+        pills: Vec::new(),
         facts: Vec::new(),
         buttons: vec![Button {
             icon: Some(Icon::Info),
@@ -201,7 +197,7 @@ pub fn view(cx: &Cx, open: bool) -> Result<View> {
     let pending = importer::pending(cx, &record)?;
     let count = record.mods.values().filter(|e| e.made.is_some()).count();
     let vanilla = cx.profile.vanilla;
-    let mut blocks = vec![hero(cx, count, open)];
+    let mut blocks = vec![hero(cx, open)];
     if open {
         blocks.push(team());
     }
