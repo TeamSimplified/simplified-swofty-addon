@@ -602,53 +602,6 @@ fn a_studio_livery_in_both_gpu_shader_archives_loads_once_at_boot() {
 }
 
 #[test]
-fn a_studio_livery_that_drops_the_base_shader_removes_it_from_the_archive() {
-    let case = Case::new("drop-base");
-    let base = "eaid://shader_package/object_auto_illuminate/object_auto_illuminate.nefx2";
-    let generic = "shader_package_2025/object_auto_illuminate.nefx2.sm51.erp";
-    let amd = "shader_package_2025/object_auto_illuminate.nefx2.sm51_amd.erp";
-    for rel in [generic, amd] {
-        case.stock(rel, &archive(vec![resource(base, "Shader", &[b"shader"])]));
-    }
-    let livery = |n: usize| format!("eaid://f1_2026_vehicle_package/teams/aston/livery_{n}.tif.image");
-    let packed = || {
-        archive(
-            (0..30)
-                .map(|n| texture(&livery(n), format!("aston {n}").as_bytes()))
-                .collect(),
-        )
-    };
-    let p = case.import(&[(generic, packed()), (amd, packed())], &serps("Aston", "1"));
-    let game: &dyn GameFiles = &case.game;
-    let (c, out) = case.convert(&p, Some(game));
-    let (_, ops) = addon_ops(&out);
-    let removed: Vec<&str> = ops
-        .iter()
-        .filter_map(|op| match op {
-            AssetOp::Erp(ErpOp::RemoveResource { erp, resource }) if resource == base => Some(erp.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        removed,
-        [generic, amd],
-        "the dropped base shader is removed from both archives"
-    );
-    let overlay = ErpFile::open(&out.join(overlay_name(0))).unwrap();
-    assert_eq!(
-        overlay.erp.resources.len(),
-        30,
-        "every livery resource in the boot overlay"
-    );
-    assert!(overlay.erp.find(base).is_err(), "the base shader is not re-added");
-    assert!(reported(
-        &c,
-        "archives: 2 resource(s) removed → remove-resource on their own archives"
-    ));
-    std::fs::remove_dir_all(&out).ok();
-}
-
-#[test]
 fn archive_changes_become_one_overlay_and_remove_resource_ops() {
     let case = Case::new("livery");
     let uri = |n: &str| format!("eaid://f1_2026_vehicle_package/teams/mclaren/{n}.tif.image");

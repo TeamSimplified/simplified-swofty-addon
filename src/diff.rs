@@ -208,12 +208,9 @@ fn same(stock: &ErpFile, s: &Resource, ours: &ErpFile, r: &Resource) -> swofty_f
     Ok(stock.load(s)?.content_hash()? == ours.load(r)?.content_hash()?)
 }
 
-// A stock resource the mod's archive lacks is removed, as the Simplified Launcher
-// replaces the archive with the mod's whole. A shader archive's added and changed
-// resources load through the boot overlay; its removals drop the stock resources the
-// mod omits from the archive itself, so the game does not load them beside the mod's.
-// A Studio-packed livery that omits an archive's base shader would otherwise keep the
-// game's stale one and crash while the vehicle textures load.
+// A stock resource the mod's archive lacks is removed, as the archive replaces the
+// game's whole. Shader archives are merged into the game's instead, so they remove
+// nothing.
 fn archive(rel: &str, path: &Path, game: &dyn GameFiles) -> Result<Archive> {
     let fail = |e: swofty_formats::Error| err(format!("{rel}: {e}"));
     let stock = ErpFile::open(&game.original(rel)?).map_err(&fail)?;
@@ -232,14 +229,16 @@ fn archive(rel: &str, path: &Path, game: &dyn GameFiles) -> Result<Archive> {
             None => out.added.push(r.name.clone()),
         }
     }
-    let names: HashSet<&str> = ours.erp.resources.iter().map(|r| r.name.as_str()).collect();
-    out.removed = stock
-        .erp
-        .resources
-        .iter()
-        .filter(|r| !names.contains(r.name.as_str()))
-        .map(|r| r.name.clone())
-        .collect();
+    if !crate::merge::carrier(rel) {
+        let names: HashSet<&str> = ours.erp.resources.iter().map(|r| r.name.as_str()).collect();
+        out.removed = stock
+            .erp
+            .resources
+            .iter()
+            .filter(|r| !names.contains(r.name.as_str()))
+            .map(|r| r.name.clone())
+            .collect();
+    }
     Ok(out)
 }
 
@@ -458,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn every_archive_removes_the_stock_resources_the_mod_omits() {
+    fn shader_archives_remove_nothing_and_others_remove_what_they_lack() {
         let root = std::env::temp_dir().join(format!("simplified-removals-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         let (stock, ours) = (root.join("game"), root.join("files"));
@@ -475,9 +474,11 @@ mod tests {
             dir: stock,
             exe: "1.0",
         };
-        assert_eq!(
-            archive(shader, &ours.join(shader), &game).unwrap().removed,
-            ["gone"]
+        assert!(
+            archive(shader, &ours.join(shader), &game)
+                .unwrap()
+                .removed
+                .is_empty()
         );
         assert_eq!(archive(car, &ours.join(car), &game).unwrap().removed, ["gone"]);
         std::fs::remove_dir_all(&root).ok();
