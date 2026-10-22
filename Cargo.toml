@@ -15,13 +15,13 @@ serde_json = "1"
 semver = "1"
 sevenz-rust2 = { version = "0.23", default-features = false, features = ["bzip2", "deflate", "ppmd"] }
 sha2 = "0.11"
-swofty-addon = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "ea5b607e8fa070cf5a46fd4b314da54dc8365f1a" }
-swofty-formats = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "ea5b607e8fa070cf5a46fd4b314da54dc8365f1a" }
+swofty-addon = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "ed41a6d49bb1b0025d91dfdd1b54ce9448d7f505" }
+swofty-formats = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "ed41a6d49bb1b0025d91dfdd1b54ce9448d7f505" }
 zip = { version = "9", default-features = false, features = ["bzip2", "deflate", "deflate64", "lzma", "ppmd", "xz", "zstd"] }
 rars = { version = "=0.10.0", default-features = false }
 
 [dev-dependencies]
-swofty-core = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "ea5b607e8fa070cf5a46fd4b314da54dc8365f1a" }
+swofty-core = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "ed41a6d49bb1b0025d91dfdd1b54ce9448d7f505" }
 sevenz-rust2 = { version = "0.23", default-features = false, features = ["compress"] }
 rars = { version = "=0.10.0", default-features = false, features = ["write"] }
 
@@ -31,7 +31,3 @@ unsafe_op_in_unsafe_fn = "deny"
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 
-[patch."https://github.com/Swofty-Developments/SwoftyLauncher"]
-swofty-addon = { path = "/mnt/work/VSC/F1ModManager-wt/r13/packages/addon-api" }
-swofty-formats = { path = "/mnt/work/VSC/F1ModManager-wt/r13/packages/formats" }
-swofty-core = { path = "/mnt/work/VSC/F1ModManager-wt/r13/packages/core" }
