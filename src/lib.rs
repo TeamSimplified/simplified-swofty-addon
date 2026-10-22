@@ -217,7 +217,7 @@ fn notices(cx: &Cx) -> Vec<Notice> {
     }
     if !cx.profile.enabled {
         return vec![Notice {
-            text: format!("The Simplified Importer is off in {}.", cx.profile.name),
+            text: format!("Simplified for Swofty is off in {}.", cx.profile.name),
             tone: Tone::Warn,
             action: Some(Button::new(ENABLE, "Turn on")),
         }];

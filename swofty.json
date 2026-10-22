@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "teamsimplified.mods",
-  "name": "Simplified Importer",
+  "name": "Simplified for Swofty",
   "version": "0.7.1",
   "author": "Team Simplified",
   "description": "Mods convert into Swofty addons using the Simplified Importer: any F1 25 mod, from a zip, 7z, rar, .serps or folder, including mods made with Simplified Studio and track zips",

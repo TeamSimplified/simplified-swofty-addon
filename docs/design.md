@@ -1,6 +1,6 @@
 # Design
 
-How Simplified for Swofty, Team Simplified's Simplified Importer, imports, stores and compares mods and tracks and turns each into a Swofty addon. These are sections 4 and 5 of the Swofty Launcher design notes, <https://f1.swofty.net/design/addons-and-mods>, which describe the Launcher API and Asset API this addon is built on. Links to other sections go there.
+How Simplified for Swofty, Team Simplified's addon, uses its Simplified Importer to import, store and compare mods and tracks and turn each into a Swofty addon. These are sections 4 and 5 of the Swofty Launcher design notes, <https://f1.swofty.net/design/addons-and-mods>, which describe the Launcher API and Asset API this addon is built on. Links to other sections go there.
 
 ## 4. Simplified for Swofty
 
@@ -8,7 +8,7 @@ How Simplified for Swofty, Team Simplified's Simplified Importer, imports, store
 
 - The crate `addons/simplified` (`swofty-addon-simplified`) is Rust and AGPL-3.0-or-later, like the rest of the repository. Its `mod.serps` reader, package root, content root and entry path checks are ported from the Simplified Launcher (GPL-3.0, used with Team Simplified's permission) and carry the Simplified Suite notice. `THIRD_PARTY.md` credits Team Simplified for the `.serps` format, the Simplified Suite and the logo, and the Simplified Importer page shows the credit.
 - Import, the library, profile state, the section and `swofty mods` are built (work item 13), and so are the diffs (work item 14), the merge and conflicts (work item 15).
-- Manifest: id `teamsimplified.mods`, name `Simplified Importer`, author `Team Simplified`, version 0.7.0, `compat.launcher` `>=1.3.0`. No options and no native plugin.
+- Manifest: id `teamsimplified.mods`, name `Simplified for Swofty`, author `Team Simplified`, version 0.7.0, `compat.launcher` `>=1.3.0`. No options and no native plugin.
 - Ships as a launcher plugin: `teamsimplified.mods.swoftyaddon` holds `swofty.json` and the helper program `bin/simplified-helper`, which hands the addon to `swofty_addon::helper::run_helper`. `swofty.json` declares the one section, id `mods`, titled `Simplified Importer`, the `mods` command, the import extensions and the build hook, and the addon reads its sections and commands from it. `sections/mods.svg`, Team Simplified's mark, is the section's sidebar icon. The launcher can still build the crate in through `swofty-builtins`; built in, it is on by default in new profiles. Either way it can be turned off per profile, which hides its section.
 - It uses `swofty-addon` and `swofty-formats` only. Core has no code for it.
 

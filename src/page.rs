@@ -20,8 +20,7 @@ const ART: &[u8] = include_bytes!("../art/simplified-mark.png");
 const ART_FILE: &str = "simplified-mark.png";
 pub const FOOTER: &str = "Based on Simplified Suite by Team Simplified.";
 const ABOUT: &str = "Team Simplified make modding tools for F1 25: Simplified Studio, the SERPs Launcher, a track installer, swappers, editors and a database merger, open source in the Simplified Suite.";
-const IMPORTER: &str =
-    "The Simplified Importer is their part of Swofty Launcher: it turns any F1 25 mod into a Swofty addon.";
+const IMPORTER: &str = "Simplified for Swofty is their part of Swofty Launcher: its Simplified Importer turns any F1 25 mod into a Swofty addon.";
 const FORMAT: [&str; 2] = [
     "A Swofty addon is a folder or .swoftyaddon file with a swofty.json manifest and the changes it makes: database records, text, archive resources, files and tracks.",
     "The launcher applies every addon that is on in the profile, in load order, and lower in the list wins.",
