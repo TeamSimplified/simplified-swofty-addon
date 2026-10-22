@@ -94,6 +94,10 @@ fn kind(k: Kind) -> &'static str {
     }
 }
 
+// Raised when converting the same mod gives a different addon. 2: removals only
+// apply to a mod made for the installed game version.
+pub const CONVERTER: u32 = 2;
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     #[serde(default)]
@@ -108,6 +112,8 @@ pub struct Record {
 pub struct Entry {
     pub name: String,
     pub at: u64,
+    #[serde(default)]
+    pub converter: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub made: Option<Made>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,10 +212,7 @@ impl Pending {
 
 pub fn pending(cx: &Cx, record: &Record) -> Result<Pending> {
     let library = Library::new(cx.data_dir).list()?;
-    let convert = library
-        .iter()
-        .filter(|p| !record.mods.contains_key(&p.id))
-        .count();
+    let convert = library.iter().filter(|p| due(cx, record, p)).count();
     let place = match cx.profile.vanilla {
         true => 0,
         false => {
@@ -239,6 +242,23 @@ fn enable_needs(addons: &dyn AddonStore, made: &Made, lines: &mut Vec<String>) {
         match addons.set_enabled(need, true) {
             Ok(()) => lines.push(format!("{} needs {need}, which is now on", made.name)),
             Err(e) => lines.push(format!("{} needs {need}, which did not turn on: {e}", made.name)),
+        }
+    }
+}
+
+// A mod converts when it has no addon yet, or when an older converter made its addon
+// and the change since applies to it: a converter before 2 kept the removals of a mod
+// made for another game version.
+fn due(cx: &Cx, record: &Record, p: &Package) -> bool {
+    match record.mods.get(&p.id) {
+        None => true,
+        Some(e) => {
+            e.made.is_some()
+                && e.converter < CONVERTER
+                && p.track.is_none()
+                && cx
+                    .game
+                    .is_some_and(|g| p.game_version.is_none() || p.game_version != g.exe_version())
         }
     }
 }
@@ -280,6 +300,7 @@ fn convert_one(
     match &made {
         Ok(m) => {
             entry.made = Some(m.clone());
+            entry.converter = CONVERTER;
             entry.error = None;
         }
         Err(e) => entry.error = Some(e.to_string()),
@@ -501,7 +522,7 @@ fn migrated(
         .order
         .into_iter()
         .map(|(p, _)| p)
-        .filter(|p| !record.mods.contains_key(&p.id) && convertible(cx, p))
+        .filter(|p| due(cx, &record, p) && convertible(cx, p))
         .collect();
     let mut m = Migrated::default();
     let total = todo.len() as f32;
@@ -1350,6 +1371,32 @@ mod tests {
         );
         assert_eq!(startup(), Effect::None);
         assert_eq!(conv.made.lock().unwrap().len(), 3, "nothing converts twice");
+        std::fs::remove_dir_all(&host.root).ok();
+    }
+
+    #[test]
+    fn a_mod_an_older_converter_made_converts_again_once() {
+        let host = Host::new("reconvert", &["one"]);
+        library_of(&host, &["a"], vec![slot("a", true)]);
+        let conv = Fake::default();
+        let addon = Simplified::new();
+        let startup = || {
+            with(&host, "one", |cx| {
+                addon.event_with(cx, SECTION, Event::Startup {}, &conv)
+            })
+            .unwrap()
+        };
+        startup();
+        let mut record = Record::load(&host.data).unwrap();
+        assert!(record.mods.values().all(|e| e.converter == CONVERTER));
+        for e in record.mods.values_mut() {
+            e.converter = 0;
+        }
+        record.save(&host.data).unwrap();
+        assert_eq!(startup(), Effect::Notice("Converted 1 mod into an addon".into()));
+        assert_eq!(startup(), Effect::None);
+        assert_eq!(conv.made.lock().unwrap().len(), 2);
+        assert_eq!(host.order("one").last(), Some(&on("a", true)));
         std::fs::remove_dir_all(&host.root).ok();
     }
 
