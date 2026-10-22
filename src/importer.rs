@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use swofty_addon::launcher::{AddonStore, Cx, Progress};
+use swofty_addon::launcher::{AddonStore, Cx, Progress, TaskItem, TaskList, TaskState};
 use swofty_addon::manifest::{Category, Kind};
 
 use crate::library::{Library, Package};
@@ -431,6 +431,52 @@ pub fn startup(
     Ok((!parts.is_empty()).then(|| parts.join("; ")))
 }
 
+// The launcher's checklist of the mods a migration converts, sent whole each time
+// one of them changes. A launcher without the dialog drops it.
+struct Tasks {
+    list: TaskList,
+}
+
+impl Tasks {
+    fn new(todo: &[Package]) -> Self {
+        Self {
+            list: TaskList {
+                title: "Migrating your mods to Swofty addons".into(),
+                subtitle: "Swofty 1.3.0 turns every mod into an addon. Your library stays as it is.".into(),
+                items: todo
+                    .iter()
+                    .map(|p| TaskItem {
+                        id: p.id.clone(),
+                        label: p.name.clone(),
+                        state: TaskState::Waiting,
+                        note: None,
+                    })
+                    .collect(),
+            },
+        }
+    }
+
+    fn send(&self, cx: &Cx) {
+        if !self.list.items.is_empty() {
+            cx.tasks(&self.list);
+        }
+    }
+
+    fn set(&mut self, cx: &Cx, i: usize, state: TaskState, note: Option<String>) {
+        self.list.items[i].state = state;
+        self.list.items[i].note = note;
+        self.send(cx);
+    }
+}
+
+fn short(text: &str) -> String {
+    let line = text.lines().next().unwrap_or_default();
+    match line.char_indices().nth(120) {
+        Some((at, _)) => format!("{}…", &line[..at]),
+        None => line.to_owned(),
+    }
+}
+
 #[derive(Default)]
 struct Migrated {
     lines: Vec<String>,
@@ -460,21 +506,33 @@ fn migrated(
     let mut m = Migrated::default();
     let total = todo.len() as f32;
     let mut tried = Vec::new();
+    let mut tasks = Tasks::new(&todo);
+    tasks.send(cx);
     for (i, p) in todo.iter().enumerate() {
         let expected = Duration::from_secs(p.size() / BYTES_PER_SEC);
         if budget.is_some_and(|b| !tried.is_empty() && started.elapsed() + expected > b) {
             m.left = todo.len() - i;
+            for item in &mut tasks.list.items[i..] {
+                item.note = Some("converts on next start".into());
+            }
+            tasks.send(cx);
             break;
         }
         tried.push(p.id.clone());
+        tasks.set(cx, i, TaskState::Running, None);
         let mut report = |f: f32, text: &str| {
             progress.report((i as f32 + f) / total, &format!("Converting {}: {text}", p.name))
         };
         match convert_one(cx, addons, conv, &library, p, &mut record, &mut report) {
-            Ok(_) => m.converted.push(p.clone()),
+            Ok(made) => {
+                m.converted.push(p.clone());
+                let note = made.category.map(|c| c.label().to_owned());
+                tasks.set(cx, i, TaskState::Done, note);
+            }
             Err(e) => {
                 m.failed.push(p.name.clone());
                 m.lines.push(format!("{} was not converted: {e}", p.name));
+                tasks.set(cx, i, TaskState::Failed, Some(short(&e.to_string())));
             }
         }
         record.save(cx.data_dir)?;
@@ -1292,6 +1350,96 @@ mod tests {
         );
         assert_eq!(startup(), Effect::None);
         assert_eq!(conv.made.lock().unwrap().len(), 3, "nothing converts twice");
+        std::fs::remove_dir_all(&host.root).ok();
+    }
+
+    #[derive(Default)]
+    struct Shown(std::sync::Mutex<Vec<TaskList>>);
+
+    impl swofty_addon::launcher::Tasks for Shown {
+        fn show(&self, list: &TaskList) {
+            self.0.lock().unwrap().push(list.clone());
+        }
+    }
+
+    fn snapshots(shown: &Shown) -> Vec<Vec<(String, TaskState, Option<String>)>> {
+        std::mem::take(&mut *shown.0.lock().unwrap())
+            .into_iter()
+            .map(|l| l.items.into_iter().map(|i| (i.id, i.state, i.note)).collect())
+            .collect()
+    }
+
+    #[test]
+    fn a_migration_shows_each_mod_as_it_converts() {
+        use TaskState::{Done, Failed, Running, Waiting};
+        let host = Host::new("tasks", &["one"]);
+        library_of(
+            &host,
+            &["a", "b", "c"],
+            vec![slot("a", true), slot("b", true), slot("c", true)],
+        );
+        let conv = Fake {
+            refuse: vec!["b"],
+            ..Fake::default()
+        };
+        let shown = Shown::default();
+        let start = |budget| {
+            let addons = host.addons("one");
+            let cx = Cx::new(
+                ID,
+                &host.profiles["one"],
+                &host.data,
+                &host.root,
+                Some(&NoStock),
+                &host.states["one"],
+            )
+            .with_addons(&addons)
+            .with_tasks(&shown);
+            startup(&cx, &conv, &NoProgress, budget).unwrap()
+        };
+        start(Duration::ZERO);
+        let item = |id: &str, state, note: Option<&str>| (id.to_owned(), state, note.map(str::to_owned));
+        let next = Some("converts on next start");
+        let liveries = Some("Liveries");
+        assert_eq!(
+            snapshots(&shown),
+            [
+                vec![
+                    item("a", Waiting, None),
+                    item("b", Waiting, None),
+                    item("c", Waiting, None)
+                ],
+                vec![
+                    item("a", Running, None),
+                    item("b", Waiting, None),
+                    item("c", Waiting, None)
+                ],
+                vec![
+                    item("a", Done, liveries),
+                    item("b", Waiting, None),
+                    item("c", Waiting, None)
+                ],
+                vec![
+                    item("a", Done, liveries),
+                    item("b", Waiting, next),
+                    item("c", Waiting, next)
+                ],
+            ]
+        );
+        start(BUDGET);
+        let refused = Some("its archives could not be read");
+        assert_eq!(
+            snapshots(&shown),
+            [
+                vec![item("b", Waiting, None), item("c", Waiting, None)],
+                vec![item("b", Running, None), item("c", Waiting, None)],
+                vec![item("b", Failed, refused), item("c", Waiting, None)],
+                vec![item("b", Failed, refused), item("c", Running, None)],
+                vec![item("b", Failed, refused), item("c", Done, liveries)],
+            ]
+        );
+        start(BUDGET);
+        assert!(snapshots(&shown).is_empty(), "nothing to migrate sends nothing");
         std::fs::remove_dir_all(&host.root).ok();
     }
 
