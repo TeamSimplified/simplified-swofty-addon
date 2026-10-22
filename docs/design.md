@@ -166,7 +166,7 @@ Every mod becomes a standalone Swofty data addon. `src/convert.rs` writes one ad
 
 #### Variants
 
-Parts of one import that write mostly the same things are variants. Two parts are variants when the records, resources, text entries and files they both write are at least half of everything the two write. All variants install. The one on is the variant that was on before a re-import, else the first whose part name has the word `Default` or `Standard`, else the first; the rest install off. Parts that are not variants all turn on. The import notice and `Last import` say how many variants installed and which is on. A `Choose a mod…` import with variants returns that notice instead of `show_addon`.
+Parts of one import that write mostly the same things are variants. Two parts are variants when the records, resources, text entries and files they both write are at least half of everything the two write. All variants install. The one on is the variant that was on before a re-import, else the first whose part name has the word `Default` or `Standard`, else the first; the rest install off. Parts that are not variants all turn on. The import notice and `Last import` say how many variants installed and which is on. A `Choose a mod…` import with variants returns `show_addon` with that notice, so the launcher highlights the first addon and shows the notice.
 
 #### What the addon holds
 

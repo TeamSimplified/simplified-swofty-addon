@@ -1314,7 +1314,7 @@ mod tests {
             |on: &str| format!("Pack: 2 variants installed as addons; {on} is on. Pick another on Addons.");
         let effect = pick();
         assert!(
-            matches!(&effect, Effect::Notice(t) if t.ends_with(&line("Season B · Standard Grip"))),
+            matches!(&effect, Effect::ShowAddon(s) if s.notice().is_some_and(|t| t.ends_with(&line("Season B · Standard Grip")))),
             "{effect:?}"
         );
         assert_eq!(
@@ -1352,7 +1352,7 @@ mod tests {
         host.calls();
         let effect = pick();
         assert!(
-            matches!(&effect, Effect::Notice(t) if t.ends_with(&line("Season A · Bright Grip"))),
+            matches!(&effect, Effect::ShowAddon(s) if s.notice().is_some_and(|t| t.ends_with(&line("Season A · Bright Grip")))),
             "{effect:?}"
         );
         assert!(host.calls().contains(&format!("off {b}")), "the pick is kept");
@@ -1680,7 +1680,7 @@ mod tests {
             addon.event_with(cx, SECTION, pick.clone(), &Converter)
         })
         .unwrap();
-        assert_eq!(effect, Effect::ShowAddon(id.clone()));
+        assert_eq!(effect, Effect::ShowAddon(id.clone().into()));
         assert_eq!(host.calls(), [format!("install {id}"), format!("on {id}")]);
         let made = Record::load(&host.data)
             .unwrap()

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use swofty_addon::launcher::{AddonInfo, Cx};
 use swofty_addon::view::{
     Art, Block, Body, Button, ButtonKind, Card, Columns, Effect, Event, Grid, Hero, Icon, Notice, Pill,
-    Style, Tone, View,
+    Shown, Style, Tone, View,
 };
 
 use crate::importer::{self, Convert, Done, Entry, Made, Record};
@@ -508,9 +508,10 @@ fn shown(done: Done) -> Result<Effect> {
     if done.failed {
         return Err(err(done.lines.join("\n")));
     }
-    Ok(match done.show.filter(|_| !done.variants) {
-        Some(id) => Effect::ShowAddon(id),
-        None => Effect::Notice(done.lines.join("\n")),
+    Ok(match (done.show, done.variants) {
+        (Some(id), true) => Effect::ShowAddon(Shown::new(id, done.lines.join("\n"))),
+        (Some(id), false) => Effect::ShowAddon(id.into()),
+        (None, _) => Effect::Notice(done.lines.join("\n")),
     })
 }
 
