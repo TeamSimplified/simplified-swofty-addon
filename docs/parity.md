@@ -16,7 +16,7 @@ How the Mod Importer's conversion compares with how Team Simplified's Simplified
 |---|---|
 | Identical before the audit | 20 |
 | Different or missing, now fixed | 11 |
-| Different by design | 10 |
+| Different by design | 11 |
 | Not applicable to a converted addon | 5 |
 
 ## Matrix
@@ -69,8 +69,9 @@ How the Mod Importer's conversion compares with how Team Simplified's Simplified
 | 27 | A resource two archives of one mod hold differently | Each archive keeps its own copy | One copy for both | **fixed**: `fix: keep a copy per archive of a resource a mod's archives hold differently`, then by row 26 |
 | 28 | Resource change test | n/a (whole file) | Type, fragment layout and packed sizes, then digest or content hash (`diff.rs:188-212`) | identical |
 | 29 | Resources the mod's archive lacks | Gone with the file | Removed only under the `game_version` rule of row 15 | **fixed** with row 15 (`diff.rs:232-241`); shader archives remove nothing, as in v3 (row 30) |
-| 30 | Shader archives (`shader_package_2025/*.erp`) | v3 merges the game's archive and each mod's by resource, later wins (`actions.prepare_mods:440-507`); loaded at boot, so they replace URIs everywhere | Into the boot overlay (`merge.rs:20-25`) | identical |
+| 30 | Shader archives (`shader_package_2025/*.erp`), including liveries Simplified Studio packs into them | v3 merges the game's archive and each mod's by resource, later wins (`actions.prepare_mods:440-507`); v4 copies the mod's file over the game's (`ModStack.cs:205-234`). The game loads shader archives at boot, so their resources replace URIs everywhere | Every resource the mod adds or changes goes into the boot overlay on `vfx_package/common.erp` (`merge.rs:20-25`), which the boot groups read before any car or UI group (launcher `asset-api.md` runtime table, `mods/serps.md`) | identical |
 | 31 | Simplified Studio's marker and shadow material in shader archives | Loaded with the shader archive | Left out | **fixed**: `fix: load simplified studio's marker and shadow material with the mod` (`merge.rs:57-74`) |
+| 47 | Generic and AMD shader archives (`<name>.sm51.erp`, `<name>.sm51_amd.erp`) | Both installed; the game loads the one for its GPU | Both convert into the one boot overlay, which every GPU reads; a resource in both loads once, the generic copy, and copies that differ are reported (`convert.rs` `gpu_twins`) | identical when the two copies match, as in every real mod tested; otherwise AMD GPUs get the generic copy (see launcher ops) |
 | 32 | Two mods ship one archive | v3: the first mod's archive with each later mod's resources over it, every resource the later mod carries winning, changed or not (`actions.prepare_mods:510-552`); shader archives likewise over the game's (`actions.prepare_mods:440-507`). v4: the later file wins whole | Each mod's changes over the game's, later addon wins per changed resource | different by design: a resource only the earlier mod changes keeps its change in ours, where the later mod's unchanged copy restores the game's in the Simplified Launcher. Two mods that change different cars in one archive both apply |
 | 33 | Seven `ui_texarrays_*` kinds (car images, championship branding, drivers, engine branding, nationality flags, team branding, track images) | v3: the `.texarray.image` arrays in mods' `ui_texture.nefx2.sm51(_amd).erp`, the first mod's archive as the base, each slice compared with the `app/original/ui` arrays, later mod wins per slice, written to both shader archives (`actions.merge_resources:104-254`, `326-417`) | `erp.merge-slices` of each `.texarray.image` from `ui_texture*` shader archives into the boot archive; the launcher writes the slices that differ from the game's over the array in place (`convert.rs:571-615`, launcher `ops/erp.md#texture-arrays`); `.texarray` views whole | identical for arrays of the game's size. An array with fewer slices: v3 uses the mod's array as it is, ours merges its slices over the game's. Another format: both use it whole |
 | 34 | Texture arrays elsewhere (`ui_package` archives) | Replaced with the archive | Per resource on that archive (row 26) | identical |
@@ -132,6 +133,7 @@ After the fixes, every F1 25 mod is identical:
 | Mod | Kind | Result |
 |---|---|---|
 | Pirelli Tyres Collection v1.0.6 | 12 parts, `teams/common.erp` and `tyrecompounds.erp` each | identical, every part |
+| Merc26 | Mercedes 2026 livery Studio packed into `object_mask.nefx2.sm51.erp` and `_amd.erp` (731 KB and 767 KB in the game, 29 MB each in the mod) | identical: all 456 resources of each archive, the 450 the game lacks all in the boot overlay, the generic and AMD copies byte-identical; needs the SERPs Base Files |
 | F1 25 with V10 Engines (V10.3) | Studio shader archives, 4 audio banks | identical; needs the SERPs Base Files |
 | F1 2021 Cars for F1 25 | 23 archives, 10 mip files | identical. Before row 26: 33,038 copies of its resources in archives it does not ship, such as story-mode cars, were replaced; before row 27: 2 resources of `common_fom.erp` |
 | SERPs Base Files for F1 25 v4.1 | three `common.erp`, splash | identical. Before row 26: 6,761 copies in other archives were replaced |
@@ -143,13 +145,15 @@ After the fixes, every F1 25 mod is identical:
 | [IMG] F1 1990 v1.4.zip | Automobilista 2 livery pack | skipped: not an F1 25 mod |
 | SCdesign_RSS1990_SAABERICSSONF1.7z | Assetto Corsa car skin | skipped: not an F1 25 mod |
 
-Before the fixes, V10 and koenigsegg differed in the Studio shadow material (row 31), and F1 2021 Cars and the SERPs Base Files in rows 26 and 27. None of the real mods carry a database, language files or `ui_texture` arrays; those rows rest on the unit tests in `src/diff.rs`, `src/convert/tests.rs` and the launcher's gated logo merge test.
+Before the fixes, V10, koenigsegg and Merc26 differed in the Studio shadow material (row 31), and F1 2021 Cars and the SERPs Base Files in rows 26 and 27. The boot overlay is read when the engine parses its asset manifest, before any car or UI group, with no `early` flag; `early` concerns native plugins and the database. Whether a livery shows in game was not checked in game. None of the real mods carry a database, language files or `ui_texture` arrays; those rows rest on the unit tests in `src/diff.rs`, `src/convert/tests.rs` and the launcher's gated logo merge test.
 
 ## Launcher ops still needed
 
 Every row converts with ops the launcher has: `put-record`, `remove-record`, `lang.set`, `lang.default`, `erp.overlay` on any asset group archive (with the launcher's fallback to rewriting an archive whose layout changes), `remove-resource`, `merge-slices`, `add-mipmaps`, `file.put`, `track.add`, and `load_after` for the SERPs Base Files. One change keeps two converted mods from failing a build:
 
 - `remove-record` and `remove-resource` fail when the key or resource is gone (`apply_db_op` in `addon-api/src/ops.rs:737-743`, `ErpBuild::apply` in `core/src/erpbuild.rs:396-401`). Two mods built from the same older database or archive both remove what it lacks, and the second addon's removal fails the build. Wanted: a removal of a key or resource an earlier op in the same build already removed is left out, with a line such as `erp: <addon>: eaid://… already removed by <earlier addon>`, as the Mod Importer's build hook already does for library mods (`lib.rs` `without_repeats`).
+- For row 47, either an `erp.overlay` that loads only on one GPU (`"gpu": "amd"` or `"gpu": "other"`), or `erp` ops on `shader_package_2025/` archives delivered by rewriting those archives in the game files, as a layout change is. The converter would then send a resource whose generic and AMD copies differ to its own archive.
+- Launcher docs: `docs/reference/mods/serps.md:102` still says every resource goes into the `vfx_package/common.erp` overlay; asset group archives now get overlays of their own (row 26).
 
 ## Cannot be identical
 
@@ -159,3 +163,4 @@ Every row converts with ops the launcher has: `put-record`, `remove-record`, `la
 - **Programs.** `.dll` and `.asi` files are never copied (row 46).
 - **Short texture arrays** merge over the game's array instead of replacing it (row 33).
 - **` -x` exclusivity** is inferred from what parts write (row 8).
+- **GPU builds of a shader archive** share one boot overlay. A mod whose generic and AMD copies of a resource differ gives AMD GPUs the generic copy, with a warning (row 47).

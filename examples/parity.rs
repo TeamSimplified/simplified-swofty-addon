@@ -623,6 +623,26 @@ fn compare_archives(f: &mut Findings, exp: &Expected, got: &Got, game: &Stock) -
                 )),
             }
         }
+        if merge::carrier(rel) {
+            let added: Vec<&str> = modf
+                .erp
+                .resources
+                .iter()
+                .map(|r| r.name.as_str())
+                .filter(|n| stock.erp.find(n).is_err())
+                .collect();
+            let booted = added
+                .iter()
+                .filter(|n| owned.contains_key(&(merge::BOOT_ERP, **n)))
+                .count();
+            f.note(format!(
+                "{rel}: {} resource(s) the game's archive lacks, {booted} of them in the boot overlay",
+                added.len()
+            ));
+            if booted < added.len() {
+                diffs.push(format!("{} added resource(s) not at boot", added.len() - booted));
+            }
+        }
         match diffs.is_empty() {
             true => f.same(format!("{rel} ({same} resources)")),
             false => f.differ(
