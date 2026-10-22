@@ -553,6 +553,15 @@ fn compare_text(
     Ok(())
 }
 
+// Where the Simplified Launcher puts an archive's resources: asset group archives and
+// shader archives keep them, any other archive's go to the boot overlay.
+fn delivered_to(rel: &str) -> &str {
+    match rel.starts_with("2025_asset_groups/") || merge::carrier(rel) {
+        true => rel,
+        false => merge::BOOT_ERP,
+    }
+}
+
 fn compare_archives(f: &mut Findings, exp: &Expected, got: &Got, game: &Stock) -> R<()> {
     let mut owned: HashMap<(&str, &str), &Resource> = HashMap::new();
     for (erp, r, _, _) in got.erp.resources() {
@@ -584,13 +593,16 @@ fn compare_archives(f: &mut Findings, exp: &Expected, got: &Got, game: &Stock) -
                 },
                 Err(_) => None,
             };
+            // What ships: a resource from an asset group or shader archive stays in that
+            // archive, written into the game folder for a shader archive, as the
+            // Simplified Launcher merges it there. Only other archives' resources go to
+            // the boot overlay; a shader-carried resource found there instead is
+            // reported below.
             let from_overlay = owned
-                .get(&(merge::BOOT_ERP, uri))
-                .map(|r| (merge::BOOT_ERP, *r))
-                .or_else(|| owned.get(&(rel.as_str(), uri)).map(|r| (rel.as_str(), *r)));
+                .get(&(delivered_to(rel), uri))
+                .map(|r| (delivered_to(rel), *r));
             if let Some((erp, _)) = from_overlay {
                 seen_owned.insert((erp.to_owned(), uri.to_owned()));
-                seen_owned.insert((rel.clone(), uri.to_owned()));
             }
             let have: Option<Resource> = match from_overlay {
                 Some((_, r)) => Some(r.clone()),
@@ -635,17 +647,28 @@ fn compare_archives(f: &mut Findings, exp: &Expected, got: &Got, game: &Stock) -
                 .map(|r| r.name.as_str())
                 .filter(|n| stock.erp.find(n).is_err())
                 .collect();
-            let booted = added
+            let kept = added
                 .iter()
-                .filter(|n| owned.contains_key(&(merge::BOOT_ERP, **n)))
+                .filter(|n| owned.contains_key(&(rel.as_str(), **n)))
                 .count();
             f.note(format!(
-                "{rel}: {} resource(s) the game's archive lacks, {booted} of them in the boot overlay",
+                "{rel}: {} resource(s) the game's archive lacks, {kept} of them in the archive itself",
                 added.len()
             ));
-            if booted < added.len() {
-                diffs.push(format!("{} added resource(s) not at boot", added.len() - booted));
+            if kept < added.len() {
+                diffs.push(format!(
+                    "{} added resource(s) not in {rel} itself",
+                    added.len() - kept
+                ));
             }
+            let booted: Vec<String> = modf
+                .erp
+                .resources
+                .iter()
+                .filter(|r| owned.contains_key(&(merge::BOOT_ERP, r.name.as_str())))
+                .map(|r| format!("{}: routed to the boot overlay, not {rel}", r.name))
+                .collect();
+            diffs.extend(booted);
         }
         match diffs.is_empty() {
             true => f.same(format!("{rel} ({same} resources)")),
@@ -655,13 +678,13 @@ fn compare_archives(f: &mut Findings, exp: &Expected, got: &Got, game: &Stock) -
             ),
         }
     }
-    // The boot archive's overlay replaces every copy of a resource. Shader archives and
-    // the boot archive itself do so in the Simplified Launcher too; any other archive
-    // replaces only its own copies there.
+    // The boot archive's overlay replaces every copy of a resource. Only the boot
+    // archive itself does so in the Simplified Launcher; any other archive replaces
+    // only its own copies there.
     let shipped: BTreeSet<&str> = exp.archives.iter().map(|(rel, _)| rel.as_str()).collect();
     let mut global: BTreeSet<String> = BTreeSet::new();
     for (rel, path) in &exp.archives {
-        if merge::carrier(rel) || rel == merge::BOOT_ERP {
+        if rel == merge::BOOT_ERP {
             let f = ErpFile::open(path).map_err(|e| format!("{rel}: {e}"))?;
             global.extend(f.erp.resources.iter().map(|r| r.name.clone()));
         }
