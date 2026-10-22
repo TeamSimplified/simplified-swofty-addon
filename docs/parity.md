@@ -1,91 +1,159 @@
 # Parity with the Simplified Launcher
 
-How the Mod Importer's conversion compares with how Team Simplified's Simplified Launcher installs the same mod.
+How the Mod Importer's conversion compares with how Team Simplified's Simplified Launcher installs the same mod, and what the parity harness found on real mods.
 
 ## Sources
 
-- **v4**: the Simplified Launcher's C# source, `Simplified Launcher/src/SimplifiedLauncher/` in the Simplified Suite. Paths below are relative to `Mods/` unless they name another project.
-- **v3**: Simplified Launcher v3.2.13, the release players use. Its `app/original/` holds the clean database, the eleven language files, `2026_team_keys.lng`, `2026_team_names.json` and seven `ui_texarrays_*.erp` archives.
+- **v3**: Simplified Launcher v3.2.13, the release players use. Its Python modules were recovered from the PyInstaller build. Citations are `module:line` in the recovered source, `actions.*` under `app/actions/` and `lib.*` under `app/lib/`. Its `app/original/` holds the clean database, the eleven language files, `2026_team_keys.lng`, `2026_team_names.json` and seven `ui_texarrays_*.erp` archives. The clean database and language files are byte-identical to the installed game's (build 25251167) and to the launcher's baseline.
+- **v4**: the Simplified Launcher's C# source in the Simplified Suite, `Simplified Launcher/src/SimplifiedLauncher/`. Citations without a folder are under `Mods/`.
 - **Ours**: this repository (`src/`) and the launcher ops that apply a converted addon (`packages/addon-api`, `packages/core` and `docs/reference/ops/` in SwoftyLauncher).
 
-Status: **identical** gives the same game state for the mod on its own; **different** says how; **missing** has no counterpart in ours.
+**identical** gives the same game state for the mod on its own; **different** says how; **missing** has no counterpart in ours. **fixed** marks rows this audit changed, with the commit subject.
+
+## Summary
+
+| | Rows |
+|---|---|
+| Identical before the audit | 21 |
+| Different or missing, now fixed | 11 |
+| Different by design | 9 |
+| Not applicable to a converted addon | 5 |
 
 ## Matrix
 
-### Import
+### Import and staging
 
 | # | Behaviour | Simplified Launcher | Ours | Status |
 |---|---|---|---|---|
-| 1 | Archive formats | Any format SharpCompress reads, by content (`ModImport.cs:301-338`) | zip, 7z, rar and folders; 7-Zip or UnRAR from `PATH` for the rest (`package.rs:127-142`, `252-334`) | different: tar and gzip need 7-Zip |
-| 2 | Unsafe entries | Absolute paths, `..`, `:` refused and counted (`ModImport.cs:391-403`) | Same rule (`package.rs:373-385`) | identical |
-| 3 | `mod.serps` | `mod_name` or `name`, `author`, `version`, `game`, `game_version`, BOM, comments, trailing commas (`ModManifest.cs:24-82`) | Same fields plus `studio_version` (`serps.rs:7-116`) | identical |
-| 4 | Wrapper folder | Stepped into only when it holds `mod.serps` (`ModImport.cs:418-426`) | Same (`package.rs:387-397`) | identical |
-| 5 | Game folder by name | Shallowest folder named exactly `F1 25`, three levels (`ModStaging.cs:76-85`, `139-141`) | Shallowest folder whose name starts with `F1 25` and holds game folders, else the first named so (`package.rs:474-489`) | identical for every mod named `F1 25`; ours also takes `F1 25 (name)` |
-| 6 | Game folder by content | Markers `asset_groups`, `actionmaps`, `audio`, `videos`, `game_package`, `character_package`, `*_package`, `*_package_shared`, `*_asset_groups`, `shader_package_*` (`ModStaging.cs:57-64`, `147-166`) | Same markers plus `localisation` and `localisatioa` (`package.rs:19-30`) | identical; ours also finds a text-only mod |
-| 7 | Loose game folders at the mod root | Only the marker folders move into `F1 25`; `mod.serps`, read-mes and other root files stay out (`ModStaging.cs:96-106`) | Every file under the root is a game file (`library.rs:349-389`) | different: root files become `file.put` |
-| 8 | Unrecognised mod | Imported, installs nothing (`ModStaging.cs:88`, `ModStack.cs:102-106`) | Refused with a reason (`library.rs:282-289`) | different (deliberate) |
-| 9 | Re-import | New copy staged, old moved aside, then deleted (`ModImport.cs:146-181`) | Same (`library.rs:330-347`) | identical |
-| 10 | Programs | Laid like any file (`ModStack.cs:205-234`) | `.exe`, `.dll`, `.asi` and EA AntiCheat files other than the splash are skipped and reported (`package.rs:31-35`, `51-53`) | different (deliberate) |
+| 1 | Archive formats | v3: zip and `.serps` with `zipfile`, 7z with 7-Zip, rar with UnRAR then 7-Zip (`actions.prepare_mods:631-774`). v4: anything SharpCompress reads (`ModImport.cs:301-338`) | zip, 7z and rar in-process, 7-Zip or UnRAR as fallback (`package.rs:135-150`, `252-334`) | identical for zip, 7z, rar; v4's tar and gzip need 7-Zip |
+| 2 | Unsafe entries | Absolute paths, `..` and `:` refused (`ModImport.cs:391-403`) | Same rule (`package.rs:381-393`) | identical |
+| 3 | `mod.serps` | `mod_name` or `name`, `author`, `version`, `game_version` (`ModManifest.cs:24-82`, v3 `lib.api_mods`) | Same fields plus `studio_version` (`serps.rs`) | identical |
+| 4 | Wrapper folder | Stepped into only when it holds `mod.serps` (`ModImport.cs:418-426`) | Same (`package.rs:395-405`) | identical |
+| 5 | Game folder | v3: shallowest folder whose name starts with `f1 25`, else the parent of `shader_package_2025`, `audio` or `2025_asset_groups` (`actions.prepare_mods:232-265`). v4: a folder named exactly `F1 25`, else one holding game folders (`ModStaging.cs:74-107`) | Shallowest folder starting with `F1 25` that holds game folders, else one holding game folders, three levels down (`package.rs:482-497`) | identical |
+| 6 | Loose files beside game folders at the mod's top | v3 copies them all, `mod.serps` and read-mes included. v4 gathers only the game folders (`ModStaging.cs:96-106`) | Every file was a game file | **fixed** (v4's rule, plus top-level files the game ships): `fix: leave out read-mes beside loose game folders and ea installer files` (`library.rs:358-380`) |
+| 7 | Parts | v3: the parent of an `F1 25` folder or of `shader_package_2025`, `audio`, `2025_asset_groups` (`actions.list_mods:95-171`). v4 has none | The folder above any game folder or `F1 25` folder (`package.rs:419-463`) | identical |
+| 8 | ` -c` and ` -x` | ` -c` names a category, ` -x` makes parts in one category exclusive (`actions.list_mods:195-236`) | Both left out of the part's name (`package.rs:465-480`); parts that write mostly the same things are variants with one on (`importer.rs:704`) | different: exclusivity comes from overlap, not ` -x` |
+| 9 | Load order | v3: name order of the mods folder (`actions.list_mods:309-370`). v4: tick order | The profile's addon order; migration keeps each profile's mod order | identical in effect |
+| 10 | Blocked files | `f1_25.exe` and its spellings, the anticheat launcher and `preloader_l.dll`, names starting `eaanticheat`, `eajavelin`, `preloader_`, except `eaanticheat.splash.png` (`actions.prepare_mods:30-52`). v4 blocks nothing | `.exe`, `.dll`, `.asi` and names starting `eaanticheat` were skipped | **fixed** (`eajavelin`, `preloader_` added): same commit as row 6 (`package.rs:32-38`). Other `.dll` and `.asi` files stay skipped by design (row 46) |
+| 11 | Re-import | Replaces the library copy (`ModImport.cs:146-181`) | Same (`library.rs:336-353`) | identical |
+| 12 | A folder with no game files | v4 imports it and installs nothing (`ModStaging.cs:88`) | Refused with a reason | different by design |
 
 ### Database
 
 | # | Behaviour | Simplified Launcher | Ours | Status |
 |---|---|---|---|---|
-| 11 | Unit | Per record against the clean database (`Merged.cs:46-64`, `DatabaseLayers.cs:28-74`) | Per record against `GameFiles::original` (`diff.rs:158-195`), `put-record` with the mod's raw value (`merge.rs:65-71`) | identical |
-| 12 | Removed records | A stock record missing from the mod's database is removed (`DatabaseLayers.cs:54-60`) | Removed only when `mod.serps` `game_version` equals the installed exe's version; otherwise dropped with a warning (`diff.rs:110`, `187-193`) | different |
-| 13 | Another game's database | Fails the install (`Merged.cs:52-56`) | Fails the import (`library.rs:367-370`) | identical |
-| 14 | Order | Later ticked mod wins per record (`DatabaseLayers.cs:41-52`) | Later addon wins per record (launcher planner) | identical |
+| 13 | Where the file sits | v3 routes `gamedatabases.2025.bin` from any folder (`actions.prepare_mods:321-401`, step 7). v4: any file with that name (`Merged.cs:32-38`) | Only `game_package/gamedatabases/` | **fixed**: `fix: merge a mod's database and language files wherever it keeps them` (`package.rs:58-60`, `79-81`) |
+| 14 | One mod | v3 copies the mod's database whole (`actions.prepare_mods:590-597`). v4 applies its records and removals over the clean one (`DatabaseLayers.cs:28-74`) | Per record against the game's database (`diff.rs:156-186`), `put-record` with the mod's raw value (`merge.rs:84-100`) | identical |
+| 15 | Removed records | Gone with the whole file (v3), removed (v4 `DatabaseLayers.cs:54-60`) | Removed only when `mod.serps` named the installed exe's version | **fixed**: `fix: apply a mod's removals as the simplified launcher does` (`diff.rs:179-185`); the report warns when `mod.serps` names another version |
+| 16 | Two mods change one record | v3: neither applies, the clean value stays (`actions.team_palette:420-484`). v4: the later wins | The later addon wins | identical to v4; different from v3 by design |
+| 17 | Another game's database | v4 fails (`Merged.cs:52-56`); v3 does not check | Fails the import (`library.rs:395-398`) | identical to v4 |
 
 ### Text
 
 | # | Behaviour | Simplified Launcher | Ours | Status |
 |---|---|---|---|---|
-| 15 | Which files | Any `.lng` named like one of the game's eleven, in any folder (`Merged.cs:32-38`, `ModStack.cs:241-246`); other `.lng` files are laid as files | `localisation/<dir>/language_*.lng` and `localisatioa/<dir>/language_*.lng` only (`package.rs:59-66`) | different: a game language file elsewhere becomes `file.put` |
-| 16 | Unit | Entries changed or added against the clean file; a missing entry is not a removal (`Merged.cs:154-160`) | Same (`diff.rs:267-292`) | identical |
-| 17 | Languages a mod lacks | Its own file, else its English, else its first by name (`Merged.cs:135-145`) | Same (`diff.rs:293-317`) | identical |
-| 18 | Untranslated filler | A translation set to another language's text is applied (`Merged.cs:158`) | A changed translation equal to the game's English text is left out (`diff.rs:337-346`) | different |
-| 19 | Text a mod fills in | Applied like any change | `lang.default` (`diff.rs:347-364`, `convert.rs:353-370`): applied unless an addon sets the key | identical for one mod; other mods' renames win |
-| 20 | How the game reads it | v4 writes merged files beside the mod's (`Merged.cs:86-127`) and holds the exe patch back (`ModStack.cs:150-153`), so the game never reads them; v3: see row 31 | `lang.set` and `lang.default` through the in-game loader (launcher `runtime.rs:240-250`, `394-403`) | different: ours is read by the game |
+| 18 | Which files | v3: every `.lng` in the mod (`actions.prepare_mods:321-401`, step 2). v4: `.lng` files named like a game language, in any folder (`Merged.cs:32-38`, `ModStack.cs:241-246`) | Only `localisation/<dir>/language_*.lng` and `localisatioa/<dir>/language_*.lng` | **fixed** (`language_*.lng` in any folder): same commit as row 13 (`package.rs:61-63`). Other `.lng` names stay files, as in v4 |
+| 19 | Unit | Entries changed or added against the clean file of the same name; a missing entry is not a removal (v3 `actions.merge_lng:196-364`, v4 `Merged.cs:154-160`) | Same (`diff.rs:256-281`) | identical |
+| 20 | Languages a mod lacks | v3: every language gets the union of the mod's edits from all its files, the last file winning a key. v4: its own file, else its English, else its first by name (`Merged.cs:135-145`) | As v4 (`diff.rs:282-306`) | identical to v4; different from v3 by design (v3 gives every language the same text) |
+| 21 | Untranslated filler | Applied like any change | A changed translation equal to the game's English text was left out | **fixed** (`lang.default`: applies unless another addon renames the key): `fix: apply untranslated text a mod fills in unless another addon renames it` (`diff.rs:326-337`) |
+| 22 | Text a mod fills in for keys its database points at | Applied like any change | `lang.default` (`diff.rs:338-355`, `convert.rs:1025`) | identical for one mod; another addon's rename wins |
+| 23 | Two mods change one key | v3: neither applies (`actions.merge_lng:196-364`). v4: the later wins | The later addon wins | identical to v4 |
+| 24 | How the game reads it | Merged files go to `localisatioa/2025_release/` and only a patched exe reads them: ` tionf` → ` tioaf` (`lib.exe_patch:83-87`), applied in v3 only on Steam with the anticheat bypass and launch-after on (`lib.logic:257-273`, `actions.prepare_exe:32-100`); v4 holds the patch back (`ModStack.cs:150-153`) | `lang.set` and `lang.default` through the in-game loader (launcher `runtime.rs:240-250`, `394-403`) | different by design: ours needs no exe patch or anticheat bypass |
+| 25 | `2026_team_keys.lng`, `2026_team_names.json` | Used only by the Team Editor path, not by mod installs (`actions.season_2026:245-296`, `lib.api_team_editor:558-580`) | none | not applicable |
 
 ### Archives
 
 | # | Behaviour | Simplified Launcher | Ours | Status |
 |---|---|---|---|---|
-| 21 | A stock archive the mod ships | The mod's file replaces the game's (`ModStack.cs:205-234`, `GameInstall.cs:33-61`) | Each resource that differs from stock goes into an overlay on `2025_asset_groups/vfx_package/common.erp` (`merge.rs:78-100`, `convert.rs:383-436`) | identical per resource when the game resolves a URI from its boot overlay first |
-| 22 | Resource change test | n/a (whole file) | Type, fragment layout and packed sizes, then digest or content hash (`diff.rs:197-218`) | identical |
-| 23 | Resources the mod's archive lacks | Gone with the stock file | `remove-resource` only under the same `game_version` rule as row 12 (`diff.rs:246-252`) | different |
-| 24 | A stock URI in several stock archives | Only the mod's archive changes | The overlay replaces it for every archive | different |
-| 25 | Simplified Studio marker `eaid://tools_package/` | Loaded with the shader archive; does nothing | Left out (`merge.rs:29-38`) | identical |
-| 26 | Studio's `f1_vehicle_shadow.material` in shader archives | Loaded with the shader archive | Left out (`merge.rs:30-38`) | different when it differs from the game's |
-| 27 | Archive the game does not ship | Laid as a file | `file.put` (`package.rs:67-71`) | identical |
-| 28 | Texture arrays | v4: laid whole. v3: see row 32 | `merge-slices` for `.texarray.image` in `shader_package_*/ui_texture*` archives, the `.texarray` views whole (`convert.rs:449-493`); arrays elsewhere whole like any resource | see row 32 |
+| 26 | A stock archive the mod ships | Replaced whole (v3 `actions.prepare_mods:321-401` step 6, v4 `ModStack.cs:205-234`) | Every changed or added resource went into an overlay on `vfx_package/common.erp`, which replaces the URI in every archive | **fixed**: `fix: overlay a mod's asset group archives on themselves, not on the boot archive` (`merge.rs:11-25`). Each archive under `2025_asset_groups/` now gets an overlay of its own; a layout change makes the launcher rewrite that archive, as v3 and v4 copy it |
+| 27 | A resource two archives of one mod hold differently | Each archive keeps its own copy | One copy for both | **fixed**: `fix: keep a copy per archive of a resource a mod's archives hold differently`, then by row 26 |
+| 28 | Resource change test | n/a (whole file) | Type, fragment layout and packed sizes, then digest or content hash (`diff.rs:188-212`) | identical |
+| 29 | Resources the mod's archive lacks | Gone with the file | Removed only under the `game_version` rule of row 15 | **fixed** with row 15 (`diff.rs:232-241`); shader archives remove nothing, as in v3 (row 30) |
+| 30 | Shader archives (`shader_package_2025/*.erp`) | v3 merges the game's archive and each mod's by resource, later wins (`actions.prepare_mods:440-507`); loaded at boot, so they replace URIs everywhere | Into the boot overlay (`merge.rs:20-25`) | identical |
+| 31 | Simplified Studio's marker and shadow material in shader archives | Loaded with the shader archive | Left out | **fixed**: `fix: load simplified studio's marker and shadow material with the mod` (`merge.rs:57-74`) |
+| 32 | Two mods ship one non-shader archive | v3: the first mod's archive with each later mod's resources over it (`actions.prepare_mods:510-552`). v4: the later file wins | Each mod's changes over the game's, later addon wins per resource | identical to v3 per resource; resources only the first mod removed stay removed in both |
+| 33 | Seven `ui_texarrays_*` kinds (car images, championship branding, drivers, engine branding, nationality flags, team branding, track images) | v3: the `.texarray.image` arrays in mods' `ui_texture.nefx2.sm51(_amd).erp`, the first mod's archive as the base, each slice compared with the `app/original/ui` arrays, later mod wins per slice, written to both shader archives (`actions.merge_resources:104-254`, `326-417`) | `erp.merge-slices` of each `.texarray.image` from `ui_texture*` shader archives into the boot archive; the launcher writes the slices that differ from the game's over the array in place (`convert.rs:571-615`, launcher `ops/erp.md#texture-arrays`); `.texarray` views whole | identical for arrays of the game's size. An array with fewer slices: v3 uses the mod's array as it is, ours merges its slices over the game's. Another format: both use it whole |
+| 34 | Texture arrays elsewhere (`ui_package` archives) | Replaced with the archive | Per resource on that archive (row 26) | identical |
+| 35 | `.texarray` views and other `ui_texture` resources | v3 keeps the first mod's whole archive | Views whole into the boot overlay; other resources with the boot overlay | identical |
+| 36 | Archive the game does not ship | Copied | `file.put` (`package.rs:64-68`) | identical |
+| 37 | SERPs overlays in `<launcher>/serps/` and `mod/F1 25` | v3 user folders merged into `abu_dhabi_roof` shader copies (`actions.prepare_serps:178-261`, `actions.prepare_mod`) | none | not applicable: not part of a mod |
+
+### SERPs Base Files
+
+| # | Behaviour | Simplified Launcher | Ours | Status |
+|---|---|---|---|---|
+| 38 | When they apply | Turned on whenever a selected mod has a shader archive with a resource named with `serps`, pinned at the top (`actions.archive_reader:365-470`, `webui/app.js` `autoEnableSerpsBasefiles`) | Converted like any mod, with no tie to the mods that need them | **fixed**: `feat: load simplified studio mods after the serps base files and turn them on` (`merge.rs:39-54`, `convert.rs:619-646`, `importer.rs:228-244`). Such a mod's `load_after` names the base files' addon, turning the mod on turns them on, and the report warns when the library lacks them |
+| 39 | Their content | `vfx_package/common.erp`, both `teams/common.erp`, `EAAntiCheat.splash.png` | Converted per resource and file | identical (harness) |
 
 ### Files
 
 | # | Behaviour | Simplified Launcher | Ours | Status |
 |---|---|---|---|---|
-| 29 | Other files | Copied over the game's (`ModStack.cs:205-234`) | `file.put`; `.mipmaps` files `add-mipmaps` (`convert.rs:408-420`) | identical |
-| 30 | Backup and restore | Backup of every replaced file and a list of added ones, restored on exit (`GameBackup.cs:84-239`) | The launcher's journal and `swofty restore` | identical in effect |
+| 40 | Other files | Copied over the game's, later mod wins | `file.put`; `.mipmaps` as `add-mipmaps` (`convert.rs:520-534`) | identical |
+| 41 | `localisatioa/` files that are not language files | Copied to `localisatioa/` | Copied to `localisation/` (`package.rs:82-88`) | different: no game build reads either loose |
+| 42 | Backup and restore | v3 backs up replaced files, the exe and anticheat files, removes `localisatioa/` and added files on restore (`actions.backup:25-152`, `actions.restore:214-403`); v4 likewise (`GameBackup.cs:84-239`) | The launcher's journal and `swofty restore` | identical in effect |
+| 43 | Anticheat bypass | v3 copies `bypass.exe` into the game and runs it when language files need the patched exe (`actions.launch_pass:116-211`) | none | not applicable: text needs no patched exe (row 24) |
 
-### v3.2.13 only
+### Tracks
 
-| # | Behaviour | Simplified Launcher v3.2.13 | Ours | Status |
+| # | Behaviour | Simplified Launcher | Ours | Status |
 |---|---|---|---|---|
-| 31 | Exe patch, `localisatioa/` | Being audited | `localisatioa/` is read as text (`package.rs:17`, `72-80`) | pending |
-| 32 | Seven texture array kinds | Being audited | row 28 | pending |
-| 33 | SERPs Base Files | Being audited | Converts like any mod | pending |
-| 34 | `2026_team_keys.lng`, `2026_team_names.json` | Being audited | none | pending |
-| 35 | Parts, ` -c` and ` -x` | Being audited | One library entry per part (`package.rs:411-472`) | pending |
-| 36 | Tracks | Being audited | `track.add` with the package (`convert.rs:317-331`) | pending |
+| 44 | Track packages (`manifest.json` with `track_code`) | v3 and v4 have no track install; the Simplified Track Installer builds track `.serps` mods | `track.add` with the whole package (`convert.rs:424-438`); Track Installer `.serps` convert like any mod | not applicable; the harness checks every package file rides in the addon |
+
+### Programs and logs
+
+| # | Behaviour | Simplified Launcher | Ours | Status |
+|---|---|---|---|---|
+| 45 | Converter log | none | One log per conversion in `logs/` of the addon's data folder, newest 20 kept (`log.rs`) | added: `feat: write a converter log for each conversion` |
+| 46 | `.dll` and `.asi` plugins | Copied into the game (v3 blocks only named files) | Skipped and reported (`package.rs:32-38`) | different by design: an addon carries no programs |
+
+## Harness
+
+`examples/parity.rs` imports and converts each mod with this crate, applies the addon's database, text, archive and file ops with the launcher's crates (`swofty_addon::ops::apply_db_ops`, `swofty_core::erpbuild::ErpBuild`, the runtime's `lang.default` rule) to the game's own files, and compares the result with the Simplified Launcher's install of the same mod on a clean game:
+
+- The database is the mod's records over the clean one, removals included, as `DatabaseLayers.Apply` and v3's whole copy give for one mod.
+- Text is `Merged.Languages` over the eleven clean language files.
+- Each archive the mod ships: for every resource URI in the mod's archive or the game's, the content the game reads after our ops (the boot overlay, then an overlay on the archive, then the game's archive less removals) equals the mod's. Studio's marker is a no-op.
+- A resource the boot overlay replaces must not have copies in archives the mod does not ship, unless the mod carries it in a shader archive or the boot archive, which replace it everywhere in the Simplified Launcher too.
+- Loose files compare by bytes and target. Track packages compare file by file.
+
+Game files are read from the Steam folder and checked against Steam's depot manifests, or from the launcher's baseline objects where the launcher replaced them. Nothing is written to the game.
+
+```sh
+cargo run --release --example parity -- <mod>...
+```
+
+`PARITY_GAME`, `PARITY_DATA`, `PARITY_SCRATCH` override the game folder, Swofty's data folder and the scratch folder.
 
 ## Per-mod results
 
-Pending the parity harness.
+After the fixes, every F1 25 mod is identical:
+
+| Mod | Kind | Result |
+|---|---|---|
+| Pirelli Tyres Collection v1.0.6 | 12 parts, `teams/common.erp` and `tyrecompounds.erp` each | identical, every part |
+| F1 25 with V10 Engines (V10.3) | Studio shader archives, 4 audio banks | identical; needs the SERPs Base Files |
+| F1 2021 Cars for F1 25 | 23 archives, 10 mip files | identical. Before row 26: 33,038 copies of its resources in archives it does not ship, such as story-mode cars, were replaced; before row 27: 2 resources of `common_fom.erp` |
+| SERPs Base Files for F1 25 v4.1 | three `common.erp`, splash | identical. Before row 26: 6,761 copies in other archives were replaced |
+| koenigsegg (library) | Studio shader archives | identical; needs the SERPs Base Files |
+| hockenheim.zip | track package, 1,189 files | identical package in `track.add` |
+| Okayama, Sepang (library) | track packages | identical package in `track.add` |
+| 05_Benetton B190.zip | loose DDS textures for another game | skipped: not an F1 25 mod |
+| Williams_FW13B.zip | Assetto Corsa car skin | skipped: not an F1 25 mod |
+| [IMG] F1 1990 v1.4.zip | Automobilista 2 livery pack | skipped: not an F1 25 mod |
+| SCdesign_RSS1990_SAABERICSSONF1.7z | Assetto Corsa car skin | skipped: not an F1 25 mod |
+
+Before the fixes, V10 and koenigsegg differed in the Studio shadow material (row 31), and F1 2021 Cars and the SERPs Base Files in rows 26 and 27. None of the real mods carry a database, language files or `ui_texture` arrays; those rows rest on the unit tests in `src/diff.rs`, `src/convert/tests.rs` and the launcher's gated logo merge test.
 
 ## Launcher ops still needed
 
-Pending.
+None. Every row converts with ops the launcher has: `put-record`, `remove-record`, `lang.set`, `lang.default`, `erp.overlay` on any asset group archive (with the launcher's fallback to rewriting an archive whose layout changes), `remove-resource`, `merge-slices`, `add-mipmaps`, `file.put`, `track.add`, and `load_after` for the SERPs Base Files.
 
 ## Cannot be identical
 
-Pending.
+- **Conflicts between mods** follow v4 and the launcher's load order: the later addon wins a record, a text key or a resource. v3 keeps the clean value when two mods change the same record or key (rows 16, 23).
+- **Text in every language** follows v4. v3 gives all eleven languages the union of a mod's edits, so a mod with its own translations shows its last file's text everywhere (row 20).
+- **Text without an exe patch.** The loader adds text at runtime; there is no patched exe and no anticheat bypass (rows 24, 43).
+- **Programs.** `.dll` and `.asi` files are never copied (row 46).
+- **Short texture arrays** merge over the game's array instead of replacing it (row 33).
+- **` -x` exclusivity** is inferred from what parts write (row 8).
