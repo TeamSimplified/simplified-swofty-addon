@@ -892,7 +892,9 @@ fn main() {
             }
         }
         println!("  ({:.1} s)", started.elapsed().as_secs_f64());
-        std::fs::remove_dir_all(&data).ok();
+        if std::env::var_os("PARITY_KEEP").is_none() {
+            std::fs::remove_dir_all(&data).ok();
+        }
     }
     if failed {
         std::process::exit(1);

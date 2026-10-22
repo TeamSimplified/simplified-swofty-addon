@@ -199,7 +199,15 @@ pub fn convert_to(
 fn log_source(log: &mut Log, p: &Package, game: Option<&dyn GameFiles>, id: &str) {
     log.section("source");
     log.line(format!("file: {}", p.source));
-    log.line(format!("size: {} bytes in {} file(s)", p.size(), p.files.len()));
+    match p.source_size {
+        Some(size) => log.line(format!("size: {size} bytes")),
+        None => log.line("size: unknown"),
+    }
+    log.line(format!(
+        "game files: {} bytes in {} file(s)",
+        p.size(),
+        p.files.len()
+    ));
     log.line(format!("sha256: {}", p.sha256.as_deref().unwrap_or("none")));
     log.line(format!("library id: {}", p.id));
     log.line(format!("addon id: {id}"));
@@ -445,8 +453,8 @@ impl Writer {
         progress: &mut dyn FnMut(f32, &str),
     ) -> Result<()> {
         let diff = library.diff(p, game)?;
-        self.log.time("diff");
         self.log_diff(&diff);
+        self.log.time("diff");
         progress(0.3, &p.name);
         let records = library.records(&p.id, &diff.build_key)?;
         let mut merged = merge::ops(&p.id, &diff, &records);

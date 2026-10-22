@@ -33,6 +33,8 @@ pub struct Package {
     pub source: String,
     #[serde(default)]
     pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_size: Option<u64>,
     pub imported: u64,
     pub files: Vec<File>,
     #[serde(default)]
@@ -267,6 +269,10 @@ impl Library {
             studio_version: info.studio_version().map(str::to_owned),
             source: source.clone(),
             sha256,
+            source_size: src
+                .is_file()
+                .then(|| std::fs::metadata(src).map(|m| m.len()).ok())
+                .flatten(),
             imported: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs()),

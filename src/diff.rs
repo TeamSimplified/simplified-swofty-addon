@@ -552,6 +552,7 @@ mod tests {
             studio_version: None,
             source: "m.zip".into(),
             sha256: None,
+            source_size: None,
             imported: 0,
             files: vec![
                 File {
@@ -648,6 +649,7 @@ mod tests {
             studio_version: None,
             source: "m.zip".into(),
             sha256: None,
+            source_size: None,
             imported: 0,
             files: vec![
                 file(package::DATABASE.into(), Class::Database),

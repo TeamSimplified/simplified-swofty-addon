@@ -934,6 +934,7 @@ fn versions_become_semver_and_ids_get_a_namespace() {
         studio_version: None,
         source: "okayama.zip".into(),
         sha256: None,
+        source_size: None,
         imported: 0,
         files: Vec::new(),
         skipped: Vec::new(),

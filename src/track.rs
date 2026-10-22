@@ -131,6 +131,7 @@ pub fn store(
         studio_version: None,
         source,
         sha256,
+        source_size: None,
         imported: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs()),
@@ -438,6 +439,7 @@ mod tests {
             studio_version: None,
             source: "livery.zip".into(),
             sha256: None,
+            source_size: None,
             imported: 0,
             files: Vec::new(),
             skipped: Vec::new(),
