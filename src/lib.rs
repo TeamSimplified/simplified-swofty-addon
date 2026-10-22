@@ -28,6 +28,22 @@ use crate::library::{Library, Package};
 pub const ID: &str = "teamsimplified.mods";
 pub const SECTION: &str = "mods";
 const MANIFEST: &str = include_str!("../swofty.json");
+// Team Simplified's SERPs Base Files for F1 25 v4.1, shipped with the addon: each
+// archive in place of the game's, as the Simplified Launcher installs them.
+const BASE_FILES: [(&str, &str); 3] = [
+    (
+        "2025_asset_groups/vfx_package/common.erp",
+        "base/vfx_package/common.erp",
+    ),
+    (
+        "2025_asset_groups/f1_2025_vehicle_package/teams/common.erp",
+        "base/f1_2025_vehicle_package/teams/common.erp",
+    ),
+    (
+        "2025_asset_groups/f1_2026_vehicle_package/teams/common.erp",
+        "base/f1_2026_vehicle_package/teams/common.erp",
+    ),
+];
 const IMPORT: &str = "import";
 const ENABLE: &str = "enable";
 
@@ -360,6 +376,22 @@ impl Addon for Simplified {
                 item: None,
             },
         }));
+        if let Some(by) = needs_base(cx)? {
+            batch.lines.push(format!(
+                "SERPs Base Files: {} archive(s) load with {by}, which needs them",
+                BASE_FILES.len()
+            ));
+            batch.ops.extend(BASE_FILES.iter().map(|(erp, source)| Op {
+                op: AssetOp::Erp(ErpOp::Overlay {
+                    erps: vec![(*erp).to_owned()],
+                    source: swofty_addon::asset::Source::addon(*source),
+                }),
+                origin: Origin {
+                    addon: ID.into(),
+                    item: Some("serps-base-files".into()),
+                },
+            }));
+        }
         Ok(batch)
     }
 
@@ -510,6 +542,25 @@ impl Simplified {
         }
         Ok(page::event(cx, event, conv)?.unwrap_or(Effect::None))
     }
+}
+
+// The first enabled addon made from a mod that needs the SERPs Base Files.
+pub(crate) fn needs_base(cx: &Cx) -> Result<Option<String>> {
+    let record = Record::load(cx.data_dir)?;
+    let enabled: Option<HashSet<String>> = cx
+        .addons()
+        .map(|a| {
+            a.list()
+                .map(|l| l.into_iter().filter(|a| a.enabled).map(|a| a.id).collect())
+        })
+        .transpose()?;
+    Ok(record
+        .mods
+        .values()
+        .filter_map(|e| e.made.as_ref())
+        .filter(|m| m.base && enabled.as_ref().is_none_or(|on| on.contains(&m.id)))
+        .map(|m| m.name.clone())
+        .next())
 }
 
 fn remove(cx: &Cx, id: &str) -> Result<Package> {

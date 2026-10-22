@@ -68,6 +68,7 @@ jobs:
           mkdir -p addon/bin
           cp swofty.json icon.svg LICENSE README.md THIRD_PARTY.md addon/
           cp -r sections addon/
+          cp -r base addon/
           cp helpers/helper-windows-latest/simplified-helper.exe addon/bin/
           cp helpers/helper-ubuntu-latest/simplified-helper addon/bin/
           chmod +x addon/bin/simplified-helper

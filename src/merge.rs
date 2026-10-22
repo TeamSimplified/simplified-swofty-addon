@@ -37,6 +37,23 @@ pub struct Merged {
 }
 
 pub const MARKER: &str = "eaid://tools_package/";
+// The SERPs Base Files carry this marker in place of a mod's.
+const BASE_MARKER: &str = "eaid://tools_package/default/serps_basefiles";
+const MY_TEAM_PACKAGES: [&str; 2] = ["object_my_team.nefx2.sm51", "effects_myteam.nefx2.sm51"];
+
+// Mods made with Simplified Studio, which name a resource in a shader archive with
+// "serps", and My Team packages are built on Team Simplified's SERPs Base Files, as the
+// Simplified Launcher turns them on with such a mod.
+pub fn needs_base(diff: &Diff) -> bool {
+    diff.archives.iter().filter(|a| carrier(&a.path)).any(|a| {
+        let name = a.path.rsplit('/').next().unwrap_or(&a.path);
+        MY_TEAM_PACKAGES.iter().any(|p| name.starts_with(p))
+            || a.changed
+                .iter()
+                .chain(&a.added)
+                .any(|uri| uri.contains("serps") && uri != BASE_MARKER)
+    })
+}
 // Simplified Studio adds this vehicle shadow material to every shader package it
 // builds, beside the marker (SerpsOverlay.cs in the Simplified Suite). Loaded at boot
 // it would replace the game's own shadow material, so it is left out too.

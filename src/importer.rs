@@ -31,6 +31,9 @@ pub struct Made {
     pub lines: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    // It needs the SERPs Base Files, which the build hook loads while it is on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub base: bool,
 }
 
 pub type Report<'a> = &'a mut dyn FnMut(f32, &str);
@@ -66,6 +69,7 @@ impl Convert for Converter {
             category: Some(c.category),
             kinds: c.kinds.into_iter().map(|k| kind(k).into()).collect(),
             summary: c.summary,
+            base: c.base,
             warnings: c
                 .report
                 .iter()
@@ -937,6 +941,7 @@ mod tests {
                 summary: "1 archive resource".into(),
                 lines: vec![format!("2025_asset_groups/{}.erp: 1 resource", p.id)],
                 warnings: Vec::new(),
+                base: p.id.contains("studio"),
             })
         }
     }
@@ -1572,6 +1577,33 @@ mod tests {
             texts(blocks, &mut out);
         }
         out
+    }
+
+    #[test]
+    fn the_base_files_load_while_a_mod_that_needs_them_is_on() {
+        let host = Host::new("base", &["one"]);
+        let conv = Fake::default();
+        let addon = Simplified::new();
+        let pick = |path: PathBuf| Event::Picked {
+            id: IMPORT.into(),
+            paths: vec![path],
+        };
+        with(&host, "one", |cx| {
+            addon.event_with(cx, SECTION, pick(host.mod_dir("plain")), &conv)
+        })
+        .unwrap();
+        assert_eq!(with(&host, "one", crate::needs_base).unwrap(), None);
+        with(&host, "one", |cx| {
+            addon.event_with(cx, SECTION, pick(host.mod_dir("studio")), &conv)
+        })
+        .unwrap();
+        assert_eq!(
+            with(&host, "one", crate::needs_base).unwrap().as_deref(),
+            Some("studio")
+        );
+        host.addons("one").set_enabled("imported.studio", false).unwrap();
+        assert_eq!(with(&host, "one", crate::needs_base).unwrap(), None);
+        std::fs::remove_dir_all(&host.root).ok();
     }
 
     #[test]
