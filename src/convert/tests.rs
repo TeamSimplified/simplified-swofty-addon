@@ -458,7 +458,10 @@ fn a_team_rename_becomes_database_and_text_ops() {
     assert_eq!(m.compat.game_builds[0].to_string(), ">=25251167");
     assert_eq!(m.compat.launcher.as_ref().unwrap().to_string(), ">=1.3.0");
     let origin = m.origin.as_ref().unwrap();
-    assert_eq!((origin.tool.as_str(), origin.file.as_deref()), (ID, Some("Mod")));
+    assert_eq!(
+        (origin.tool.as_str(), origin.file.as_deref()),
+        (crate::COPY_PASTE, Some("Mod"))
+    );
     assert_eq!(m.category, Some(Category::DriversTeams));
     assert!(reported(&c, "database: 3 changed, 1 added, 1 removed"));
     assert!(reported(&c, "text: 3 entr(ies) the mod fills in"));
@@ -1161,4 +1164,26 @@ fn a_real_team_logo_array_merges_one_slice_into_the_game_s() {
         &c,
         "logos: 1 team logo texture array(s) → erp.merge-slices"
     ));
+}
+
+#[test]
+fn a_simplified_mod_says_what_it_replaces_and_a_copy_and_paste_one_what_it_changes() {
+    let mut w = Writer::default();
+    w.text.push(AssetOp::Lang(LangOp::Set {
+        language: "eng".into(),
+        key: "k".into(),
+        value: "v".into(),
+    }));
+    assert_eq!(w.description(Some("1.0")), "1 text entry.");
+    w.base = true;
+    w.replaces = vec!["the Ferrari team", "the McLaren team"];
+    assert_eq!(
+        w.description(Some("1.0")),
+        "Replaces the Ferrari team and the McLaren team. Made using the Simplified Studio. 1 text entry."
+    );
+    assert_eq!(
+        w.description(None),
+        "Replaces the Ferrari team and the McLaren team. 1 text entry."
+    );
+    assert_eq!(and_list(&["a", "b", "c"]), "a, b and c");
 }

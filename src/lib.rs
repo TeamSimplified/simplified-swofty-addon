@@ -26,6 +26,9 @@ use crate::importer::{Converter, Record};
 use crate::library::{Library, Package};
 
 pub const ID: &str = "teamsimplified.mods";
+// origin.tool of an addon made from a mod that leaves the shader packages alone, which
+// the launcher labels Copy & Paste; the rest carry ID and are labelled Simplified.
+pub const COPY_PASTE: &str = "teamsimplified.mods/copy-paste";
 pub const SECTION: &str = "mods";
 const MANIFEST: &str = include_str!("../swofty.json");
 // Team Simplified's SERPs Base Files for F1 25 v4.1, shipped with the addon: each

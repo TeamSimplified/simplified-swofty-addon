@@ -83,7 +83,7 @@ How the Simplified Importer's conversion compares with how Team Simplified's Sim
 
 | # | Behaviour | Simplified Launcher | Ours | Status |
 |---|---|---|---|---|
-| 38 | When they apply | Turned on whenever a selected mod has a shader archive with a resource named with `serps`, pinned at the top (`actions.archive_reader:365-470`, `webui/app.js` `autoEnableSerpsBasefiles`) | The SERPs Base Files v4.1 ship with the addon; the build hook loads their three archives while an addon from a Studio or My Team mod is on | identical in effect |
+| 38 | When they apply | Turned on whenever a selected mod has a shader archive with a resource named with `serps`, pinned at the top (`actions.archive_reader:365-470`, `webui/app.js` `autoEnableSerpsBasefiles`) | The SERPs Base Files v4.1 ship with the addon; the build hook loads their three archives while an addon from a mod that loads resources from a shader package is on | identical in effect |
 | 39 | Their content | `vfx_package/common.erp`, both `teams/common.erp`, `EAAntiCheat.splash.png` | Converted per resource and file | identical (harness) |
 
 ### Files

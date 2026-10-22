@@ -37,22 +37,55 @@ pub struct Merged {
 }
 
 pub const MARKER: &str = "eaid://tools_package/";
-// The SERPs Base Files carry this marker in place of a mod's.
-const BASE_MARKER: &str = "eaid://tools_package/default/serps_basefiles";
-const MY_TEAM_PACKAGES: [&str; 2] = ["object_my_team.nefx2.sm51", "effects_myteam.nefx2.sm51"];
 
-// Mods made with Simplified Studio, which name a resource in a shader archive with
-// "serps", and My Team packages are built on Team Simplified's SERPs Base Files, as the
-// Simplified Launcher turns them on with such a mod.
+// A mod that loads resources from a shader package, as Simplified Studio and My Team
+// packages do, is built on Team Simplified's SERPs Base Files.
 pub fn needs_base(diff: &Diff) -> bool {
-    diff.archives.iter().filter(|a| carrier(&a.path)).any(|a| {
-        let name = a.path.rsplit('/').next().unwrap_or(&a.path);
-        MY_TEAM_PACKAGES.iter().any(|p| name.starts_with(p))
-            || a.changed
-                .iter()
-                .chain(&a.added)
-                .any(|uri| uri.contains("serps") && uri != BASE_MARKER)
-    })
+    !shader_packages(diff).is_empty()
+}
+
+// The shader packages a mod loads resources from.
+fn shader_packages(diff: &Diff) -> Vec<&str> {
+    diff.archives
+        .iter()
+        .filter(|a| carrier(&a.path))
+        .filter(|a| a.changed.iter().chain(&a.added).any(|uri| loaded(a, uri)))
+        .map(|a| a.path.rsplit('/').next().unwrap_or(&a.path))
+        .collect()
+}
+
+// What each shader package a Simplified Studio mod builds replaces in the game, by the
+// start of its file name (Team Simplified's shader package list).
+const REPLACES: [(&str, &str); 17] = [
+    ("object_alpha.nefx2.sm51", "the Alpine team"),
+    ("object_auto_illuminate.nefx2.sm51", "the Aston Martin team"),
+    ("object_car_monitor.nefx2.sm51", "the Audi team"),
+    ("object_driver_name_shader.nefx2.sm51", "the Cadillac team"),
+    ("object_flag.nefx2.sm51", "the Ferrari team"),
+    ("object_glass.nefx2.sm51", "the Haas team"),
+    ("object_jumbotron.nefx2.sm51", "the McLaren team"),
+    ("object_mask.nefx2.sm51", "the Mercedes team"),
+    ("object_my_team.nefx2.sm51", "My Team"),
+    ("effects_myteam.nefx2.sm51", "My Team"),
+    ("object_opaque.nefx2.sm51", "the Racing Bulls team"),
+    ("object_overlay.nefx2.sm51", "the Red Bull team"),
+    ("object_roof.nefx2.sm51", "the Williams team"),
+    ("object_skinned.nefx2.sm51", "the car performance"),
+    ("object_steering_screen.nefx2.sm51", "the tyres"),
+    ("object_sponsor.nefx2.sm51", "the sponsor boards"),
+    ("ui_texture.nefx2.sm51", "the UI"),
+];
+
+// What a mod's shader packages replace, each once, in the order of REPLACES.
+pub fn replaces(diff: &Diff) -> Vec<&'static str> {
+    let packages = shader_packages(diff);
+    let mut out: Vec<&'static str> = REPLACES
+        .iter()
+        .filter(|(prefix, _)| packages.iter().any(|p| p.starts_with(prefix)))
+        .map(|(_, what)| *what)
+        .collect();
+    out.dedup();
+    out
 }
 // Simplified Studio adds this vehicle shadow material to every shader package it
 // builds, beside the marker (SerpsOverlay.cs in the Simplified Suite). Loaded at boot
@@ -225,6 +258,53 @@ pub fn clashes(diffs: &[Option<&Diff>]) -> Vec<Clash> {
 mod tests {
     use super::*;
     use crate::diff::{Archive, Records};
+
+    #[test]
+    fn a_mod_replaces_what_its_shader_packages_stand_for() {
+        let archive = |name: &str| Archive {
+            path: format!("shader_package_2025/{name}.nefx2.sm51.erp"),
+            changed: Vec::new(),
+            added: vec!["eaid://f1_2026_vehicle_package/teams/a.material".into()],
+            removed: Vec::new(),
+        };
+        let diff = Diff {
+            archives: vec![
+                archive("object_overlay"),
+                archive("object_flag"),
+                archive("object_my_team"),
+                archive("effects_myteam"),
+                archive("bloom"),
+            ],
+            ..Diff::default()
+        };
+        assert_eq!(
+            replaces(&diff),
+            ["the Ferrari team", "My Team", "the Red Bull team"]
+        );
+    }
+
+    #[test]
+    fn a_mod_needs_the_base_files_when_it_loads_from_a_shader_package() {
+        let diff = |path: &str, uri: &str| Diff {
+            archives: vec![Archive {
+                path: path.into(),
+                changed: Vec::new(),
+                added: vec![uri.into()],
+                removed: Vec::new(),
+            }],
+            ..Diff::default()
+        };
+        let shader = "shader_package_2025/object_my_team.nefx2.sm51.erp";
+        assert!(needs_base(&diff(
+            shader,
+            "eaid://f1_2026_vehicle_package/teams/a.material"
+        )));
+        assert!(!needs_base(&diff(shader, "eaid://tools_package/default/x")));
+        assert!(!needs_base(&diff(
+            "2025_asset_groups/vfx_package/common.erp",
+            "eaid://f1_2026_vehicle_package/teams/a.material"
+        )));
+    }
 
     #[test]
     fn resources_carried_in_shader_archives_go_to_the_boot_archive() {

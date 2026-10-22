@@ -14,11 +14,13 @@ use crate::diff::Diff;
 use crate::library::{FILES, LIBRARY, Library, Package};
 use crate::log::Log;
 use crate::package::Class;
-use crate::{ID, Result, err, io_err, merge, texarray, track};
+use crate::{COPY_PASTE, ID, Result, err, io_err, merge, texarray, track};
 
 pub const NAMESPACE: &str = "mod";
 pub const LAUNCHER: &str = ">=1.3.0";
 pub const REPORT: &str = "import-report.txt";
+// The report line of a mod that loads resources from a shader package.
+pub const CARRIED: &str = "carried in Simplified Studio shader archives";
 pub const DATABASE_OPS: &str = "ops/database.json";
 pub const ERP_OPS: &str = "ops/erp.json";
 pub const TEXT_OPS: &str = "ops/text.json";
@@ -105,6 +107,7 @@ struct Writer {
     mips: usize,
     log: Log,
     base: bool,
+    replaces: Vec<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -364,13 +367,13 @@ fn manifest(
         "name": p.name,
         "version": v,
         "author": p.author.clone().unwrap_or_else(|| "Unknown".into()),
-        "description": w.description(&p.source),
+        "description": w.description(p.studio_version.as_deref()),
         "kind": kinds,
         "compat": compat,
         "operations": operations,
         "category": category,
         "origin": {
-            "tool": ID,
+            "tool": if w.base { ID } else { COPY_PASTE },
             "tool_version": env!("CARGO_PKG_VERSION"),
             "file": p.source,
             "sha256": p.sha256,
@@ -396,13 +399,23 @@ impl Writer {
         .collect()
     }
 
-    fn description(&self, source: &str) -> String {
+    // A Simplified mod says what it replaces and that Simplified Studio made it; every
+    // mod then lists what it changes.
+    fn description(&self, studio_version: Option<&str>) -> String {
+        let mut sentences = Vec::new();
+        if self.base {
+            if !self.replaces.is_empty() {
+                sentences.push(format!("Replaces {}.", and_list(&self.replaces)));
+            }
+            if studio_version.is_some() {
+                sentences.push("Made using the Simplified Studio.".to_owned());
+            }
+        }
         let parts = self.counts();
-        let what = match parts.is_empty() {
-            true => String::new(),
-            false => format!(": {}", parts.join(", ")),
-        };
-        format!("Converted from {source} by the Simplified Importer{what}.")
+        if !parts.is_empty() {
+            sentences.push(format!("{}.", parts.join(", ")));
+        }
+        sentences.join(" ")
     }
 
     fn counts(&self) -> Vec<String> {
@@ -581,6 +594,7 @@ impl Writer {
         self.mips = tally.mips;
         self.contents.read(&diff);
         self.base = merge::needs_base(&diff);
+        self.replaces = merge::replaces(&diff);
         if self.base {
             self.report.push(
                 "needs: Team Simplified's SERPs Base Files, which Simplified for Swofty loads with it".into(),
@@ -881,10 +895,8 @@ impl Writer {
             ));
         }
         if merged.carried > 0 {
-            self.report.push(format!(
-                "archives: {} of them carried in Simplified Studio shader archives",
-                merged.carried
-            ));
+            self.report
+                .push(format!("archives: {} of them {CARRIED}", merged.carried));
         }
         if merged.removals > 0 {
             self.report.push(format!(
@@ -1208,6 +1220,15 @@ fn copy_tree(from: &Path, to: &Path) -> Result<usize> {
         n += 1;
     }
     Ok(n)
+}
+
+// "a", "a and b", "a, b and c".
+fn and_list(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 #[cfg(test)]
