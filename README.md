@@ -1,6 +1,6 @@
 # Simplified for Swofty
 
-**Simplified for Swofty** is Team Simplified's addon for [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). Its **Simplified Importer** turns any F1 25 mod into a standalone Swofty addon. The importer shows as **Importer** under **Simplified for Swofty** in the launcher's sidebar and as `swofty mods` on the command line.
+**Simplified for Swofty** is Team Simplified's addon for [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). Its **Simplified Importer** turns any F1 25 mod into a standalone Swofty addon. The importer shows as **Simplified Importer** under **Simplified for Swofty** in the launcher's sidebar and as `swofty mods` on the command line.
 
 - Works with any mod: drop its zip, 7z, rar, `.serps` or folder on the launcher, or choose it on the Simplified Importer page. The game folders can sit at the top or up to three folders down, or in a folder named like `F1 25`. Mods made with Simplified Studio (`.serps`) and community track zips import too.
 - Each mod becomes a Swofty data addon on the **Addons** page, with its own switch, place in the load order and conflicts. Lower in the list wins.
