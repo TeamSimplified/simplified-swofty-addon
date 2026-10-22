@@ -1705,7 +1705,12 @@ mod tests {
         let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
         assert_eq!(
             cards(&view),
-            ["Simplified Importer", "Import a mod", "Last import", "Your library"]
+            [
+                "Simplified Importer",
+                "Import a mod",
+                "Last import",
+                "Your library"
+            ]
         );
         assert!(view.notices.is_empty(), "{:?}", view.notices);
         let text = all_text(&view);

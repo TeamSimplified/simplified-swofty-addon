@@ -139,7 +139,9 @@ fn notices(cx: &Cx, pending: &importer::Pending) -> Vec<Notice> {
 fn hero(cx: &Cx, converted: usize, open: bool) -> Block {
     Block::Hero(Hero {
         title: "Simplified Importer".into(),
-        subtitle: Some("By Team Simplified. Mods convert into Swofty addons using the Simplified Importer.".into()),
+        subtitle: Some(
+            "By Team Simplified. Mods convert into Swofty addons using the Simplified Importer.".into(),
+        ),
         art: art(cx),
         pills: vec![Pill {
             text: format!("{converted} converted"),
