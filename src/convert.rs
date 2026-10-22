@@ -733,6 +733,12 @@ impl Writer {
                 a.added.len(),
                 a.removed.len()
             ));
+            for uri in &a.removed {
+                log.line(format!(
+                    "  dropped {uri}: the mod's archive omits it, so it is removed from {} as the Simplified Launcher replaces the archive whole",
+                    a.path
+                ));
+            }
         }
         for t in &diff.text {
             log.line(format!(
