@@ -39,6 +39,8 @@ pub struct Converted {
     pub kinds: Vec<Kind>,
     pub summary: String,
     pub report: Vec<String>,
+    // It needs the SERPs Base Files, which Simplified for Swofty loads with it.
+    pub base: bool,
 }
 
 pub fn addon_id(p: &Package) -> String {
@@ -102,6 +104,7 @@ struct Writer {
     written: BTreeSet<(String, String)>,
     mips: usize,
     log: Log,
+    base: bool,
 }
 
 #[derive(Serialize)]
@@ -333,6 +336,7 @@ fn write_addon(
             kinds,
             summary: w.counts().join(", "),
             report: std::mem::take(&mut w.report),
+            base: w.base,
         })
     })();
     *log = std::mem::take(&mut w.log);
@@ -576,6 +580,12 @@ impl Writer {
         self.log.time("logo arrays");
         self.mips = tally.mips;
         self.contents.read(&diff);
+        self.base = merge::needs_base(&diff);
+        if self.base {
+            self.report.push(
+                "needs: Team Simplified's SERPs Base Files, which Simplified for Swofty loads with it".into(),
+            );
+        }
         self.report_package(p, &diff, &merged, &tally, game.exe_version());
         Ok(())
     }

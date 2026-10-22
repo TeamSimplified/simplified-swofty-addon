@@ -441,6 +441,7 @@ fn a_team_rename_becomes_database_and_text_ops() {
     );
     let game: &dyn GameFiles = &case.game;
     let (c, out) = case.convert(&p, Some(game));
+    assert!(!c.base, "a team rename needs no SERPs Base Files");
     assert_eq!(c.id, "mod.venturi.cupra-racing-bulls");
     assert_eq!(c.category, Category::DriversTeams);
     assert_eq!(c.kinds, [Kind::Database, Kind::Text]);
@@ -675,6 +676,8 @@ fn archive_changes_become_one_overlay_and_remove_resource_ops() {
     assert_eq!(names(1), [genesis]);
     assert!(reported(&c, "archives: 3 resource(s) → erp.overlay"));
     assert!(reported(&c, "archives: 2 Simplified Studio marker"));
+    assert!(c.base, "a Simplified Studio mod needs the SERPs Base Files");
+    assert!(reported(&c, "needs: Team Simplified's SERPs Base Files"));
     assert!(reported(&c, "archives: 1 resource(s) removed"));
 }
 
