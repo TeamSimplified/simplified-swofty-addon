@@ -11,6 +11,7 @@ use crate::{ENABLE, IMPORT, NoProgress, Result, err, plural};
 
 pub const CONVERT: &str = "convert-library";
 pub const SHOW_ADDON: &str = "show-addon:";
+const SUBTITLE: &str = "Adapt your copy and paste mods to work with the Swofty Launcher.";
 pub const FOOTER: &str = "Based on Simplified Suite by Team Simplified.";
 pub fn choose_button() -> Button {
     Button {
@@ -87,7 +88,6 @@ fn choose() -> Block {
 pub fn view(cx: &Cx) -> Result<View> {
     let record = Record::load(cx.data_dir)?;
     let pending = importer::pending(cx, &record)?;
-    let count = record.mods.values().filter(|e| e.made.is_some()).count();
     let vanilla = cx.profile.vanilla;
     let mut blocks = Vec::new();
     if !vanilla {
@@ -102,7 +102,7 @@ pub fn view(cx: &Cx) -> Result<View> {
         false => notices(cx, &pending),
     };
     Ok(View {
-        subtitle: format!("{} converted into addons", plural(count, "mod", "mods")),
+        subtitle: SUBTITLE.into(),
         actions: Vec::new(),
         notices,
         body: Body::Blocks(blocks),

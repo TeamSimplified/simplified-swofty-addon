@@ -132,7 +132,7 @@ Team rename packages point the team name records at keys of their own, such as `
 
 The section `mods`, titled `Simplified Importer`, is one of the launcher's big sidebar sections. Its body is blocks:
 
-- **Header.** Subtitle `<n> mods converted into addons`. Action `Choose a mod…`, a picker for `.zip`, `.7z`, `.rar` and `.serps` files and folders, several at once.
+- **Header.** Subtitle `Adapt your copy and paste mods to work with the Swofty Launcher.` Action `Choose a mod…`, a picker for `.zip`, `.7z`, `.rar` and `.serps` files and folders, several at once.
 - **Notices.** The addon is off in this profile (button `Turn on`). The vanilla profile is active. The launcher has no addon host calls. Library mods are not converted yet and convert on the next start, or this profile is not handed over yet (button `Convert now`).
 - **Import a mod.** A card with `Choose a mod…`: a drop anywhere on the window imports too.
 - **Credit.** The last block is `Based on Simplified Suite by Team Simplified.`, part of the page, not a fixed footer.
