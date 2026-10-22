@@ -45,7 +45,7 @@ struct Stock {
     key: String,
     depots: Option<swofty_core::stock::Depots>,
     verified: Mutex<HashMap<String, bool>>,
-    homes: Mutex<Option<HashMap<String, String>>>,
+    homes: Mutex<Option<HashMap<String, Vec<String>>>>,
 }
 
 impl Stock {
@@ -123,7 +123,7 @@ impl Stock {
 impl Stock {
     // The game's own copy of a resource, from the first archive under
     // 2025_asset_groups that holds it.
-    fn home_copy(&self, uri: &str) -> R<Option<(String, Resource)>> {
+    fn holders(&self, uri: &str) -> R<Vec<String>> {
         let mut homes = self.homes.lock().unwrap();
         if homes.is_none() {
             let root = self.game.join("2025_asset_groups");
@@ -139,13 +139,26 @@ impl Stock {
                     .replace('\\', "/");
                 if let Ok(f) = ErpFile::open(&path) {
                     for r in &f.erp.resources {
-                        map.entry(r.name.clone()).or_insert_with(|| rel.clone());
+                        map.entry(r.name.clone())
+                            .or_insert_with(Vec::new)
+                            .push(rel.clone());
                     }
                 }
             }
             *homes = Some(map);
         }
-        let Some(rel) = homes.as_ref().unwrap().get(uri).cloned() else {
+        Ok(homes.as_ref().unwrap().get(uri).cloned().unwrap_or_default())
+    }
+
+    fn copy_in(&self, rel: &str, uri: &str) -> R<Resource> {
+        let path = self.original(rel).map_err(|e| e.to_string())?;
+        let f = ErpFile::open(&path).map_err(|e| e.to_string())?;
+        f.load(f.erp.find(uri).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())
+    }
+
+    fn home_copy(&self, uri: &str) -> R<Option<(String, Resource)>> {
+        let Some(rel) = self.holders(uri)?.into_iter().next() else {
             return Ok(None);
         };
         let path = self.original(&rel).map_err(|e| e.to_string())?;
@@ -566,6 +579,7 @@ fn compare_archives(f: &mut Findings, exp: &Expected, got: &Got, game: &Stock) -
                 .or_else(|| owned.get(&(rel.as_str(), uri)).map(|r| (rel.as_str(), *r)));
             if let Some((erp, _)) = from_overlay {
                 seen_owned.insert((erp.to_owned(), uri.to_owned()));
+                seen_owned.insert((rel.clone(), uri.to_owned()));
             }
             let have: Option<Resource> = match from_overlay {
                 Some((_, r)) => Some(r.clone()),
@@ -616,6 +630,45 @@ fn compare_archives(f: &mut Findings, exp: &Expected, got: &Got, game: &Stock) -
                 &diffs,
             ),
         }
+    }
+    // The boot archive's overlay replaces every copy of a resource. Shader archives and
+    // the boot archive itself do so in the Simplified Launcher too; any other archive
+    // replaces only its own copies there.
+    let shipped: BTreeSet<&str> = exp.archives.iter().map(|(rel, _)| rel.as_str()).collect();
+    let mut global: BTreeSet<String> = BTreeSet::new();
+    for (rel, path) in &exp.archives {
+        if merge::carrier(rel) || rel == merge::BOOT_ERP {
+            let f = ErpFile::open(path).map_err(|e| format!("{rel}: {e}"))?;
+            global.extend(f.erp.resources.iter().map(|r| r.name.clone()));
+        }
+    }
+    let (mut beyond, mut checked) = (Vec::new(), 0);
+    for (erp, r, _, _) in got.erp.resources() {
+        if erp != merge::BOOT_ERP || global.contains(&r.name) || texarray::is_array(&r.name) {
+            continue;
+        }
+        for holder in game.holders(&r.name)? {
+            if shipped.contains(holder.as_str()) || holder == merge::BOOT_ERP {
+                continue;
+            }
+            checked += 1;
+            if !same_resource(&game.copy_in(&holder, &r.name)?, r)? {
+                beyond.push(format!("{}: the game's copy in {holder} is replaced too", r.name));
+            }
+        }
+    }
+    match beyond.is_empty() {
+        true if checked > 0 => f.same(format!(
+            "{checked} copies in archives the mod does not ship already match"
+        )),
+        true => {}
+        false => f.differ(
+            format!(
+                "{} of {checked} copies in archives the mod does not ship: ours replaces them, Simplified keeps the game's",
+                beyond.len()
+            ),
+            &beyond,
+        ),
     }
     let extra: Vec<String> = got
         .erp
@@ -683,7 +736,11 @@ fn check_package(library: &Library, p: &Package, game: &Stock, scratch: &Path) -
         c.category.label(),
         c.summary
     ));
-    for line in c.report.iter().filter(|l| l.starts_with("warning:")) {
+    for line in c
+        .report
+        .iter()
+        .filter(|l| l.starts_with("warning:") || l.starts_with("needs:"))
+    {
         f.note(line.clone());
     }
     for path in &p.skipped {
@@ -788,7 +845,9 @@ fn main() {
         let path = PathBuf::from(&arg);
         let name = package::file_name(&path);
         println!("== {name}");
-        let claimed = package::claims(&path) == Claim::Yes || track::claims(&path) == Claim::Yes;
+        let claimed = package::claims(&path) == Claim::Yes
+            || track::claims(&path) == Claim::Yes
+            || path.join(track::MANIFEST).is_file();
         if let Some(what) = not_f1(&path).filter(|_| !claimed || path.extension().is_some_and(|e| e == "7z"))
         {
             println!("  skipped: {what}, not an F1 25 mod");
