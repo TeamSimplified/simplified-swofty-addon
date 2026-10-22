@@ -572,7 +572,18 @@ fn compare_archives(f: &mut Findings, exp: &Expected, got: &Got, game: &Stock) -
             .collect();
         let (mut same, mut diffs) = (0, Vec::new());
         for uri in names {
-            let want = modf.erp.find(uri).ok();
+            // The Simplified Launcher's Python shader merge unions the game's archive
+            // with the mod's: the mod wins where they overlap, and a stock resource the
+            // mod's archive omits is kept. Other archives are the mod's whole, so a
+            // stock resource the mod omits is gone. This is the content it would load.
+            let want: Option<Resource> = match modf.erp.find(uri) {
+                Ok(r) => Some(modf.load(r).map_err(|e| e.to_string())?),
+                Err(_) if merge::carrier(rel) => match stock.erp.find(uri) {
+                    Ok(r) => Some(stock.load(r).map_err(|e| e.to_string())?),
+                    Err(_) => None,
+                },
+                Err(_) => None,
+            };
             let from_overlay = owned
                 .get(&(merge::BOOT_ERP, uri))
                 .map(|r| (merge::BOOT_ERP, *r))
@@ -591,33 +602,26 @@ fn compare_archives(f: &mut Findings, exp: &Expected, got: &Got, game: &Stock) -
             };
             match (want, have) {
                 (None, None) => same += 1,
-                (Some(w), Some(h)) => {
-                    let w = modf.load(w).map_err(|e| e.to_string())?;
-                    match same_resource(&w, &h)? {
-                        true => same += 1,
-                        false => diffs.push(format!("{uri}: other content")),
-                    }
-                }
-                (Some(w), None) if uri.starts_with(merge::MARKER) => {
-                    let _ = w;
+                (Some(w), Some(h)) => match same_resource(&w, &h)? {
+                    true => same += 1,
+                    false => diffs.push(format!("{uri}: other content")),
+                },
+                (Some(_), None) if uri.starts_with(merge::MARKER) => {
                     same += 1;
                     f.note(format!(
                         "{uri} in {rel}: Simplified Studio's marker, no resource of the game"
                     ));
                 }
-                (Some(w), None) => {
-                    let w = modf.load(w).map_err(|e| e.to_string())?;
-                    match game.home_copy(uri)? {
-                        Some((home, h)) if same_resource(&w, &h)? => {
-                            same += 1;
-                            f.note(format!("{uri} in {rel} is the game's own copy from {home}"));
-                        }
-                        Some((home, _)) => diffs.push(format!(
-                            "{uri}: missing in ours, and differs from the game's in {home}"
-                        )),
-                        None => diffs.push(format!("{uri}: missing in ours")),
+                (Some(w), None) => match game.home_copy(uri)? {
+                    Some((home, h)) if same_resource(&w, &h)? => {
+                        same += 1;
+                        f.note(format!("{uri} in {rel} is the game's own copy from {home}"));
                     }
-                }
+                    Some((home, _)) => diffs.push(format!(
+                        "{uri}: missing in ours, and differs from the game's in {home}"
+                    )),
+                    None => diffs.push(format!("{uri}: missing in ours")),
+                },
                 (None, Some(_)) => diffs.push(format!(
                     "{uri}: Simplified's archive lacks it, ours keeps the game's"
                 )),
