@@ -10,16 +10,15 @@ use crate::texarray;
 
 // A resource a mod adds or changes in an asset group archive goes into an overlay on
 // that archive, as the mod's archive replaces the game's there and nowhere else.
-// Resources a Simplified Studio shader archive carries go into that shader archive, as
-// the Simplified Launcher merges them there: moved to the boot overlay instead, a car
-// they hold never finishes loading. Resources from other archives no asset group lists
-// go into an overlay on this archive, which the boot groups load before any car or UI
-// group.
+// Resources from shader archives, and from archives no asset group lists, go into an
+// overlay on this archive, which the boot groups load before any car or UI group:
+// they override the game's copies everywhere, as the shader archives Simplified
+// Studio packs a mod into do.
 pub const BOOT_ERP: &str = "2025_asset_groups/vfx_package/common.erp";
 const GROUPS: &str = "2025_asset_groups/";
 
 pub fn target(rel: &str) -> &str {
-    match rel.starts_with(GROUPS) || carrier(rel) {
+    match rel.starts_with(GROUPS) {
         true => rel,
         false => BOOT_ERP,
     }
@@ -226,31 +225,20 @@ mod tests {
     use crate::diff::{Archive, Records};
 
     #[test]
-    fn resources_carried_in_shader_archives_stay_in_their_shader_archive() {
+    fn resources_carried_in_shader_archives_go_to_the_boot_archive() {
         let shader = "shader_package_2025/object_auto_illuminate.nefx2.sm51.erp";
-        let amd = "shader_package_2025/object_auto_illuminate.nefx2.sm51_amd.erp";
-        let loose = "character_package/drivers/x.erp";
-        let genesis = "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image";
-        let carried = |path: &str| Archive {
-            path: path.into(),
-            changed: vec!["eaid://shader_package/x".into()],
-            added: vec![genesis.into()],
-            removed: Vec::new(),
-        };
         let diff = Diff {
             archives: vec![
-                carried(shader),
-                carried(amd),
+                Archive {
+                    path: shader.into(),
+                    changed: vec!["eaid://shader_package/x".into()],
+                    added: vec!["eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image".into()],
+                    removed: Vec::new(),
+                },
                 Archive {
                     path: "2025_asset_groups/ui_package/flow_boot.erp".into(),
                     changed: Vec::new(),
                     added: vec!["eaid://ui_package/b".into()],
-                    removed: Vec::new(),
-                },
-                Archive {
-                    path: loose.into(),
-                    changed: Vec::new(),
-                    added: vec!["eaid://character_package/c".into()],
                     removed: Vec::new(),
                 },
             ],
@@ -270,31 +258,30 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let from = |rel: &str| format!("library/m/files/{rel}");
-        let (from_shader, from_amd) = (from(shader), from(amd));
         assert_eq!(
             puts,
             [
-                (shader, "eaid://shader_package/x", from_shader.as_str()),
-                (shader, genesis, from_shader.as_str()),
-                (amd, "eaid://shader_package/x", from_amd.as_str()),
-                (amd, genesis, from_amd.as_str()),
+                (
+                    BOOT_ERP,
+                    "eaid://shader_package/x",
+                    "library/m/files/shader_package_2025/object_auto_illuminate.nefx2.sm51.erp"
+                ),
+                (
+                    BOOT_ERP,
+                    "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image",
+                    "library/m/files/shader_package_2025/object_auto_illuminate.nefx2.sm51.erp"
+                ),
                 (
                     "2025_asset_groups/ui_package/flow_boot.erp",
                     "eaid://ui_package/b",
                     "library/m/files/2025_asset_groups/ui_package/flow_boot.erp"
                 ),
-                (BOOT_ERP, "eaid://character_package/c", from(loose).as_str()),
             ]
         );
-        assert_eq!((merged.resources, merged.carried), (6, 4));
-        let t = targets(&diff);
-        assert!(t.contains(&format!("{genesis} in {shader}")));
-        assert!(t.contains(&format!("{genesis} in {amd}")));
-        assert!(
-            !t.iter().any(|t| t.contains(BOOT_ERP) && t.contains("genesis")),
-            "nothing a shader archive carries goes to the boot overlay"
-        );
+        assert_eq!((merged.resources, merged.carried), (3, 2));
+        assert!(targets(&diff).contains(&format!(
+            "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image in {BOOT_ERP}"
+        )));
     }
 
     #[test]
@@ -385,14 +372,10 @@ mod tests {
             ]
         );
         assert_eq!(merged.carried, 4);
-        let opaque_rel = "shader_package_2025/object_opaque.nefx2.sm51.erp";
-        assert_eq!(
-            targets(&diff)
-                .into_iter()
-                .filter(|t| t.ends_with(opaque_rel))
-                .collect::<Vec<_>>(),
-            [format!("{car} in {opaque_rel}")],
-            "the marker and shadow material travel with their shader archive and are no conflict"
+        assert!(
+            !targets(&diff)
+                .iter()
+                .any(|t| t.contains("object_opaque") || t.starts_with("eaid://tools"))
         );
     }
 

@@ -500,6 +500,8 @@ impl Writer {
             _ => None,
         };
         let mut overlays: Vec<(String, Vec<(PathBuf, String)>)> = Vec::new();
+        let mut generic: BTreeMap<String, String> = BTreeMap::new();
+        let mut twins = Vec::new();
         for op in ops {
             match op.op {
                 AssetOp::Db(op) => self.db.push(op),
@@ -511,6 +513,17 @@ impl Writer {
                     rename: None,
                 }) => {
                     let r = rel(&source).ok_or_else(|| err(format!("{resource}: no source in the mod")))?;
+                    if erp == merge::BOOT_ERP {
+                        match generic.get(&resource) {
+                            Some(g) if amd_twin(g, &r) => {
+                                twins.push((g.clone(), r, resource));
+                                continue;
+                            }
+                            _ => {
+                                generic.insert(resource.clone(), r.clone());
+                            }
+                        }
+                    }
                     let at = match overlays.iter().position(|(target, _)| *target == erp) {
                         Some(at) => at,
                         None => {
@@ -550,6 +563,7 @@ impl Writer {
                 }
             }
         }
+        self.gpu_twins(&lib_files, &twins)?;
         progress(0.5, &p.name);
         let mut sources = BTreeSet::new();
         for (n, (erp, resources)) in overlays.iter().enumerate() {
@@ -597,29 +611,77 @@ impl Writer {
             if !seen.insert(uri.clone()) {
                 continue;
             }
-            match texarray::is_array(&uri) {
-                true => arrays += 1,
-                false => views += 1,
-            }
-            for erp in texarray::UI_ERPS {
-                let (erp, source) = (erp.to_owned(), Source::addon(LOGOS));
-                self.written.insert((erp.clone(), uri.clone()));
-                self.erp.push(match texarray::is_array(&uri) {
-                    true => ErpOp::MergeSlices {
+            let (erp, source) = (merge::BOOT_ERP.to_owned(), Source::addon(LOGOS));
+            self.written.insert((erp.clone(), uri.clone()));
+            self.erp.push(match texarray::is_array(&uri) {
+                true => {
+                    arrays += 1;
+                    ErpOp::MergeSlices {
                         erp,
-                        resource: uri.clone(),
+                        resource: uri,
                         source,
-                    },
-                    false => ErpOp::PutResource {
+                    }
+                }
+                false => {
+                    views += 1;
+                    ErpOp::PutResource {
                         erp,
-                        resource: uri.clone(),
+                        resource: uri,
                         source,
                         rename: None,
-                    },
-                });
-            }
+                    }
+                }
+            });
         }
         Ok((arrays, views))
+    }
+
+    // A shader archive comes in a generic and an AMD build, and the game loads the one
+    // for its GPU. Both load at boot here, so a resource they both carry keeps the
+    // generic copy, and one whose copies differ is reported.
+    fn gpu_twins(&mut self, files: &Path, twins: &[(String, String, String)]) -> Result<()> {
+        if twins.is_empty() {
+            return Ok(());
+        }
+        let mut open: BTreeMap<&str, ErpFile> = BTreeMap::new();
+        let mut differ = 0;
+        for (g, a, uri) in twins {
+            for rel in [g, a] {
+                if !open.contains_key(rel.as_str()) {
+                    let path = files.join(rel);
+                    let file = ErpFile::open(&path).map_err(|e| err(format!("{}: {e}", path.display())))?;
+                    open.insert(rel, file);
+                }
+            }
+            let content = |rel: &str| -> Result<_> {
+                let file = &open[rel];
+                let fail = |e: swofty_formats::Error| err(format!("{rel}: {uri}: {e}"));
+                let r = file.load(file.erp.find(uri).map_err(fail)?).map_err(fail)?;
+                let data: Vec<Vec<u8>> = r
+                    .fragments
+                    .iter()
+                    .map(|f| f.data())
+                    .collect::<std::result::Result<_, _>>()
+                    .map_err(fail)?;
+                Ok((r.kind, r.unk, data))
+            };
+            if content(g)? != content(a)? {
+                differ += 1;
+                self.log.line(format!(
+                    "approximated: {uri} differs between {g} and {a}; the boot overlay carries the generic copy for every GPU"
+                ));
+            }
+        }
+        self.log.line(format!(
+            "gpu: {} resource(s) the generic and AMD shader archives both carry load once, {differ} of them differ",
+            twins.len()
+        ));
+        if differ > 0 {
+            self.report.push(format!(
+                "warning: {differ} resource(s) differ between the mod's generic and AMD shader archives; AMD GPUs get the generic copy"
+            ));
+        }
+        Ok(())
     }
 
     // The SERPs Base Files load before the mod, as the Simplified Launcher turns them
@@ -842,14 +904,14 @@ impl Writer {
             self.report.push(format!(
                 "logos: {} team logo texture array(s) → erp.merge-slices into {} from {LOGOS}",
                 t.logos,
-                texarray::UI_ERPS.join(" and ")
+                merge::BOOT_ERP
             ));
         }
         if t.views > 0 {
             self.report.push(format!(
                 "logos: {} texture array view(s) → put-resource into {} from {LOGOS}",
                 t.views,
-                texarray::UI_ERPS.join(" and ")
+                merge::BOOT_ERP
             ));
         }
         let count = |class| diff.files.iter().filter(|f| f.class == class).count();
@@ -1034,6 +1096,12 @@ fn fill_in(op: AssetOp) -> AssetOp {
         }
         other => other,
     }
+}
+
+fn amd_twin(generic: &str, other: &str) -> bool {
+    generic
+        .strip_suffix(".sm51.erp")
+        .is_some_and(|stem| other == format!("{stem}.sm51_amd.erp"))
 }
 
 fn overlay_name(n: usize) -> String {

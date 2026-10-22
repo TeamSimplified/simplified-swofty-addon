@@ -538,9 +538,9 @@ fn a_conversion_writes_a_log_for_developers() {
         "text eng: 1 changed, 0 added, 0 filled in",
         &format!("archive {OPAQUE}: 0 changed, 2 added, 0 removed resource(s)"),
         &format!("archive {amd}: 0 changed, 2 added, 0 removed resource(s)"),
+        "gpu: 2 resource(s) the generic and AMD shader archives both carry load once, 0 of them differ",
         "needs: mod.team-simplified.serps-base-files-for-f1-25 (not in the library)",
-        &format!("ops/erp.json: erp.overlay erp/overlay-2.erp into {OPAQUE} (2 resource(s)"),
-        &format!("ops/erp.json: erp.overlay erp/overlay-3.erp into {amd} (2 resource(s)"),
+        "ops/erp.json: erp.overlay erp/overlay-2.erp into 2025_asset_groups/vfx_package/common.erp (2 resource(s)",
         "[ops]",
         "ops/database.json: 1 put-record, 1 remove-record",
         "ops/text.json: 1 lang.set for eng",
@@ -564,7 +564,7 @@ fn a_conversion_writes_a_log_for_developers() {
 }
 
 #[test]
-fn each_gpu_build_of_a_studio_livery_gets_its_own_overlay() {
+fn a_studio_livery_in_both_gpu_shader_archives_loads_once_at_boot() {
     let case = Case::new("gpu");
     let shader = resource("eaid://shader_package/mask", "Shader", &[b"code"]);
     let generic = "shader_package_2025/object_mask.nefx2.sm51.erp";
@@ -586,39 +586,23 @@ fn each_gpu_build_of_a_studio_livery_gets_its_own_overlay() {
     let game: &dyn GameFiles = &case.game;
     let (c, out) = case.convert(&p, Some(game));
     let (_, ops) = addon_ops(&out);
-    let overlays: Vec<(String, String)> = ops
+    let overlays: Vec<&AssetOp> = ops
         .iter()
-        .filter_map(|op| match op {
-            AssetOp::Erp(ErpOp::Overlay { erps, source }) => Some((erps[0].clone(), source.path.clone())),
-            _ => None,
-        })
+        .filter(|op| matches!(op, AssetOp::Erp(ErpOp::Overlay { erps, .. }) if erps == &[merge::BOOT_ERP]))
         .collect();
-    assert_eq!(
-        overlays,
-        [
-            (generic.to_owned(), overlay_name(0)),
-            (amd.to_owned(), overlay_name(1))
-        ]
-    );
-    for (n, gpu) in [(0, &b"nvidia"[..]), (1, &b"amd"[..])] {
-        let overlay = ErpFile::open(&out.join(overlay_name(n))).unwrap();
-        assert_eq!(overlay.erp.resources.len(), 41, "every livery resource");
-        let own = overlay.load(overlay.erp.find(&livery(99)).unwrap()).unwrap();
-        assert_eq!(
-            own.fragments[1].data().unwrap(),
-            gpu,
-            "each GPU keeps its own copy"
-        );
-    }
-    assert!(
-        !c.report
-            .iter()
-            .any(|l| l.starts_with("warning:") && l.contains("AMD"))
-    );
+    assert_eq!(overlays.len(), 1);
+    let overlay = ErpFile::open(&out.join(overlay_name(0))).unwrap();
+    assert_eq!(overlay.erp.resources.len(), 41, "every livery resource, once");
+    let kept = overlay.load(overlay.erp.find(&livery(99)).unwrap()).unwrap();
+    assert_eq!(kept.fragments[1].data().unwrap(), b"nvidia");
+    assert!(reported(
+        &c,
+        "warning: 1 resource(s) differ between the mod's generic and AMD shader archives"
+    ));
 }
 
 #[test]
-fn each_archive_gets_an_overlay_of_its_own_and_remove_resource_ops() {
+fn archive_changes_become_one_overlay_and_remove_resource_ops() {
     let case = Case::new("livery");
     let uri = |n: &str| format!("eaid://f1_2026_vehicle_package/teams/mclaren/{n}.tif.image");
     let genesis = "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image";
@@ -662,6 +646,7 @@ fn each_archive_gets_an_overlay_of_its_own_and_remove_resource_ops() {
     let (m, got) = check(&case, &p, &out, None);
     assert_eq!(m.version.to_string(), "2.1.0");
     let key = |erp: &str, uri: &str| (erp.to_owned(), uri.to_owned());
+    let boot = merge::BOOT_ERP;
     let marker = "eaid://tools_package/default/serps";
     assert_eq!(
         got.resources.keys().cloned().collect::<Vec<_>>(),
@@ -669,14 +654,10 @@ fn each_archive_gets_an_overlay_of_its_own_and_remove_resource_ops() {
             key(CAR, &uri("decal")),
             key(CAR, &uri("old")),
             key(CAR, &uri("paint")),
-            key(OPAQUE, shadow),
-            key(OPAQUE, genesis),
-            key(OPAQUE, marker),
+            key(boot, shadow),
+            key(boot, genesis),
+            key(boot, marker),
         ]
-    );
-    assert!(
-        !got.resources.keys().any(|(erp, _)| erp == merge::BOOT_ERP),
-        "nothing goes to the boot overlay"
     );
     assert_eq!(got.resources[&key(CAR, &uri("old"))], None);
     let paint = got.resources[&key(CAR, &uri("paint"))].as_ref().unwrap();
@@ -687,14 +668,6 @@ fn each_archive_gets_an_overlay_of_its_own_and_remove_resource_ops() {
         .filter(|op| matches!(op, AssetOp::Erp(ErpOp::Overlay { .. })))
         .collect();
     assert_eq!(overlays.len(), 2);
-    let erps: Vec<&str> = overlays
-        .iter()
-        .map(|op| match op {
-            AssetOp::Erp(ErpOp::Overlay { erps, .. }) => erps[0].as_str(),
-            _ => unreachable!(),
-        })
-        .collect();
-    assert_eq!(erps, [CAR, OPAQUE]);
     let names = |n: usize| -> Vec<String> {
         let overlay = ErpFile::open(&out.join(overlay_name(n))).unwrap();
         overlay.erp.resources.iter().map(|r| r.name.clone()).collect()
@@ -706,7 +679,7 @@ fn each_archive_gets_an_overlay_of_its_own_and_remove_resource_ops() {
 }
 
 #[test]
-fn a_resource_two_shader_archives_carry_keeps_each_archive_s_copy() {
+fn a_resource_a_mod_carries_twice_keeps_its_last_copy() {
     let case = Case::new("twice");
     let texture_uri = "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image";
     let glass = "shader_package_2025/object_glass.nefx2.sm51.erp";
@@ -726,24 +699,12 @@ fn a_resource_two_shader_archives_carry_keeps_each_archive_s_copy() {
     let game: &dyn GameFiles = &case.game;
     let (_, out) = case.convert(&p, Some(game));
     let (_, got) = check(&case, &p, &out, None);
-    let copy = |erp: &str| {
-        got.resources[&(erp.to_owned(), texture_uri.to_owned())]
-            .as_ref()
-            .unwrap()
-            .2[1]
-            .3
-            .clone()
-    };
-    assert_eq!(copy(glass), b"first");
-    assert_eq!(copy(OPAQUE), b"second");
-    for n in 0..2 {
-        let overlay = ErpFile::open(&out.join(overlay_name(n))).unwrap();
-        assert_eq!(overlay.erp.resources.len(), 1);
-    }
-    assert!(
-        !got.resources.keys().any(|(erp, _)| erp == merge::BOOT_ERP),
-        "nothing goes to the boot overlay"
-    );
+    let r = got.resources[&(merge::BOOT_ERP.to_owned(), texture_uri.to_owned())]
+        .as_ref()
+        .unwrap();
+    assert_eq!(r.2[1].3, b"second");
+    let overlay = ErpFile::open(&out.join(overlay_name(0))).unwrap();
+    assert_eq!(overlay.erp.resources.len(), 1);
 }
 
 #[test]
@@ -848,7 +809,7 @@ fn a_studio_mod_loads_after_the_serps_base_files() {
 }
 
 #[test]
-fn team_logo_arrays_merge_into_both_ui_texture_shader_archives() {
+fn team_logo_arrays_ship_merged_with_the_game_s_arrays() {
     let case = Case::new("logos");
     let image = format!("{LOGO_ARRAY}.image");
     let shader = resource("eaid://shader_package/ui", "Shader", &[b"code"]);
@@ -872,17 +833,13 @@ fn team_logo_arrays_merge_into_both_ui_texture_shader_archives() {
     let (c, out) = case.convert(&p, Some(game));
     assert_eq!(c.category, Category::Ui);
     let (_, got) = check(&case, &p, &out, None);
-    for erp in texarray::UI_ERPS {
-        let merged = got.resources[&(erp.to_owned(), image.clone())].as_ref().unwrap();
-        assert_eq!(merged.2[1].3, [[1; 4], [9; 4], [3; 4]].concat());
-        assert!(
-            got.resources
-                .contains_key(&(erp.to_owned(), LOGO_ARRAY.to_owned()))
-        );
-    }
+    let merged = got.resources[&(merge::BOOT_ERP.to_owned(), image.clone())]
+        .as_ref()
+        .unwrap();
+    assert_eq!(merged.2[1].3, [[1; 4], [9; 4], [3; 4]].concat());
     assert!(
-        !got.resources.keys().any(|(erp, _)| erp == merge::BOOT_ERP),
-        "nothing goes to the boot overlay"
+        got.resources
+            .contains_key(&(merge::BOOT_ERP.to_owned(), LOGO_ARRAY.to_owned()))
     );
     assert!(out.join(LOGOS).is_file());
     let (_, ops) = addon_ops(&out);
@@ -895,25 +852,22 @@ fn team_logo_arrays_merge_into_both_ui_texture_shader_archives() {
             )
         })
         .collect();
-    let puts = |erp: &str| {
+    assert_eq!(
+        logo_ops,
         [
-            AssetOp::Erp(ErpOp::MergeSlices {
-                erp: erp.into(),
+            &AssetOp::Erp(ErpOp::MergeSlices {
+                erp: merge::BOOT_ERP.into(),
                 resource: image.clone(),
                 source: Source::addon(LOGOS),
             }),
-            AssetOp::Erp(ErpOp::PutResource {
-                erp: erp.into(),
+            &AssetOp::Erp(ErpOp::PutResource {
+                erp: merge::BOOT_ERP.into(),
                 resource: LOGO_ARRAY.into(),
                 source: Source::addon(LOGOS),
                 rename: None,
             }),
         ]
-    };
-    let [sm51, amd] = texarray::UI_ERPS;
-    let (sm51, amd) = (puts(sm51), puts(amd));
-    let want = [&sm51[0], &amd[0], &sm51[1], &amd[1]];
-    assert_eq!(logo_ops, want);
+    );
     let shipped = ErpFile::open(&out.join(LOGOS)).unwrap();
     let theirs = shipped.load(shipped.erp.find(&image).unwrap()).unwrap();
     assert_eq!(
@@ -1247,12 +1201,10 @@ fn a_real_team_logo_array_merges_one_slice_into_the_game_s() {
     let merged = ErpFile::open(&out.join(LOGOS)).unwrap();
     let r = merged.load(merged.erp.find(&logos.name).unwrap()).unwrap();
     assert_eq!(r.fragments[1].data().unwrap(), pixels);
-    for erp in texarray::UI_ERPS {
-        assert!(
-            got.resources[&(erp.to_owned(), logos.name.clone())].is_some(),
-            "one slice merges into the game's, in {erp}"
-        );
-    }
+    assert!(
+        got.resources[&(merge::BOOT_ERP.to_owned(), logos.name.clone())].is_some(),
+        "one slice merges into the game's"
+    );
     assert!(reported(
         &c,
         "logos: 1 team logo texture array(s) → erp.merge-slices"
