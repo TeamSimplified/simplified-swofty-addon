@@ -515,7 +515,7 @@ fn a_conversion_writes_a_log_for_developers() {
         "class database: 1 file(s)",
         "class text: 1 file(s)",
         "class archive: 1 file(s)",
-        "skipped file readme.exe: programs and EA AntiCheat files are never copied",
+        "skipped file readme.exe: programs, EA AntiCheat and EA installer files are never copied",
         "[diff]",
         "database: 1 changed, 0 added, 1 removed record(s)",
         &format!("archive {CAR}: 1 changed, 0 added, 0 removed resource(s)"),

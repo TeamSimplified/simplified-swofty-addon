@@ -29,9 +29,10 @@ const EXACT_MARKERS: [&str; 8] = [
 const SUFFIX_MARKERS: [&str; 3] = ["_package", "_package_shared", "_asset_groups"];
 const PREFIX_MARKERS: [&str; 1] = ["shader_package_"];
 const CODE: [&str; 3] = ["exe", "dll", "asi"];
-// A mod never replaces EA AntiCheat, except its splash image, which is only shown
-// while it starts.
-const ANTICHEAT: &str = "eaanticheat.";
+// A mod never replaces EA AntiCheat, EA's installer or the game's preloader, except
+// the anticheat splash image, which is only shown while it starts. The Simplified
+// Launcher blocks the same names.
+const BLOCKED: [&str; 3] = ["eaanticheat", "eajavelin", "preloader_"];
 const ANTICHEAT_SPLASH: &str = "eaanticheat.splash.png";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -48,7 +49,7 @@ pub fn class(rel: &str, game: Option<&dyn GameFiles>) -> Option<Class> {
     let lower = rel.to_ascii_lowercase();
     let ext = lower.rsplit_once('.').map_or("", |(_, e)| e);
     let file = lower.rsplit('/').next().unwrap_or(&lower);
-    if CODE.contains(&ext) || file.starts_with(ANTICHEAT) && file != ANTICHEAT_SPLASH {
+    if CODE.contains(&ext) || BLOCKED.iter().any(|b| file.starts_with(b)) && file != ANTICHEAT_SPLASH {
         return None;
     }
     if lower == DATABASE {
@@ -66,6 +67,13 @@ pub fn class(rel: &str, game: Option<&dyn GameFiles>) -> Option<Class> {
         (true, true) => Some(Class::Archive),
         (true, false) => Some(Class::Replacement),
         (false, _) => Some(Class::Addition),
+    }
+}
+
+pub fn skip_reason(rel: &str) -> &'static str {
+    match class(rel, None) {
+        None => "programs, EA AntiCheat and EA installer files are never copied",
+        Some(_) => "not in a game folder, as the Simplified Launcher leaves it out",
     }
 }
 
@@ -484,7 +492,7 @@ pub fn content_root(root: &Path) -> Option<PathBuf> {
 }
 
 // Mods name the game folder "F1 25", or "F1 25 (mod name)" and the like.
-fn is_game_folder(name: &str) -> bool {
+pub fn is_game_folder(name: &str) -> bool {
     name.to_lowercase().starts_with(&GAME_FOLDER.to_lowercase())
 }
 
@@ -507,7 +515,7 @@ fn subdirs(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn is_marker(name: &str) -> bool {
+pub fn is_marker(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     EXACT_MARKERS.contains(&lower.as_str())
         || SUFFIX_MARKERS.iter().any(|s| lower.ends_with(s))
@@ -691,6 +699,8 @@ mod tests {
         assert_eq!(class("F1_25.exe", None), None);
         assert_eq!(class("EAAntiCheat.GameServiceLauncher.dll", None), None);
         assert_eq!(class("EAAntiCheat.cfg", None), None);
+        assert_eq!(class("EAJavelinInstaller_installscript.vdf", None), None);
+        assert_eq!(class("preloader_l.cfg", None), None);
         assert_eq!(class("bin/plugin.asi", None), None);
         assert_eq!(class("EAAntiCheat.splash.png", None), Some(Class::Replacement));
     }

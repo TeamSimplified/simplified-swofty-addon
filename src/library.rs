@@ -285,11 +285,13 @@ impl Library {
                     package::GAME_FOLDER
                 ))
             })?;
-            packages.push((base.clone(), content));
+            let gathered = content == root;
+            packages.push((base.clone(), content, gathered));
         } else {
             for (part, named) in parts.iter().zip(named_parts(&base, &label, &parts)) {
                 let dir = root.join(&part.rel);
-                let content = package::content_root(&dir).unwrap_or(dir);
+                let content = package::content_root(&dir).unwrap_or_else(|| dir.clone());
+                let gathered = content == dir;
                 let legacy = format!("{}.{}", base.id, slug(&part.rel));
                 let known = |id: &str| self.dir(id).join(PACKAGE_FILE).is_file();
                 let id = match !known(&named.id) && known(&legacy) {
@@ -305,14 +307,14 @@ impl Library {
                     }),
                     ..base.clone()
                 };
-                packages.push((p, content));
+                packages.push((p, content, gathered));
             }
         }
         progress(0.75, &source);
         let mut placed = Vec::new();
-        for (n, (mut p, content)) in packages.into_iter().enumerate() {
+        for (n, (mut p, content, gathered)) in packages.into_iter().enumerate() {
             let out = staging.join(format!("package-{n}"));
-            let (files, skipped) = gather(&content, &out.join(FILES), game, &source)?;
+            let (files, skipped) = gather(&content, &out.join(FILES), game, &source, gathered)?;
             p.files = files;
             p.skipped = skipped;
             if serps_path.is_file() {
@@ -350,11 +352,15 @@ impl Library {
     }
 }
 
+// Game folders loose at the top of a mod, beside its read-me and mod.serps: only the
+// game folders and the files the game has at its top count, as the Simplified
+// Launcher gathers only those into the mod's game folder.
 fn gather(
     content: &Path,
     files_dir: &Path,
     game: Option<&dyn GameFiles>,
     source: &str,
+    gathered: bool,
 ) -> Result<(Vec<File>, Vec<String>)> {
     let mut files = Vec::new();
     let mut skipped = Vec::new();
@@ -364,6 +370,14 @@ fn gather(
             .expect("under content")
             .to_string_lossy()
             .replace('\\', "/");
+        let outside = match rel.split_once('/') {
+            Some((top, _)) => !package::is_marker(top),
+            None => !game.is_some_and(|g| g.is_stock(&rel)),
+        };
+        if gathered && outside {
+            skipped.push(rel);
+            continue;
+        }
         let Some(class) = package::class(&rel, game) else {
             skipped.push(rel);
             continue;
@@ -576,6 +590,43 @@ fn sweep(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn game_folders_loose_at_the_top_leave_the_read_me_out() {
+        let root = std::env::temp_dir().join(format!("simplified-import-loose-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let src = root.join("Loose Mod");
+        for rel in [
+            "mod.serps",
+            "Read Me.pdf",
+            "Screenshots/one.png",
+            "audio/2025/engine.bdl",
+            "shader_package_2025/object_flag.nefx2.sm51.erp",
+        ] {
+            let p = src.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+        let library = Library::new(&root.join("data"));
+        let imported = library.import(&src, None, &mut |_, _| {}).unwrap();
+        let p = &imported.packages[0];
+        let files: Vec<&str> = p.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            files,
+            [
+                "audio/2025/engine.bdl",
+                "shader_package_2025/object_flag.nefx2.sm51.erp"
+            ]
+        );
+        let mut skipped = p.skipped.clone();
+        skipped.sort();
+        assert_eq!(skipped, ["Read Me.pdf", "Screenshots/one.png", "mod.serps"]);
+        assert_eq!(
+            crate::package::skip_reason("Read Me.pdf"),
+            "not in a game folder, as the Simplified Launcher leaves it out"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn each_part_of_a_mod_is_a_library_entry_of_its_own() {

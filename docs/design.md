@@ -38,7 +38,8 @@ Any mod works, as copying it into the game folder would.
 | A `.erp` the game ships | Archive |
 | Any other file the game ships | Replacement |
 | A file the game does not ship | Addition |
-| `.exe`, `.dll`, `.asi`, and EA AntiCheat files other than `EAAntiCheat.splash.png` | Skipped and named in the report |
+| `.exe`, `.dll`, `.asi`, files whose names start with `EAAntiCheat` other than `EAAntiCheat.splash.png`, `EAJavelin` or `preloader_` | Skipped and named in the report |
+| With game folders loose at the content root: a file at the top that the game does not ship, or in a folder that is not a game folder, such as a read-me | Skipped and named in the report |
 
 4. The id is `<author>.<name>`, lowercased to `[a-z0-9-]`, or the file name when both are missing. Importing an id that exists replaces it: the new copy is staged, the old one moves aside, the new one moves in and the old one is deleted. Profiles keep the id's place and switch.
 5. The importer diffs the package ([section 4.5](#45-diff)) and writes `package.json`.

@@ -242,7 +242,8 @@ fn log_source(log: &mut Log, p: &Package, game: Option<&dyn GameFiles>, id: &str
     }
     for path in &p.skipped {
         log.line(format!(
-            "skipped file {path}: programs and EA AntiCheat files are never copied"
+            "skipped file {path}: {}",
+            crate::package::skip_reason(path)
         ));
     }
 }
@@ -289,9 +290,8 @@ fn write_addon(
             w.report.push(format!("version {from} → {v}"));
         }
         for path in &p.skipped {
-            w.report.push(format!(
-                "skipped {path}: programs and EA AntiCheat files are never copied"
-            ));
+            w.report
+                .push(format!("skipped {path}: {}", crate::package::skip_reason(path)));
         }
         w.log_ops();
         let kinds = w.kinds();
