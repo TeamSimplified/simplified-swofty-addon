@@ -95,8 +95,9 @@ fn kind(k: Kind) -> &'static str {
 }
 
 // Raised when converting the same mod gives a different addon. 2: removals only
-// apply to a mod made for the installed game version.
-pub const CONVERTER: u32 = 2;
+// apply to a mod made for the installed game version. 3: shader archive resources
+// load from the mod's own boot overlay again.
+pub const CONVERTER: u32 = 3;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Record {
@@ -246,20 +247,13 @@ fn enable_needs(addons: &dyn AddonStore, made: &Made, lines: &mut Vec<String>) {
     }
 }
 
-// A mod converts when it has no addon yet, or when an older converter made its addon
-// and the change since applies to it: a converter before 2 kept the removals of a mod
-// made for another game version.
+// A mod converts when it has no addon yet, or when an older converter made its addon:
+// one before 3 merged shader archive resources into the game's shader archives, which
+// any mod may carry.
 fn due(cx: &Cx, record: &Record, p: &Package) -> bool {
     match record.mods.get(&p.id) {
         None => true,
-        Some(e) => {
-            e.made.is_some()
-                && e.converter < CONVERTER
-                && p.track.is_none()
-                && cx
-                    .game
-                    .is_some_and(|g| p.game_version.is_none() || p.game_version != g.exe_version())
-        }
+        Some(e) => e.made.is_some() && p.track.is_none() && cx.game.is_some() && e.converter < CONVERTER,
     }
 }
 
