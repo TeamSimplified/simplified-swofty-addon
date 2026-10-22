@@ -786,15 +786,12 @@ impl Writer {
                 r.removed.len()
             ));
         }
-        let removals = r.removed.len() + diff.archives.iter().map(|a| a.removed.len()).sum::<usize>();
-        if let Some(made) = p
-            .game_version
-            .as_deref()
-            .filter(|v| removals > 0 && Some(*v) != exe.as_deref())
-        {
+        if diff.dropped > 0 {
             self.report.push(format!(
-                "warning: the mod was made for game version {made}; its {} of what this game version has apply, as in the Simplified Launcher",
-                crate::plural(removals, "removal", "removals")
+                "warning: {} left out: the mod was made for {}, not this game version ({})",
+                crate::plural(diff.dropped, "removal", "removals"),
+                p.game_version.as_deref().unwrap_or("an unknown version"),
+                exe.as_deref().unwrap_or("unknown")
             ));
         }
         let languages = diff.text.iter().filter(|t| t.entries().next().is_some()).count();

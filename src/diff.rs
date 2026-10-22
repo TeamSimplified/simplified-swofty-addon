@@ -12,7 +12,7 @@ use crate::package::{self, Class};
 use crate::{Result, err};
 
 pub const FALLBACK: &str = "eng";
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Diff {
@@ -115,11 +115,13 @@ pub fn compute(p: &Package, files: &Path, game: &dyn GameFiles) -> Result<(Diff,
     let mut records = Gvdb::default();
     let mut names = HashMap::new();
     let mut texts = Vec::new();
+    let removals = p.game_version.is_some() && p.game_version == game.exe_version();
     for f in &p.files {
         let path = files.join(&f.path);
         match f.class {
             Class::Database => {
-                let (r, values, pointed) = database(&path, game)?;
+                let (r, values, dropped, pointed) = database(&path, game, removals)?;
+                diff.dropped += dropped;
                 diff.records = r;
                 records = values;
                 names = pointed;
@@ -127,7 +129,8 @@ pub fn compute(p: &Package, files: &Path, game: &dyn GameFiles) -> Result<(Diff,
             Class::Text => texts.push(f.path.as_str()),
             _ => match package::class(&f.path, Some(game)) {
                 Some(Class::Archive) => {
-                    let a = archive(&f.path, &path, game)?;
+                    let (a, dropped) = archive(&f.path, &path, game, removals)?;
+                    diff.dropped += dropped;
                     if !a.is_empty() {
                         diff.archives.push(a);
                     }
@@ -148,12 +151,14 @@ fn read(path: &Path) -> Result<Vec<u8>> {
     package::read_file(path)
 }
 
-type Database = (Records, Gvdb, HashMap<String, String>);
+type Database = (Records, Gvdb, usize, HashMap<String, String>);
 
 // Besides the records, the text keys the mod points string records at, each with
 // the key the game's own record points at. A stock record the mod's database lacks
-// is removed, as the Simplified Launcher installs the mod's database whole.
-fn database(path: &Path, game: &dyn GameFiles) -> Result<Database> {
+// is removed only when the mod was made for this game version: a database exported
+// from an older version lacks every record later updates added, and the game
+// crashes on boot when it reads one of them.
+fn database(path: &Path, game: &dyn GameFiles, removals: bool) -> Result<Database> {
     let stock = Gvdb::parse(&read(&game.original(package::DATABASE)?)?)
         .map_err(|e| err(format!("the game's database: {e}")))?;
     let ours = Gvdb::parse(&read(path)?).map_err(|e| err(format!("{}: {e}", path.display())))?;
@@ -176,13 +181,20 @@ fn database(path: &Path, game: &dyn GameFiles) -> Result<Database> {
         }
         values.records.push(r.clone());
     }
-    out.removed = stock
+    let removed: Vec<u64> = stock
         .records
         .iter()
         .map(|r| r.key)
         .filter(|k| !seen.contains(k))
         .collect();
-    Ok((out, values, pointed))
+    let dropped = match removals {
+        true => {
+            out.removed = removed;
+            0
+        }
+        false => removed.len(),
+    };
+    Ok((out, values, dropped, pointed))
 }
 
 fn layout_same(s: &Resource, r: &Resource) -> bool {
@@ -208,10 +220,10 @@ fn same(stock: &ErpFile, s: &Resource, ours: &ErpFile, r: &Resource) -> swofty_f
     Ok(stock.load(s)?.content_hash()? == ours.load(r)?.content_hash()?)
 }
 
-// A stock resource the mod's archive lacks is removed, as the archive replaces the
-// game's whole. Shader archives are merged into the game's instead, so they remove
-// nothing.
-fn archive(rel: &str, path: &Path, game: &dyn GameFiles) -> Result<Archive> {
+// A stock resource the mod's archive lacks is removed when the mod was made for this
+// game version, as the archive replaces the game's whole. Shader archives are merged
+// into the game's instead, so they remove nothing.
+fn archive(rel: &str, path: &Path, game: &dyn GameFiles, removals: bool) -> Result<(Archive, usize)> {
     let fail = |e: swofty_formats::Error| err(format!("{rel}: {e}"));
     let stock = ErpFile::open(&game.original(rel)?).map_err(&fail)?;
     let ours = ErpFile::open(path).map_err(&fail)?;
@@ -229,17 +241,22 @@ fn archive(rel: &str, path: &Path, game: &dyn GameFiles) -> Result<Archive> {
             None => out.added.push(r.name.clone()),
         }
     }
+    let mut dropped = 0;
     if !crate::merge::carrier(rel) {
         let names: HashSet<&str> = ours.erp.resources.iter().map(|r| r.name.as_str()).collect();
-        out.removed = stock
+        let removed: Vec<String> = stock
             .erp
             .resources
             .iter()
             .filter(|r| !names.contains(r.name.as_str()))
             .map(|r| r.name.clone())
             .collect();
+        match removals {
+            true => out.removed = removed,
+            false => dropped = removed.len(),
+        }
     }
-    Ok(out)
+    Ok((out, dropped))
 }
 
 pub fn language(path: &str) -> Option<&str> {
@@ -451,7 +468,7 @@ mod tests {
             dir: stock,
             exe: "1.0",
         };
-        let a = archive(rel, &ours.join(rel), &game).unwrap();
+        let (a, _) = archive(rel, &ours.join(rel), &game, true).unwrap();
         assert_eq!(a.changed, ["paint"]);
         std::fs::remove_dir_all(&root).ok();
     }
@@ -475,12 +492,28 @@ mod tests {
             exe: "1.0",
         };
         assert!(
-            archive(shader, &ours.join(shader), &game)
+            archive(shader, &ours.join(shader), &game, true)
                 .unwrap()
+                .0
                 .removed
                 .is_empty()
         );
-        assert_eq!(archive(car, &ours.join(car), &game).unwrap().removed, ["gone"]);
+        assert_eq!(
+            archive(car, &ours.join(car), &game, true).unwrap().0.removed,
+            ["gone"]
+        );
+        assert_eq!(
+            archive(car, &ours.join(car), &game, false).unwrap(),
+            (
+                Archive {
+                    path: car.into(),
+                    changed: Vec::new(),
+                    added: Vec::new(),
+                    removed: Vec::new(),
+                },
+                1
+            )
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -686,7 +719,16 @@ mod tests {
             exe: "1.1",
         };
         let (d, _) = compute(&p, &ours, &older).unwrap();
-        assert_eq!(d.records.removed, [key("c")]);
+        assert!(d.records.removed.is_empty());
+        assert_eq!(d.dropped, 1);
+        assert_eq!(d.records.changed, [key("b")]);
+        let unversioned = Package {
+            game_version: None,
+            ..p.clone()
+        };
+        let (d, _) = compute(&unversioned, &ours, &game).unwrap();
+        assert!(d.records.removed.is_empty());
+        assert_eq!(d.dropped, 1);
         std::fs::remove_dir_all(&root).ok();
     }
 }
