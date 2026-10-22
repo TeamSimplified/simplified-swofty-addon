@@ -21,6 +21,7 @@ zip = { version = "9", default-features = false, features = ["bzip2", "deflate",
 rars = { version = "=0.10.0", default-features = false }
 
 [dev-dependencies]
+swofty-core = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "ea5b607e8fa070cf5a46fd4b314da54dc8365f1a" }
 sevenz-rust2 = { version = "0.23", default-features = false, features = ["compress"] }
 rars = { version = "=0.10.0", default-features = false, features = ["write"] }
 
@@ -33,3 +34,4 @@ all = { level = "warn", priority = -1 }
 [patch."https://github.com/Swofty-Developments/SwoftyLauncher"]
 swofty-addon = { path = "/mnt/work/VSC/F1ModManager-wt/r13/packages/addon-api" }
 swofty-formats = { path = "/mnt/work/VSC/F1ModManager-wt/r13/packages/formats" }
+swofty-core = { path = "/mnt/work/VSC/F1ModManager-wt/r13/packages/core" }
