@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "id": "teamsimplified.mods",
-  "name": "Mod Importer",
+  "name": "Simplified Importer",
   "version": "0.7.1",
   "author": "Team Simplified",
-  "description": "The Mod Importer: turns any F1 25 mod, from a zip, 7z, rar, .serps or folder, into a Swofty addon, including mods made with Simplified Studio and track zips",
+  "description": "Mods convert into Swofty addons using the Simplified Importer: any F1 25 mod, from a zip, 7z, rar, .serps or folder, including mods made with Simplified Studio and track zips",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://github.com/TeamSimplified/simplified-suite",
   "compat": {
@@ -20,7 +20,7 @@
     "sections": [
       {
         "id": "mods",
-        "title": "Mod Importer",
+        "title": "Simplified Importer",
         "icon": "package"
       }
     ],
@@ -36,7 +36,7 @@
     "commands": [
       {
         "name": "mods",
-        "about": "Mods in the Mod Importer's library, the addons made from them, and the order of those not converted",
+        "about": "Mods in the Simplified Importer's library, the addons made from them, and the order of those not converted",
         "subcommands": [
           {
             "name": "list",

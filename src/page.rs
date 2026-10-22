@@ -1,4 +1,4 @@
-// The Mod Importer page: Team Simplified's header, the import card, the last
+// The Simplified Importer page: Team Simplified's header, the import card, the last
 // import's report and the mods made into addons from the library.
 use std::path::PathBuf;
 
@@ -19,12 +19,13 @@ pub const REIMPORT: &str = "reimport:";
 pub const TOGGLE: &str = "toggle:";
 pub const LINK: &str = "link:";
 pub const DETAILS: &str = "details";
-const ART: &[u8] = include_bytes!("../art/team-simplified.png");
-const ART_FILE: &str = "team-simplified.png";
+// The sidebar's mark (sections/mods.svg), drawn as the sidebar draws it.
+const ART: &[u8] = include_bytes!("../art/simplified-mark.png");
+const ART_FILE: &str = "simplified-mark.png";
 pub const FOOTER: &str = "Based on Simplified Suite by Team Simplified.";
 const ABOUT: &str = "Team Simplified make modding tools for F1 25: Simplified Studio, the SERPs Launcher, a track installer, swappers, editors and a database merger, open source in the Simplified Suite.";
 const IMPORTER: &str =
-    "The Mod Importer is their part of Swofty Launcher: it turns any F1 25 mod into a Swofty addon.";
+    "The Simplified Importer is their part of Swofty Launcher: it turns any F1 25 mod into a Swofty addon.";
 const FORMAT: [&str; 2] = [
     "A Swofty addon is a folder or .swoftyaddon file with a swofty.json manifest and the changes it makes: database records, text, archive resources, files and tracks.",
     "The launcher applies every addon that is on in the profile, in load order, and lower in the list wins.",
@@ -137,8 +138,8 @@ fn notices(cx: &Cx, pending: &importer::Pending) -> Vec<Notice> {
 
 fn hero(cx: &Cx, converted: usize, open: bool) -> Block {
     Block::Hero(Hero {
-        title: "Mod Importer".into(),
-        subtitle: Some("By Team Simplified. Turns any F1 25 mod into a Swofty addon.".into()),
+        title: "Simplified Importer".into(),
+        subtitle: Some("By Team Simplified. Mods convert into Swofty addons using the Simplified Importer.".into()),
         art: art(cx),
         pills: vec![Pill {
             text: format!("{converted} converted"),
@@ -410,7 +411,7 @@ fn library_entry(
                 title: format!("Remove {}?", p.name),
                 text: "It is deleted from the library and turned off in every profile.".into(),
             },
-            ..Button::new(format!("{REMOVE}{}", p.id), "Remove from library")
+            ..Button::new(format!("{REMOVE}{}", p.id), "Remove")
         });
         let mut blocks = vec![Block::Pills(vec![Pill {
             text: "Not converted".into(),

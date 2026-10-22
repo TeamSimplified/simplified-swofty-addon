@@ -1,4 +1,4 @@
-// The Mod Importer: every mod in the library becomes a standalone Swofty data addon,
+// The Simplified Importer: every mod in the library becomes a standalone Swofty data addon,
 // installed and switched through the Launcher API's addon host calls. The library
 // stays as the source each addon is made from again.
 use std::collections::{BTreeMap, HashSet};
@@ -445,7 +445,7 @@ pub fn startup(
     }
     if m.left > 0 {
         parts.push(format!(
-            "{} more convert at the next start, or with Convert now on the Mod Importer",
+            "{} more convert at the next start, or with Convert now on the Simplified Importer",
             m.left
         ));
     }
@@ -569,7 +569,7 @@ fn migrated(
     }
     if !m.failed.is_empty() {
         m.lines.push(format!(
-            "{} still {} through the Mod Importer's build step",
+            "{} still {} through the Simplified Importer's build step",
             crate::plural(m.failed.len(), "mod", "mods"),
             if m.failed.len() == 1 { "loads" } else { "load" }
         ));
@@ -1499,7 +1499,7 @@ mod tests {
         assert_eq!(
             start().as_deref(),
             Some(
-                "Converted 1 mod into an addon; 1 more convert at the next start, or with Convert now on the Mod Importer"
+                "Converted 1 mod into an addon; 1 more convert at the next start, or with Convert now on the Simplified Importer"
             )
         );
         assert_eq!(start().as_deref(), Some("Converted 1 mod into an addon"));
@@ -1705,7 +1705,7 @@ mod tests {
         let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
         assert_eq!(
             cards(&view),
-            ["Mod Importer", "Import a mod", "Last import", "Your library"]
+            ["Simplified Importer", "Import a mod", "Last import", "Your library"]
         );
         assert!(view.notices.is_empty(), "{:?}", view.notices);
         let text = all_text(&view);
@@ -1774,7 +1774,7 @@ mod tests {
         let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
         assert_eq!(
             cards(&view)[..3],
-            ["Mod Importer", "Team Simplified", "Import a mod"],
+            ["Simplified Importer", "Team Simplified", "Import a mod"],
             "the panel opens below the header, above the panes"
         );
         assert!(
@@ -1806,7 +1806,7 @@ mod tests {
         })
         .unwrap();
         let view = with(&host, "vanilla", |cx| addon.view(cx, SECTION)).unwrap();
-        assert_eq!(cards(&view), ["Mod Importer", "Your library"]);
+        assert_eq!(cards(&view), ["Simplified Importer", "Your library"]);
         let text = all_text(&view);
         assert!(text.contains(&"[Show in Addons]".to_owned()));
         assert!(!text.contains(&"[Re-import]".to_owned()), "{text:?}");

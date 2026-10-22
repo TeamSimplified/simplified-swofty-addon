@@ -1,15 +1,15 @@
 # Design
 
-How Simplified for Swofty, Team Simplified's Mod Importer, imports, stores and compares mods and tracks and turns each into a Swofty addon. These are sections 4 and 5 of the Swofty Launcher design notes, <https://f1.swofty.net/design/addons-and-mods>, which describe the Launcher API and Asset API this addon is built on. Links to other sections go there.
+How Simplified for Swofty, Team Simplified's Simplified Importer, imports, stores and compares mods and tracks and turns each into a Swofty addon. These are sections 4 and 5 of the Swofty Launcher design notes, <https://f1.swofty.net/design/addons-and-mods>, which describe the Launcher API and Asset API this addon is built on. Links to other sections go there.
 
 ## 4. Simplified for Swofty
 
 ### 4.1 The addon
 
-- The crate `addons/simplified` (`swofty-addon-simplified`) is Rust and AGPL-3.0-or-later, like the rest of the repository. Its `mod.serps` reader, package root, content root and entry path checks are ported from the Simplified Launcher (GPL-3.0, used with Team Simplified's permission) and carry the Simplified Suite notice. `THIRD_PARTY.md` credits Team Simplified for the `.serps` format, the Simplified Suite and the logo, and the Mod Importer page shows the credit.
+- The crate `addons/simplified` (`swofty-addon-simplified`) is Rust and AGPL-3.0-or-later, like the rest of the repository. Its `mod.serps` reader, package root, content root and entry path checks are ported from the Simplified Launcher (GPL-3.0, used with Team Simplified's permission) and carry the Simplified Suite notice. `THIRD_PARTY.md` credits Team Simplified for the `.serps` format, the Simplified Suite and the logo, and the Simplified Importer page shows the credit.
 - Import, the library, profile state, the section and `swofty mods` are built (work item 13), and so are the diffs (work item 14), the merge and conflicts (work item 15).
-- Manifest: id `teamsimplified.mods`, name `Mod Importer`, author `Team Simplified`, version 0.7.0, `compat.launcher` `>=1.3.0`. No options and no native plugin.
-- Ships as a launcher plugin: `teamsimplified.mods.swoftyaddon` holds `swofty.json` and the helper program `bin/simplified-helper`, which hands the addon to `swofty_addon::helper::run_helper`. `swofty.json` declares the one section, id `mods`, titled `Mod Importer`, the `mods` command, the import extensions and the build hook, and the addon reads its sections and commands from it. `sections/mods.svg`, Team Simplified's mark, is the section's sidebar icon. The launcher can still build the crate in through `swofty-builtins`; built in, it is on by default in new profiles. Either way it can be turned off per profile, which hides its section.
+- Manifest: id `teamsimplified.mods`, name `Simplified Importer`, author `Team Simplified`, version 0.7.0, `compat.launcher` `>=1.3.0`. No options and no native plugin.
+- Ships as a launcher plugin: `teamsimplified.mods.swoftyaddon` holds `swofty.json` and the helper program `bin/simplified-helper`, which hands the addon to `swofty_addon::helper::run_helper`. `swofty.json` declares the one section, id `mods`, titled `Simplified Importer`, the `mods` command, the import extensions and the build hook, and the addon reads its sections and commands from it. `sections/mods.svg`, Team Simplified's mark, is the section's sidebar icon. The launcher can still build the crate in through `swofty-builtins`; built in, it is on by default in new profiles. Either way it can be turned off per profile, which hides its section.
 - It uses `swofty-addon` and `swofty-formats` only. Core has no code for it.
 
 ### 4.2 Packages
@@ -130,14 +130,14 @@ Team rename packages point the team name records at keys of their own, such as `
 - Conflicts between converted mods are conflicts between their addons, which the launcher reports on the **Addons** page.
 - The build reports conflicts of the mods that still load through the build hook with other addons through the planner ([section 3.5](https://f1.swofty.net/design/addons-and-mods#_3-5-order-and-conflicts)).
 
-### 4.8 Mod Importer page
+### 4.8 Simplified Importer page
 
-The section `mods`, titled `Mod Importer`, is one of the launcher's big sidebar sections. Its body is blocks:
+The section `mods`, titled `Simplified Importer`, is one of the launcher's big sidebar sections. Its body is blocks:
 
 - **Header.** Subtitle `<n> mods converted into addons`. Action `Choose a mod…`, a picker for `.zip`, `.7z`, `.rar` and `.serps` files and folders, several at once.
 - **Notices.** The addon is off in this profile (button `Turn on`). The vanilla profile is active. The launcher has no addon host calls. Library mods are not converted yet and convert on the next start, or this profile is not handed over yet (button `Convert now`).
-- **Hero.** Team Simplified's logo (`art/team-simplified.png`, the Simplified Launcher's icon, written to the cache directory), the title `Mod Importer`, `By Team Simplified. Turns any F1 25 mod into a Swofty addon.`, a pill with the count converted and the `Team Simplified` button.
-- **Team Simplified panel.** The button toggles a card below `Import a mod`, closed at first: who Team Simplified are, what the Mod Importer does, the Swofty addon format in two sentences, and buttons that open https://github.com/TeamSimplified, https://github.com/TeamSimplified/simplified-suite and https://github.com/TeamSimplified/SERPs-Launcher. `LINKS` in `src/page.rs` holds placeholders for a website and a Discord link, shown once they have a URL.
+- **Hero.** Team Simplified's mark (`art/simplified-mark.png`, the sidebar's `sections/mods.svg` drawn at half size, written to the cache directory), the title `Simplified Importer`, `By Team Simplified. Mods convert into Swofty addons using the Simplified Importer.`, a pill with the count converted and the `Team Simplified` button.
+- **Team Simplified panel.** The button toggles a card below `Import a mod`, closed at first: who Team Simplified are, what the Simplified Importer does, the Swofty addon format in two sentences, and buttons that open https://github.com/TeamSimplified, https://github.com/TeamSimplified/simplified-suite and https://github.com/TeamSimplified/SERPs-Launcher. `LINKS` in `src/page.rs` holds placeholders for a website and a Discord link, shown once they have a URL.
 - **Import a mod.** A card with `Choose a mod…`: a drop anywhere on the window imports too.
 - **Last import.** The date and files of the last import, a line per set of variants (`<mod>: <n> variants installed as addons; <variant> is on. Pick another on Addons.`), and one line per addon: `Became the addon <name> · <category> · <counts>`, such as `205 car assets`, with `· off` for a variant that is off. Warnings follow in plain words. `Details` shows what became what (the conversion report with op names and paths), and `Hide details` hides it.
 - **Not converted.** Each mod whose conversion failed, with the reason and `Convert again`, `Turn on` or `Turn off`, `Show files` and `Remove from library`.

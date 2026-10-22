@@ -1,8 +1,8 @@
-# Mod Importer (Simplified for Swofty)
+# Simplified Importer (Simplified for Swofty)
 
-The **Mod Importer** is Team Simplified's addon for [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). It turns any F1 25 mod into a standalone Swofty addon. It shows as **Mod Importer** in the launcher's sidebar and as `swofty mods` on the command line.
+The **Simplified Importer** is Team Simplified's addon for [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). It turns any F1 25 mod into a standalone Swofty addon. It shows as **Simplified Importer** in the launcher's sidebar and as `swofty mods` on the command line.
 
-- Works with any mod: drop its zip, 7z, rar, `.serps` or folder on the launcher, or choose it on the Mod Importer page. The game folders can sit at the top or up to three folders down, or in a folder named like `F1 25`. Mods made with Simplified Studio (`.serps`) and community track zips import too.
+- Works with any mod: drop its zip, 7z, rar, `.serps` or folder on the launcher, or choose it on the Simplified Importer page. The game folders can sit at the top or up to three folders down, or in a folder named like `F1 25`. Mods made with Simplified Studio (`.serps`) and community track zips import too.
 - Each mod becomes a Swofty data addon on the **Addons** page, with its own switch, place in the load order and conflicts. Lower in the list wins.
 - The addon holds what the mod changes from the game's own files: database records, text, archive resources, files and tracks.
 - After an import the addon is on in the active profile, and the launcher switches to **Addons** with the addon highlighted.
@@ -11,7 +11,7 @@ The **Mod Importer** is Team Simplified's addon for [Swofty Launcher for F1 25](
 
 How it works is in [docs/design.md](docs/design.md).
 
-## The Mod Importer page
+## The Simplified Importer page
 
 - Team Simplified's logo and a short about. The **Team Simplified** button opens a panel about Team Simplified and the Swofty addon format, with links to their GitHub, the Simplified Suite and the SERPs Launcher.
 - **Choose a mod…** picks zips, 7z and rar archives, `.serps` files and folders, several at once. A drop anywhere on the window does the same.
@@ -21,11 +21,11 @@ How it works is in [docs/design.md](docs/design.md).
 
 ## Mods imported before 0.7.0
 
-The library converts into addons once, when the launcher starts, on the first import or on **Convert now** on the page, when the launcher has found the game. Each profile then turns the addons on in its own mod order, on where the mod was on, and puts them where the Mod Importer loaded its mods in the load order. A profile that hasn't been handed over yet loads its mods through the build step, as before. Mods that fail to convert stay in the library and keep loading through the build step. The library is never deleted. Track packages convert into track addons; the Tracks page is gone.
+The library converts into addons once, when the launcher starts, on the first import or on **Convert now** on the page, when the launcher has found the game. Each profile then turns the addons on in its own mod order, on where the mod was on, and puts them where the Simplified Importer loaded its mods in the load order. A profile that hasn't been handed over yet loads its mods through the build step, as before. Mods that fail to convert stay in the library and keep loading through the build step. The library is never deleted. Track packages convert into track addons; the Tracks page is gone.
 
 ## Using it in Swofty Launcher
 
-The Mod Importer is a launcher plugin: a helper program (`bin/simplified-helper`) that the launcher runs, packaged with its `swofty.json` as `teamsimplified.mods.swoftyaddon`. Each [release](https://github.com/TeamSimplified/simplified-swofty-addon/releases) attaches it, built for Windows and Linux, with its `SHA256SUMS` and its `swofty.json`.
+The Simplified Importer is a launcher plugin: a helper program (`bin/simplified-helper`) that the launcher runs, packaged with its `swofty.json` as `teamsimplified.mods.swoftyaddon`. Each [release](https://github.com/TeamSimplified/simplified-swofty-addon/releases) attaches it, built for Windows and Linux, with its `SHA256SUMS` and its `swofty.json`.
 
 Swofty Launcher 1.0.4 and later installs the addon itself, checks it against `SHA256SUMS`, and keeps it up to date. Launchers from 1.3.1 install the newest release whose `swofty.json` accepts them. Earlier launchers install the release GitHub marks as latest, which stays at one every launcher from 1.0.4 can install; new releases are published without that mark. To install it by hand, drop the `.swoftyaddon` on the launcher, or run:
 
@@ -38,7 +38,7 @@ Its id is `teamsimplified.mods`, the same id the launcher's built-in copy used, 
 
 The helper speaks the launcher's helper protocol through `swofty_addon::helper::run_helper`. Version 0.7.0 needs Swofty Launcher 1.3.0 or later: it installs, turns on and orders addons with the addon host calls (`install_addon`, `set_addon_enabled`, `addons`, `move_addon`) and asks the launcher to show an addon with the `show_addon` effect. The helper decides which dropped files and folders it imports, checking them by their contents.
 
-`sections/mods.svg` gives the Mod Importer its sidebar icon, Team Simplified's mark.
+`sections/mods.svg` gives the Simplified Importer its sidebar icon, Team Simplified's mark.
 
 The one-time move of tracks from the launcher's old `maps/` folder only runs in the built-in copy.
 

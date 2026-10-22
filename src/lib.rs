@@ -221,7 +221,7 @@ fn notices(cx: &Cx) -> Vec<Notice> {
     }
     if !cx.profile.enabled {
         return vec![Notice {
-            text: format!("The Mod Importer is off in {}.", cx.profile.name),
+            text: format!("The Simplified Importer is off in {}.", cx.profile.name),
             tone: Tone::Warn,
             action: Some(Button::new(ENABLE, "Turn on")),
         }];
@@ -264,7 +264,7 @@ impl Addon for Simplified {
         Some(include_bytes!("../icon.svg"))
     }
 
-    // The Mod Importer page and the mods command are declared once, in swofty.json,
+    // The Simplified Importer page and the mods command are declared once, in swofty.json,
     // which the launcher also reads when it runs this addon as a helper program.
     fn sections(&self) -> Vec<SectionSpec> {
         self.launcher().sections.clone()

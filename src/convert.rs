@@ -402,7 +402,7 @@ impl Writer {
             true => String::new(),
             false => format!(": {}", parts.join(", ")),
         };
-        format!("Converted from {source} by the Mod Importer{what}.")
+        format!("Converted from {source} by the Simplified Importer{what}.")
     }
 
     fn counts(&self) -> Vec<String> {

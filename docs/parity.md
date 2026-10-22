@@ -1,6 +1,6 @@
 # Parity with the Simplified Launcher
 
-How the Mod Importer's conversion compares with how Team Simplified's Simplified Launcher installs the same mod, and what the parity harness found on real mods.
+How the Simplified Importer's conversion compares with how Team Simplified's Simplified Launcher installs the same mod, and what the parity harness found on real mods.
 
 ## Sources
 
@@ -159,7 +159,7 @@ Before the fixes, V10, koenigsegg and Merc26 differed in the Studio shadow mater
 
 Every row converts with ops the launcher has: `put-record`, `remove-record`, `lang.set`, `lang.default`, `erp.overlay` on any asset group archive (with the launcher's fallback to rewriting an archive whose layout changes) and on shader archives (written whole into the game files at build time), `remove-resource`, `merge-slices`, `add-mipmaps`, `file.put`, `track.add`, and `load_after` for the SERPs Base Files. One change keeps two converted mods from failing a build:
 
-- `remove-record` and `remove-resource` fail when the key or resource is gone (`apply_db_op` in `addon-api/src/ops.rs:737-743`, `ErpBuild::apply` in `core/src/erpbuild.rs:396-401`). Two mods built from the same older database or archive both remove what it lacks, and the second addon's removal fails the build. Wanted: a removal of a key or resource an earlier op in the same build already removed is left out, with a line such as `erp: <addon>: eaid://… already removed by <earlier addon>`, as the Mod Importer's build hook already does for library mods (`lib.rs` `without_repeats`).
+- `remove-record` and `remove-resource` fail when the key or resource is gone (`apply_db_op` in `addon-api/src/ops.rs:737-743`, `ErpBuild::apply` in `core/src/erpbuild.rs:396-401`). Two mods built from the same older database or archive both remove what it lacks, and the second addon's removal fails the build. Wanted: a removal of a key or resource an earlier op in the same build already removed is left out, with a line such as `erp: <addon>: eaid://… already removed by <earlier addon>`, as the Simplified Importer's build hook already does for library mods (`lib.rs` `without_repeats`).
 - Launcher docs: `docs/reference/mods/serps.md:102` still says every resource goes into the `vfx_package/common.erp` overlay; asset group archives and shader archives now get overlays of their own (rows 26, 30), and the launcher writes shader archives whole into the game files at build time.
 
 ## Cannot be identical
