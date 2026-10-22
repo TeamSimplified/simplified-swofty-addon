@@ -43,7 +43,7 @@ pub fn carrier(rel: &str) -> bool {
 
 // Resources added to ui_texture archives are merged across mods by texarray::build,
 // and Simplified Studio's marker does nothing in the game.
-fn loaded(a: &crate::diff::Archive, uri: &str) -> bool {
+pub fn loaded(a: &crate::diff::Archive, uri: &str) -> bool {
     let studio = uri.starts_with(MARKER) || carrier(&a.path) && studio_only(uri);
     !(texarray::carrier(&a.path) && texarray::merged_by_slice(uri) || studio)
 }

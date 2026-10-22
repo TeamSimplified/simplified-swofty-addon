@@ -474,6 +474,75 @@ fn a_team_rename_becomes_database_and_text_ops() {
 }
 
 #[test]
+fn a_conversion_writes_a_log_for_developers() {
+    let case = Case::new("log");
+    case.stock(DATABASE, &db(&[("rules.laps", 0, "5"), ("rules.old", 0, "1")]));
+    case.stock("lang/language_eng.lng", &lng(&[("lng_a", "A")]));
+    let uri = "eaid://f1_2026_vehicle_package/teams/mclaren/paint.tif.image";
+    case.stock(CAR, &archive(vec![texture(uri, b"small")]));
+    let p = case.import(
+        &[
+            (DATABASE, db(&[("rules.laps", 0, "7")])),
+            (
+                "localisatioa/2025_release/language_eng.lng",
+                lng(&[("lng_a", "B")]),
+            ),
+            (CAR, archive(vec![texture(uri, b"bigger texture")])),
+            ("readme.exe", b"MZ".to_vec()),
+        ],
+        &serps("Logged", "1.0"),
+    );
+    let game: &dyn GameFiles = &case.game;
+    let (c, _) = case.convert(&p, Some(game));
+    let logs: Vec<PathBuf> = std::fs::read_dir(case.data().join(crate::log::DIR))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(logs.len(), 1);
+    let name = logs[0].file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        name.starts_with("convert-") && name.ends_with(&format!("-{}.log", c.id)),
+        "{name}"
+    );
+    let text = std::fs::read_to_string(&logs[0]).unwrap();
+    for line in [
+        "[source]",
+        "file: Mod",
+        "sha256: none",
+        "[game]",
+        &format!("build key: {BUILD}"),
+        "[files]",
+        "class database: 1 file(s)",
+        "class text: 1 file(s)",
+        "class archive: 1 file(s)",
+        "skipped file readme.exe: programs and EA AntiCheat files are never copied",
+        "[diff]",
+        "database: 1 changed, 0 added, 1 removed record(s)",
+        &format!("archive {CAR}: 1 changed, 0 added, 0 removed resource(s)"),
+        "text eng: 1 changed, 0 added, 0 filled in",
+        "[ops]",
+        "ops/database.json: 1 put-record, 1 remove-record",
+        "ops/text.json: 1 lang.set for eng",
+        "[result]",
+        &format!("addon: {}", c.id),
+        "category: ",
+        "time: diff ",
+        "time: total ",
+    ] {
+        assert!(
+            text.lines().any(|l| l.starts_with(line)),
+            "no {line:?} in\n{text}"
+        );
+    }
+    let out = case.root.join("failed");
+    assert!(convert(&case.library(), &p, None, &out, &mut |_, _| {}).is_err());
+    let logs = std::fs::read_dir(case.data().join(crate::log::DIR))
+        .unwrap()
+        .count();
+    assert_eq!(logs, 2, "a failed conversion logs its error too");
+}
+
+#[test]
 fn archive_changes_become_one_overlay_and_remove_resource_ops() {
     let case = Case::new("livery");
     let uri = |n: &str| format!("eaid://f1_2026_vehicle_package/teams/mclaren/{n}.tif.image");

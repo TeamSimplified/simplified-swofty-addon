@@ -89,6 +89,10 @@ impl Library {
         self.data.join(LIBRARY)
     }
 
+    pub fn data_dir(&self) -> &Path {
+        &self.data
+    }
+
     pub fn dir(&self, id: &str) -> PathBuf {
         self.root().join(id)
     }

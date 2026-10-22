@@ -12,6 +12,7 @@ use swofty_formats::erp::{Erp, ErpFile};
 
 use crate::diff::Diff;
 use crate::library::{FILES, LIBRARY, Library, Package};
+use crate::log::Log;
 use crate::package::Class;
 use crate::{ID, Result, err, io_err, merge, texarray, track};
 
@@ -100,6 +101,7 @@ struct Writer {
     contents: Contents,
     written: BTreeSet<(String, String)>,
     mips: usize,
+    log: Log,
 }
 
 #[derive(Serialize)]
@@ -156,15 +158,102 @@ pub fn convert_to(
     out: &Path,
     progress: &mut dyn FnMut(f32, &str),
 ) -> Result<Converted> {
-    if std::fs::read_dir(out).is_ok_and(|mut d| d.next().is_some()) {
-        return Err(err(format!("{} is not empty", out.display())));
+    let mut log = Log::default();
+    log_source(&mut log, p, game, id);
+    let mut ours = false;
+    let result = (|| {
+        if std::fs::read_dir(out).is_ok_and(|mut d| d.next().is_some()) {
+            return Err(err(format!("{} is not empty", out.display())));
+        }
+        std::fs::create_dir_all(out).map_err(io_err(out))?;
+        ours = true;
+        write_addon(library, p, id, game, out, progress, &mut log)
+    })();
+    log.section("result");
+    match &result {
+        Ok(c) => {
+            log.line(format!("addon: {}", c.id));
+            log.line(format!("name: {}", c.name));
+            log.line(format!("category: {}", c.category.label()));
+            let kinds: Vec<String> = c.kinds.iter().map(|k| format!("{k:?}").to_lowercase()).collect();
+            log.line(format!("kinds: {}", kinds.join(", ")));
+            log.line(format!("summary: {}", c.summary));
+            for line in c.report.iter().filter(|l| l.starts_with("warning:")) {
+                log.line(line.clone());
+            }
+        }
+        Err(e) => {
+            log.line(format!("error: converting {} ({}) into {id}: {e}", p.name, p.id));
+            if ours {
+                std::fs::remove_dir_all(out).ok();
+            }
+        }
     }
-    std::fs::create_dir_all(out).map_err(io_err(out))?;
-    let result = write_addon(library, p, id, game, out, progress);
-    if result.is_err() {
-        std::fs::remove_dir_all(out).ok();
-    }
+    log.write(library.data_dir(), id).ok();
     result
+}
+
+fn log_source(log: &mut Log, p: &Package, game: Option<&dyn GameFiles>, id: &str) {
+    log.section("source");
+    log.line(format!("file: {}", p.source));
+    log.line(format!("size: {} bytes in {} file(s)", p.size(), p.files.len()));
+    log.line(format!("sha256: {}", p.sha256.as_deref().unwrap_or("none")));
+    log.line(format!("library id: {}", p.id));
+    log.line(format!("addon id: {id}"));
+    log.line(format!("name: {}", p.name));
+    log.line(format!("author: {}", p.author.as_deref().unwrap_or("none")));
+    log.line(format!("version: {}", p.version.as_deref().unwrap_or("none")));
+    log.line(format!(
+        "game_version: {}",
+        p.game_version.as_deref().unwrap_or("none")
+    ));
+    log.line(format!(
+        "studio_version: {}",
+        p.studio_version.as_deref().unwrap_or("none")
+    ));
+    if let Some(part) = &p.part {
+        log.line(format!("part: {} of {}", part.name, part.of));
+    }
+    if let Some(code) = &p.track {
+        log.line(format!("track: {code}"));
+    }
+    log.line(format!("importer: {ID} {}", env!("CARGO_PKG_VERSION")));
+    log.section("game");
+    match game {
+        Some(g) => {
+            log.line(format!("build key: {}", g.build_key()));
+            log.line(format!(
+                "exe version: {}",
+                g.exe_version().as_deref().unwrap_or("unknown")
+            ));
+        }
+        None => log.line("game: not found"),
+    }
+    log.section("files");
+    let mut classes: BTreeMap<Class, (usize, u64)> = BTreeMap::new();
+    for f in &p.files {
+        let e = classes.entry(f.class).or_default();
+        e.0 += 1;
+        e.1 += f.size;
+    }
+    for (class, (n, size)) in classes {
+        log.line(format!("class {}: {n} file(s), {size} bytes", class_name(class)));
+    }
+    for path in &p.skipped {
+        log.line(format!(
+            "skipped file {path}: programs and EA AntiCheat files are never copied"
+        ));
+    }
+}
+
+fn class_name(class: Class) -> &'static str {
+    match class {
+        Class::Database => "database",
+        Class::Text => "text",
+        Class::Archive => "archive",
+        Class::Replacement => "replacement",
+        Class::Addition => "addition",
+    }
 }
 
 fn write_addon(
@@ -174,58 +263,71 @@ fn write_addon(
     game: Option<&dyn GameFiles>,
     out: &Path,
     progress: &mut dyn FnMut(f32, &str),
+    log: &mut Log,
 ) -> Result<Converted> {
     let mut w = Writer {
         dir: out.to_path_buf(),
+        log: std::mem::take(log),
         ..Writer::default()
     };
-    progress(0.0, &p.name);
-    match (&p.track, game) {
-        (Some(code), _) => w.track(library, p, code)?,
-        (None, Some(game)) => w.package(library, p, game, progress)?,
-        (None, None) => {
-            return Err(err(format!(
-                "{}: converting a mod needs the game's own files to compare it with",
-                p.name
-            )));
+    let result = (|| -> Result<Converted> {
+        progress(0.0, &p.name);
+        match (&p.track, game) {
+            (Some(code), _) => w.track(library, p, code)?,
+            (None, Some(game)) => w.package(library, p, game, progress)?,
+            (None, None) => {
+                return Err(err(format!(
+                    "{}: converting a mod needs the game's own files to compare it with",
+                    p.name
+                )));
+            }
         }
-    }
-    let v = version(p.version.as_deref());
-    if p.version.as_deref().map(str::trim) != Some(v.as_str()) {
-        let from = p.version.as_deref().unwrap_or("none");
-        w.report.push(format!("version {from} → {v}"));
-    }
-    for path in &p.skipped {
-        w.report.push(format!(
-            "skipped {path}: programs and EA AntiCheat files are never copied"
-        ));
-    }
-    let kinds = w.kinds();
-    let category = w.contents.category(&p.name);
-    if w.db.is_empty() && w.erp.is_empty() && w.text.is_empty() && w.files.is_empty() && w.track.is_empty() {
-        w.report
-            .push("warning: the mod changes nothing in this game build".into());
-    }
-    let operations = w.write_ops()?;
-    let manifest = manifest(p, game, id, &kinds, category, operations, &w)?;
-    let json = serde_json::to_vec_pretty(&manifest).expect("serialisable");
-    let path = out.join(MANIFEST_FILE);
-    std::fs::write(&path, json).map_err(io_err(&path))?;
-    w.report.insert(
-        0,
-        format!("{} → {id} ({}), category {}", p.source, p.name, category.label()),
-    );
-    let path = out.join(REPORT);
-    std::fs::write(&path, w.report.join("\n") + "\n").map_err(io_err(&path))?;
-    progress(1.0, &p.name);
-    Ok(Converted {
-        id: id.to_owned(),
-        name: p.name.clone(),
-        category,
-        kinds,
-        summary: w.counts().join(", "),
-        report: w.report,
-    })
+        let v = version(p.version.as_deref());
+        if p.version.as_deref().map(str::trim) != Some(v.as_str()) {
+            let from = p.version.as_deref().unwrap_or("none");
+            w.report.push(format!("version {from} → {v}"));
+        }
+        for path in &p.skipped {
+            w.report.push(format!(
+                "skipped {path}: programs and EA AntiCheat files are never copied"
+            ));
+        }
+        w.log_ops();
+        let kinds = w.kinds();
+        let category = w.contents.category(&p.name);
+        if w.db.is_empty()
+            && w.erp.is_empty()
+            && w.text.is_empty()
+            && w.files.is_empty()
+            && w.track.is_empty()
+        {
+            w.report
+                .push("warning: the mod changes nothing in this game build".into());
+        }
+        let operations = w.write_ops()?;
+        w.log.time("write");
+        let manifest = manifest(p, game, id, &kinds, category, operations, &w)?;
+        let json = serde_json::to_vec_pretty(&manifest).expect("serialisable");
+        let path = out.join(MANIFEST_FILE);
+        std::fs::write(&path, json).map_err(io_err(&path))?;
+        w.report.insert(
+            0,
+            format!("{} → {id} ({}), category {}", p.source, p.name, category.label()),
+        );
+        let path = out.join(REPORT);
+        std::fs::write(&path, w.report.join("\n") + "\n").map_err(io_err(&path))?;
+        progress(1.0, &p.name);
+        Ok(Converted {
+            id: id.to_owned(),
+            name: p.name.clone(),
+            category,
+            kinds,
+            summary: w.counts().join(", "),
+            report: std::mem::take(&mut w.report),
+        })
+    })();
+    *log = std::mem::take(&mut w.log);
+    result
 }
 
 fn manifest(
@@ -338,6 +440,8 @@ impl Writer {
         progress: &mut dyn FnMut(f32, &str),
     ) -> Result<()> {
         let diff = library.diff(p, game)?;
+        self.log.time("diff");
+        self.log_diff(p, &diff);
         progress(0.3, &p.name);
         let records = library.records(&p.id, &diff.build_key)?;
         let mut merged = merge::ops(&p.id, &diff, &records);
@@ -368,7 +472,14 @@ impl Writer {
             ..Tally::default()
         };
         ops.splice(0..0, defaults);
+        let before = ops.len();
         let ops = crate::without_repeats(ops);
+        if ops.len() < before {
+            self.log.line(format!(
+                "left out {} op(s) that repeat the value an earlier op of the mod writes",
+                before - ops.len()
+            ));
+        }
         let lib_files = library.dir(&p.id).join(FILES);
         let prefix = format!("{LIBRARY}/{}/{FILES}/", p.id);
         let rel = |s: &Source| match s.root {
@@ -435,8 +546,10 @@ impl Writer {
             tally.put += write_overlay(resources, &self.dir.join(overlay_name(n)))?;
         }
         tally.sources = sources.len();
+        self.log.time("overlay archives");
         progress(0.8, &p.name);
         (tally.logos, tally.views) = self.logos(library, p, &diff)?;
+        self.log.time("logo arrays");
         self.mips = tally.mips;
         self.contents.read(&diff);
         self.report_package(p, &diff, &merged, &tally);
@@ -490,6 +603,147 @@ impl Writer {
             });
         }
         Ok((arrays, views))
+    }
+
+    fn log_diff(&mut self, p: &Package, diff: &Diff) {
+        let log = &mut self.log;
+        log.section("diff");
+        let r = &diff.records;
+        log.line(format!(
+            "database: {} changed, {} added, {} removed record(s)",
+            r.changed.len(),
+            r.added.len(),
+            r.removed.len()
+        ));
+        if diff.dropped > 0 {
+            log.line(format!(
+                "approximated: {} removal(s) left out, the mod was made for game version {}",
+                diff.dropped,
+                p.game_version.as_deref().unwrap_or("unknown")
+            ));
+        }
+        for a in &diff.archives {
+            let left: Vec<&String> = a
+                .changed
+                .iter()
+                .chain(&a.added)
+                .filter(|uri| !merge::loaded(a, uri) && !texarray::carrier(&a.path))
+                .collect();
+            log.line(format!(
+                "archive {}: {} changed, {} added, {} removed resource(s)",
+                a.path,
+                a.changed.len(),
+                a.added.len(),
+                a.removed.len()
+            ));
+            for uri in left {
+                log.line(format!(
+                    "skipped resource {uri} in {}: Simplified Studio adds it to every shader archive",
+                    a.path
+                ));
+            }
+            if texarray::carrier(&a.path) {
+                for uri in a.changed.iter().chain(&a.added).filter(|u| merge::studio_only(u)) {
+                    log.line(format!(
+                        "skipped resource {uri} in {}: Simplified Studio adds it to every shader archive",
+                        a.path
+                    ));
+                }
+            }
+        }
+        for t in &diff.text {
+            log.line(format!(
+                "text {}: {} changed, {} added, {} filled in{}",
+                t.language,
+                t.changed.len(),
+                t.added.len(),
+                t.defaults.len(),
+                t.from
+                    .as_ref()
+                    .map_or_else(String::new, |f| format!(", from the mod's {f} file"))
+            ));
+        }
+        for f in &diff.files {
+            log.line(format!("file {} ({})", f.path, class_name(f.class)));
+        }
+    }
+
+    fn log_ops(&mut self) {
+        let log = &mut self.log;
+        log.section("ops");
+        let puts = self
+            .db
+            .iter()
+            .filter(|o| matches!(o, DbOp::PutRecord { .. }))
+            .count();
+        if !self.db.is_empty() {
+            log.line(format!(
+                "{DATABASE_OPS}: {puts} put-record, {} remove-record",
+                self.db.len() - puts
+            ));
+        }
+        let mut removals: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut mips = 0;
+        for op in &self.erp {
+            match op {
+                ErpOp::Overlay { erps, source } => {
+                    let n = self.written.iter().filter(|(e, _)| erps.contains(e)).count();
+                    log.line(format!(
+                        "{ERP_OPS}: erp.overlay {} into {} ({n} resource(s) written there in all)",
+                        source.path,
+                        erps.join(", ")
+                    ));
+                }
+                ErpOp::RemoveResource { erp, .. } => *removals.entry(erp).or_default() += 1,
+                ErpOp::MergeSlices {
+                    erp,
+                    resource,
+                    source,
+                } => log.line(format!(
+                    "{ERP_OPS}: merge-slices {resource} into {erp} from {}",
+                    source.path
+                )),
+                ErpOp::PutResource {
+                    erp,
+                    resource,
+                    source,
+                    ..
+                } => log.line(format!(
+                    "{ERP_OPS}: put-resource {resource} into {erp} from {}",
+                    source.path
+                )),
+                ErpOp::AddMipmaps { .. } => mips += 1,
+                other => log.line(format!("{ERP_OPS}: {other:?}")),
+            }
+        }
+        for (erp, n) in removals {
+            log.line(format!("{ERP_OPS}: {n} remove-resource on {erp}"));
+        }
+        if mips > 0 {
+            log.line(format!("{ERP_OPS}: {mips} add-mipmaps"));
+        }
+        let mut langs: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+        for op in &self.text {
+            if let AssetOp::Lang(l) = op {
+                let (kind, language) = match l {
+                    LangOp::Set { language, .. } => ("lang.set", language.as_str()),
+                    LangOp::Default { language, .. } => ("lang.default", language.as_str()),
+                    LangOp::Table { language, .. } => ("lang.table", language.as_str()),
+                };
+                *langs.entry((language, kind)).or_default() += 1;
+            }
+        }
+        for ((language, kind), n) in langs {
+            log.line(format!("{TEXT_OPS}: {n} {kind} for {language}"));
+        }
+        for op in &self.files {
+            if let AssetOp::File(FileOp::Put { target, .. }) = op {
+                log.line(format!("{FILE_OPS}: file.put {target}"));
+            }
+        }
+        for op in &self.track {
+            log.line(format!("{TRACK_OPS}: {op:?}"));
+        }
     }
 
     fn report_package(&mut self, p: &Package, diff: &Diff, merged: &merge::Merged, t: &Tally) {

@@ -2,6 +2,7 @@ pub mod convert;
 pub mod diff;
 pub mod importer;
 pub mod library;
+pub mod log;
 pub mod merge;
 pub mod package;
 pub mod page;

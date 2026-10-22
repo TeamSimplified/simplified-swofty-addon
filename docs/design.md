@@ -155,6 +155,7 @@ Every mod becomes a standalone Swofty data addon. `src/convert.rs` writes one ad
 6. Converting compares a mod with the game's own files. Without a game a mod stays in the library with no record entry, loads through the build hook and converts on a later import or `Convert now` with a game. Track packages convert without one.
 7. Report lines that start with `warning:` show as warnings on the page.
 8. A mod already converted keeps its addon id, also when the importer now names its parts differently.
+9. Each conversion writes `logs/convert-<UTC time>-<addon id>.log` in the addon's data folder, one fact per line: the source file, its size and SHA-256, the game build, the file classes, the diff, the ops written per archive and language, each file, resource or removal left out with its reason, warnings, errors and timings, and the addon made. The newest 20 logs are kept, and the home folder shows as `~`.
 
 #### Names and ids
 
