@@ -31,6 +31,8 @@ pub struct Made {
     pub lines: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<String>,
 }
 
 pub type Report<'a> = &'a mut dyn FnMut(f32, &str);
@@ -66,6 +68,7 @@ impl Convert for Converter {
             category: Some(c.category),
             kinds: c.kinds.into_iter().map(|k| kind(k).into()).collect(),
             summary: c.summary,
+            needs: c.needs,
             warnings: c
                 .report
                 .iter()
@@ -222,6 +225,24 @@ pub fn pending(cx: &Cx, record: &Record) -> Result<Pending> {
 }
 
 // A mod converts by comparing it with the game's own files; a track package needs none.
+// Turns on the addons a mod needs, such as the SERPs Base Files, when they are
+// installed, as the Simplified Launcher turns them on with the mod.
+fn enable_needs(addons: &dyn AddonStore, made: &Made, lines: &mut Vec<String>) {
+    if made.needs.is_empty() {
+        return;
+    }
+    let installed: HashSet<String> = addons
+        .list()
+        .map(|l| l.into_iter().filter(|a| !a.enabled).map(|a| a.id).collect())
+        .unwrap_or_default();
+    for need in made.needs.iter().filter(|n| installed.contains(*n)) {
+        match addons.set_enabled(need, true) {
+            Ok(()) => lines.push(format!("{} needs {need}, which is now on", made.name)),
+            Err(e) => lines.push(format!("{} needs {need}, which did not turn on: {e}", made.name)),
+        }
+    }
+}
+
 fn convertible(cx: &Cx, p: &Package) -> bool {
     cx.game.is_some() || p.track.is_some()
 }
@@ -285,6 +306,9 @@ fn place(cx: &Cx, addons: &dyn AddonStore, record: &Record) -> Result<Vec<String
         match addons.set_enabled(&made.id, slot.enabled) {
             Ok(()) => placed.push(slot.id.clone()),
             Err(e) => lines.push(format!("{}: {e}", made.name)),
+        }
+        if slot.enabled {
+            enable_needs(addons, made, &mut lines);
         }
     }
     if !placed.is_empty() {
@@ -577,6 +601,9 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
                         if let Err(e) = addons.set_enabled(&made.id, on) {
                             done.lines.push(format!("{}: not switched: {e}", made.name));
                         }
+                        if on {
+                            enable_needs(addons, &made, &mut done.lines);
+                        }
                         hand_over(cx, &p.id)?;
                     }
                     if on {
@@ -719,6 +746,7 @@ pub fn reimport(cx: &Cx, id: &str, conv: &dyn Convert) -> Result<Done> {
     let new = !state.addons.iter().any(|a| a == id) && !state.mods.iter().any(|s| s.id == id);
     if (removed || new) && !cx.profile.vanilla {
         addons.set_enabled(&made.id, true)?;
+        enable_needs(addons, &made, &mut lines);
         hand_over(cx, id)?;
     }
     lines.extend(place(cx, addons, &record)?);
@@ -891,6 +919,10 @@ mod tests {
                 summary: "1 archive resource".into(),
                 lines: vec![format!("2025_asset_groups/{}.erp: 1 resource", p.id)],
                 warnings: Vec::new(),
+                needs: match p.id.contains("studio") {
+                    true => vec!["imported.base".into()],
+                    false => Vec::new(),
+                },
             })
         }
     }
@@ -1399,6 +1431,39 @@ mod tests {
             texts(blocks, &mut out);
         }
         out
+    }
+
+    #[test]
+    fn a_studio_mod_turns_on_the_serps_base_files_it_needs() {
+        let host = Host::new("needs", &["one"]);
+        let (base, studio) = (host.mod_dir("base"), host.mod_dir("studio"));
+        let conv = Fake::default();
+        let addon = Simplified::new();
+        let pick = |path: &PathBuf| Event::Picked {
+            id: IMPORT.into(),
+            paths: vec![path.clone()],
+        };
+        with(&host, "one", |cx| {
+            addon.event_with(cx, SECTION, pick(&base), &conv)
+        })
+        .unwrap();
+        host.addons("one").set_enabled("imported.base", false).unwrap();
+        host.calls();
+        with(&host, "one", |cx| {
+            addon.event_with(cx, SECTION, pick(&studio), &conv)
+        })
+        .unwrap();
+        assert_eq!(
+            host.calls(),
+            [
+                "install imported.studio",
+                "on imported.studio",
+                "on imported.base"
+            ]
+        );
+        let made = Record::load(&host.data).unwrap().addon("studio").unwrap().clone();
+        assert_eq!(made.needs, ["imported.base"]);
+        std::fs::remove_dir_all(&host.root).ok();
     }
 
     #[test]

@@ -700,6 +700,57 @@ fn a_resource_two_archives_change_differently_keeps_a_copy_in_each() {
 }
 
 #[test]
+fn a_studio_mod_loads_after_the_serps_base_files() {
+    let case = Case::new("base");
+    let vfx = "2025_asset_groups/vfx_package/common.erp";
+    let shader = resource("eaid://shader_package/opaque", "Shader", &[b"code"]);
+    case.stock(OPAQUE, &archive(vec![shader.clone()]));
+    case.stock(
+        vfx,
+        &archive(vec![texture("eaid://vfx_package/a.tif.image", b"a")]),
+    );
+    let studio = |extra: Resource| {
+        archive(vec![
+            shader.clone(),
+            resource("eaid://tools_package/default/serps", "Marker", &[b"x"]),
+            extra,
+        ])
+    };
+    let car = texture("eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image", b"car");
+    let p = case.import(&[(OPAQUE, studio(car.clone()))], &serps("Genesis", "1"));
+    let game: &dyn GameFiles = &case.game;
+    let (c, out) = case.convert(&p, Some(game));
+    assert_eq!(c.needs, [merge::BASE_ADDON]);
+    assert!(reported(&c, "warning: made with Simplified Studio"));
+    let m = AddonManifest::load(&out).unwrap();
+    assert_eq!(m.load_after, [merge::BASE_ADDON]);
+    std::fs::remove_dir_all(&out).ok();
+
+    let base_src = case.root.join("base");
+    write(
+        &base_src.join("mod.serps"),
+        br#"{"mod_name":"SERPs Base Files for F1 25","author":"Team Simplified","version":"v4.1"}"#,
+    );
+    write(
+        &base_src.join("F1 25").join(vfx),
+        &archive(vec![
+            texture("eaid://vfx_package/a.tif.image", b"a"),
+            resource(merge::BASE_MARKER, "Marker", &[b"x"]),
+        ]),
+    );
+    let base = case
+        .library()
+        .import(&base_src, Some(game), &mut |_, _| {})
+        .unwrap();
+    let (c, _) = case.convert(&p, Some(game));
+    let id = addon_id(&base.packages[0]);
+    assert_eq!(id, merge::BASE_ADDON);
+    assert_eq!(c.needs, [id]);
+    assert!(reported(&c, "needs: SERPs Base Files for F1 25 load before it"));
+    assert!(!c.report.iter().any(|l| l.starts_with("warning:")));
+}
+
+#[test]
 fn team_logo_arrays_ship_merged_with_the_game_s_arrays() {
     let case = Case::new("logos");
     let image = format!("{LOGO_ARRAY}.image");

@@ -39,6 +39,7 @@ pub struct Converted {
     pub kinds: Vec<Kind>,
     pub summary: String,
     pub report: Vec<String>,
+    pub needs: Vec<String>,
 }
 
 pub fn addon_id(p: &Package) -> String {
@@ -102,6 +103,7 @@ struct Writer {
     written: BTreeSet<(String, String)>,
     mips: usize,
     log: Log,
+    needs: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -325,6 +327,7 @@ fn write_addon(
             kinds,
             summary: w.counts().join(", "),
             report: std::mem::take(&mut w.report),
+            needs: w.needs.clone(),
         })
     })();
     *log = std::mem::take(&mut w.log);
@@ -357,6 +360,7 @@ fn manifest(
         "compat": compat,
         "operations": operations,
         "category": category,
+        "load_after": w.needs,
         "origin": {
             "tool": ID,
             "tool_version": env!("CARGO_PKG_VERSION"),
@@ -442,7 +446,7 @@ impl Writer {
     ) -> Result<()> {
         let diff = library.diff(p, game)?;
         self.log.time("diff");
-        self.log_diff(p, &diff);
+        self.log_diff(&diff);
         progress(0.3, &p.name);
         let records = library.records(&p.id, &diff.build_key)?;
         let mut merged = merge::ops(&p.id, &diff, &records);
@@ -570,6 +574,9 @@ impl Writer {
         self.log.time("logo arrays");
         self.mips = tally.mips;
         self.contents.read(&diff);
+        if merge::needs_base(&diff) {
+            self.base(library);
+        }
         self.report_package(p, &diff, &merged, &tally, game.exe_version());
         Ok(())
     }
@@ -623,7 +630,38 @@ impl Writer {
         Ok((arrays, views))
     }
 
-    fn log_diff(&mut self, p: &Package, diff: &Diff) {
+    // The SERPs Base Files load before the mod, as the Simplified Launcher turns them
+    // on with it.
+    fn base(&mut self, library: &Library) {
+        let found = library.list().unwrap_or_default().into_iter().find(|q| {
+            q.files.iter().any(|f| {
+                f.class == Class::Archive
+                    && ErpFile::open(&library.dir(&q.id).join(FILES).join(&f.path))
+                        .is_ok_and(|e| e.erp.resources.iter().any(|r| r.name == merge::BASE_MARKER))
+            })
+        });
+        let id = found
+            .as_ref()
+            .map_or_else(|| merge::BASE_ADDON.to_owned(), addon_id);
+        match &found {
+            Some(q) => self.report.push(format!(
+                "needs: {} load before it, as the Simplified Launcher turns them on with it",
+                q.name
+            )),
+            None => self.report.push(
+                "warning: made with Simplified Studio, it needs Team Simplified's SERPs Base Files, which ship with \
+                 the Simplified Launcher as mods/SERPs Base Files for F1 25 - v4.1.zip; import them too"
+                    .into(),
+            ),
+        }
+        self.log.line(format!(
+            "needs: {id} ({})",
+            found.as_ref().map_or("not in the library", |q| q.id.as_str())
+        ));
+        self.needs.push(id);
+    }
+
+    fn log_diff(&mut self, diff: &Diff) {
         let log = &mut self.log;
         log.section("diff");
         let r = &diff.records;
