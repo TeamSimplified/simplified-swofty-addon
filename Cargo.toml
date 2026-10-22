@@ -1,6 +1,6 @@
 [package]
 name = "swofty-addon-simplified"
-description = "Team Simplified's Mod Importer: any F1 25 mod as a Swofty Launcher addon"
+description = "Simplified for Swofty, by Team Simplified: its Simplified Importer turns any F1 25 mod into a Swofty Launcher addon"
 version = "0.7.1"
 edition = "2024"
 rust-version = "1.95"

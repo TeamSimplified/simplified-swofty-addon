@@ -1,22 +1,22 @@
 # Design
 
-How Simplified for Swofty, Team Simplified's Mod Importer, imports, stores and compares mods and tracks and turns each into a Swofty addon. These are sections 4 and 5 of the Swofty Launcher design notes, <https://f1.swofty.net/design/addons-and-mods>, which describe the Launcher API and Asset API this addon is built on. Links to other sections go there.
+How Simplified for Swofty, Team Simplified's addon, uses its Simplified Importer to import, store and compare mods and tracks and turn each into a Swofty addon. These are sections 4 and 5 of the Swofty Launcher design notes, <https://f1.swofty.net/design/addons-and-mods>, which describe the Launcher API and Asset API this addon is built on. Links to other sections go there.
 
 ## 4. Simplified for Swofty
 
 ### 4.1 The addon
 
-- The crate `addons/simplified` (`swofty-addon-simplified`) is Rust and AGPL-3.0-or-later, like the rest of the repository. Its `mod.serps` reader, package root, content root and entry path checks are ported from the Simplified Launcher (GPL-3.0, used with Team Simplified's permission) and carry the Simplified Suite notice. `THIRD_PARTY.md` credits Team Simplified for the `.serps` format, the Simplified Suite and the logo, and the Mod Importer page shows the credit.
+- The crate `addons/simplified` (`swofty-addon-simplified`) is Rust and AGPL-3.0-or-later, like the rest of the repository. Its `mod.serps` reader, package root, content root and entry path checks are ported from the Simplified Launcher (GPL-3.0, used with Team Simplified's permission) and carry the Simplified Suite notice. `THIRD_PARTY.md` credits Team Simplified for the `.serps` format, the Simplified Suite and the logo, and the Simplified Importer page shows the credit.
 - Import, the library, profile state, the section and `swofty mods` are built (work item 13), and so are the diffs (work item 14), the merge and conflicts (work item 15).
-- Manifest: id `teamsimplified.mods`, name `Mod Importer`, author `Team Simplified`, version 0.7.0, `compat.launcher` `>=1.3.0`. No options and no native plugin.
-- Ships as a launcher plugin: `teamsimplified.mods.swoftyaddon` holds `swofty.json` and the helper program `bin/simplified-helper`, which hands the addon to `swofty_addon::helper::run_helper`. `swofty.json` declares the one section, id `mods`, titled `Mod Importer`, the `mods` command, the import extensions and the build hook, and the addon reads its sections and commands from it. `sections/mods.svg`, Team Simplified's mark, is the section's sidebar icon. The launcher can still build the crate in through `swofty-builtins`; built in, it is on by default in new profiles. Either way it can be turned off per profile, which hides its section.
+- Manifest: id `teamsimplified.mods`, name `Simplified for Swofty`, author `Team Simplified`, version 0.7.0, `compat.launcher` `>=1.3.0`. No options and no native plugin.
+- Ships as a launcher plugin: `teamsimplified.mods.swoftyaddon` holds `swofty.json` and the helper program `bin/simplified-helper`, which hands the addon to `swofty_addon::helper::run_helper`. `swofty.json` declares the one section, id `mods`, titled `Simplified Importer`, the `mods` command, the import extensions and the build hook, and the addon reads its sections and commands from it. `sections/mods.svg`, Team Simplified's mark, is the section's sidebar icon. The launcher can still build the crate in through `swofty-builtins`; built in, it is on by default in new profiles. Either way it can be turned off per profile, which hides its section.
 - It uses `swofty-addon` and `swofty-formats` only. Core has no code for it.
 
 ### 4.2 Packages
 
 Any mod works, as copying it into the game folder would.
 
-- A package is a zip archive under any name, `.serps` included, a 7z or RAR archive, or a folder.
+- A package is a zip archive, a 7z or RAR archive, or a folder. A `.serps` file is refused: it is Simplified Studio's description of a mod, not the mod.
 - Dropped on the launcher, a folder or zip is claimed when it holds `mod.serps` at its root, a folder whose name starts with `F1 25`, or a game folder (see the content root below) at most three folders down. 7z and RAR archives are claimed by their extension.
 - Zip archives may use Deflate, Deflate64, BZip2, LZMA, XZ, PPMd or Zstandard. 7z archives are read by `sevenz-rust2`, and RAR archives of every version, RAR 1.3 to 7, by `rars`. An archive either reader can't read is unpacked by 7-Zip or UnRAR from `PATH` or where their installers put them, when one is installed.
 - `mod.serps` at the package root is JSON: `mod_name` or `name` (`mod_name` wins), `author`, `version`, `game` (for example `F1® 25`), `game_version` (for example `1.0.141.7865`), and `studio_version` from Simplified Studio. Every field is optional. The reader accepts a UTF-8 byte order mark, comments and trailing commas.
@@ -103,19 +103,17 @@ The build hook merges only the mods a profile has not handed over to their addon
 - Resource removals are `erp.remove-resource` ops on the archive the mod removed them from, and put every `erp` op on the build route. A removal of a record or resource an earlier mod already removed is left out.
 - Database records are written as raw `db.put-record` values from `diff/<build key>.db`. Archive and file sources are `{ "root": "data", "path": "library/<id>/files/<game path>" }`.
 - A resource a mod adds or changes in an archive under `2025_asset_groups/` goes into an overlay on that archive, as the mod's archive replaces the game's there and nowhere else. Its stock copies in other archives stay. A replacement that changes a resource's layout makes the launcher rewrite that archive into the game files, as the Simplified Launcher copies the mod's archive over the game's.
-- A resource from a shader archive goes into an overlay on that shader archive ([Shader archive carriers](#shader-archive-carriers)).
-- A resource from any other archive no asset group lists goes into `2025_asset_groups/vfx_package/common.erp`. Its overlay loads with the boot groups that list that archive, before any car or UI group. With a launcher that writes one overlay archive per origin, each mod has its own, numbered in load order.
+- A resource from a shader archive, or from any other archive no asset group lists, goes into `2025_asset_groups/vfx_package/common.erp`. Its overlay loads with the boot groups that list that archive, before any car or UI group. With a launcher that writes one overlay archive per origin, each mod has its own, numbered in load order.
 - A write that repeats the value already in place, from an earlier mod, is left out.
 
 #### Shader archive carriers
 
-Simplified Studio packages carry a mod's textures and models in archives under `shader_package_2025/`, which the game loads at boot. No asset group the loader patches lists those archives, so the launcher merges each addon's overlay on a shader archive into the stock archive, resource by resource, and writes the result whole into the game files at build time.
+Simplified Studio packages carry a mod's textures and models in archives under `shader_package_2025/`, which the game loads at boot. No asset group the loader patches lists those archives, so an overlay targeting them is never read. Team Simplified keeps them out of the game's shader archives: the mod's resources go into an overlay archive of its own, built at import, which loads with the game's archives.
 
-- Every resource a mod's shader archive adds or changes goes into an overlay on that same shader archive, as the Simplified Launcher merges it there. None goes into the boot overlay on `common.erp`: in game, the koenigsegg car mod (`object_flag.nefx2.sm51` and `_amd`, the stock resources plus 96 added) delivered through the boot overlay hangs the main menu at the My Team garage on every launch, while the same resources inside its own shader archive reach the menu. The built archive is byte-identical to the mod's own.
-- The stock resources a mod's shader archive omits, such as an archive's base shader (`object_auto_illuminate.nefx2` and the like), stay: the Simplified Launcher's Python shader merge unions the game's archive with the mod's, and a boot test confirmed removing them crashes the game while keeping them boots to the frontend.
-- A shader archive comes as a generic build, `<name>.sm51.erp`, and an AMD build, `<name>.sm51_amd.erp`, and the game loads the one for its GPU. Each gets an overlay of its own with the mod's copies for it.
-- Team logo texture arrays carried in `ui_texture*` archives are merged across every enabled mod; anything else those archives add loads with the mod's own archive. Each `.texarray.image` starts from the game's own array, from the first of eight `ui_package` archives that holds it. Fragment 1 is split into the array's slices, and each mod's slices that differ from the game's go in, later mods winning. An array built for an older game, with fewer slices of the same format and size, merges over the slices it has. An array of another format is used whole, and the build warns. The result is written to `cache/addons/teamsimplified.mods/ui_textures.erp` and put into both `shader_package_2025/ui_texture.nefx2.sm51.erp` and `_amd.erp` with the addon as its origin, as the Simplified Launcher writes its merged arrays into both. Ported from the Simplified Launcher's `merge_resources.py` and the Team Editor's logo code.
-- Simplified Studio's `eaid://tools_package/default/serps` marker and the `…/shared/shadows/materials/f1_vehicle_shadow.material` it adds to every shader package travel with their shader archive, like the rest of the mod. They are not conflicts between mods.
+- Their resources load with `common.erp`. The game's stock shader archive stays in place, so the stock resources a mod's archive omits, such as an archive's base shader (`object_auto_illuminate.nefx2` and the like), are still loaded.
+- A shader archive comes as a generic build, `<name>.sm51.erp`, and an AMD build, `<name>.sm51_amd.erp`, and the game loads the one for its GPU. A resource a mod carries in both loads once, from the generic build. When the two copies differ, the report warns that AMD GPUs get the generic copy.
+- Team logo texture arrays carried in `ui_texture*` archives are merged across every enabled mod; anything else those archives add loads with the mod's own archive. Each `.texarray.image` starts from the game's own array, from the first of eight `ui_package` archives that holds it. Fragment 1 is split into the array's slices, and each mod's slices that differ from the game's go in, later mods winning. An array built for an older game, with fewer slices of the same format and size, merges over the slices it has. An array of another format is used whole, and the build warns. The result is written to `cache/addons/teamsimplified.mods/ui_textures.erp` and put into `common.erp` with the addon as its origin, so it loads as an overlay of its own, apart from every mod's. Ported from the Simplified Launcher's `merge_resources.py` and the Team Editor's logo code.
+- Simplified Studio's `eaid://tools_package/` marker is left out, and so is the `…/shared/shadows/materials/f1_vehicle_shadow.material` it adds to every shader package, which would otherwise replace the game's vehicle shadow material.
 
 #### Text a package fills in
 
@@ -130,21 +128,15 @@ Team rename packages point the team name records at keys of their own, such as `
 - Conflicts between converted mods are conflicts between their addons, which the launcher reports on the **Addons** page.
 - The build reports conflicts of the mods that still load through the build hook with other addons through the planner ([section 3.5](https://f1.swofty.net/design/addons-and-mods#_3-5-order-and-conflicts)).
 
-### 4.8 Mod Importer page
+### 4.8 Simplified Importer page
 
-The section `mods`, titled `Mod Importer`, is one of the launcher's big sidebar sections. Its body is blocks:
+The section `mods`, titled `Simplified Importer`, is one of the launcher's big sidebar sections. Its body is blocks:
 
-- **Header.** Subtitle `<n> mods converted into addons`. Action `Choose a mod…`, a picker for `.zip`, `.7z`, `.rar` and `.serps` files and folders, several at once.
+- **Header.** Subtitle `Adapt your copy and paste mods to work with the Swofty Launcher.` Action `Choose a mod…`, a picker for `.zip`, `.7z` and `.rar` files and folders, several at once.
 - **Notices.** The addon is off in this profile (button `Turn on`). The vanilla profile is active. The launcher has no addon host calls. Library mods are not converted yet and convert on the next start, or this profile is not handed over yet (button `Convert now`).
-- **Hero.** Team Simplified's logo (`art/team-simplified.png`, the Simplified Launcher's icon, written to the cache directory), the title `Mod Importer`, `By Team Simplified. Turns any F1 25 mod into a Swofty addon.`, a pill with the count converted and the `Team Simplified` button.
-- **Team Simplified panel.** The button toggles a card below `Import a mod`, closed at first: who Team Simplified are, what the Mod Importer does, the Swofty addon format in two sentences, and buttons that open https://github.com/TeamSimplified, https://github.com/TeamSimplified/simplified-suite and https://github.com/TeamSimplified/SERPs-Launcher. `LINKS` in `src/page.rs` holds placeholders for a website and a Discord link, shown once they have a URL.
 - **Import a mod.** A card with `Choose a mod…`: a drop anywhere on the window imports too.
-- **Last import.** The date and files of the last import, a line per set of variants (`<mod>: <n> variants installed as addons; <variant> is on. Pick another on Addons.`), and one line per addon: `Became the addon <name> · <category> · <counts>`, such as `205 car assets`, with `· off` for a variant that is off. Warnings follow in plain words. `Details` shows what became what (the conversion report with op names and paths), and `Hide details` hides it.
-- **Not converted.** Each mod whose conversion failed, with the reason and `Convert again`, `Turn on` or `Turn off`, `Show files` and `Remove from library`.
-- **Converted from your library.** A card per converted mod: the date it converted, its category, kinds, whether the addon is on, or `Removed from Addons`, with `Show in Addons` and `Re-import`.
-- **Credit.** The last block is `Based on Simplified Suite by Team Simplified.`, part of the page, not a fixed footer.
-- **Vanilla.** The page shows the hero, `Last import` and `Converted from your library` without `Import a mod`, `Not converted` or `Re-import`, and a notice to switch profiles to import.
-- **Dates.** Local time, as `22 October 2026, 14:05`.
+- **Credit.** The last block is `Based on the Simplified Suite by Team Simplified.`, part of the page, not a fixed footer.
+- **Vanilla.** The page shows no `Import a mod`, only a notice to switch profiles to import.
 - **Profile cards.** `summary` adds `MODS` with the enabled mods that still load through the build hook, and nothing when there are none.
 - **CLI.** `swofty mods list` shows each library mod with its addon or why it was not converted. `import <path>…` converts as the page does. `remove <id>` deletes a mod from the library and leaves its addon. `enable`, `disable` and `move` change the mods that load through the build hook.
 
@@ -152,12 +144,12 @@ The section `mods`, titled `Mod Importer`, is one of the launcher's big sidebar 
 
 Every mod becomes a standalone Swofty data addon. `src/convert.rs` writes one addon folder for one library mod; `src/importer.rs` installs it and keeps the record.
 
-1. A drop on the window (`import`), `Choose a mod…` (a `picked` event) or `swofty mods import` imports each path into the library and diffs it ([section 4.3](#43-import)).
+1. A drop on the window (`import`), `Choose a mod…` (a `picked` event) or `swofty mods import` unpacks each path into the library and diffs it ([section 4.3](#43-import)). The library copy is only for converting: it is deleted once the addon is installed, and when the mod can't convert.
 2. Each library entry converts into `addon-data/teamsimplified.mods/.convert/<mod id>/`, which `install_addon` installs. The staging folder is deleted after.
 3. Outside the vanilla profile, `set_addon_enabled` turns the addon on in the active profile and the profile records the mod as handed over.
 4. A `picked` event returns `{ "show_addon": "<addon id>" }` for the first addon, and the launcher switches to **Addons** with it highlighted. An import with no addon made returns a notice, and one where every file failed returns an error.
-5. `Re-import` and `Convert again` convert the library copy again and install it over the same addon id. The addon keeps its switch.
-6. Converting compares a mod with the game's own files. Without a game a mod stays in the library with no record entry, loads through the build hook and converts on a later import or `Convert now` with a game. Track packages convert without one.
+5. Importing a mod again converts it again and installs it over the same addon id. The addon keeps its switch.
+6. Converting compares a mod with the game's own files. Without a game, or on a launcher with no addon host calls, a mod is not imported. Track packages convert without a game. Mods left in the library from before (section "Mods imported before 0.7.0" in the README) convert at startup or on `Convert now`, and their copies are deleted once converted.
 7. Report lines that start with `warning:` show as warnings on the page.
 8. A mod already converted keeps its addon id, also when the importer now names its parts differently.
 9. Each conversion writes `logs/convert-<UTC time>-<addon id>.log` in the addon's data folder, one fact per line: the source file, its size and SHA-256, the game build, the file classes, the diff, the ops written per archive and language, each file, resource or removal left out with its reason, warnings, errors and timings, and the addon made. The newest 20 logs are kept, and the home folder shows as `~`.
@@ -179,7 +171,6 @@ Parts of one import that write mostly the same things are variants. Two parts ar
 - Text is `lang.set`. Text a mod fills in with the game's own text is `lang.default`, which never undoes another addon's rename.
 - Team logo texture arrays from `ui_texture*` archives ship in `logos/ui_textures.erp` as the mod has them, with one `erp.merge-slices` each into `shader_package_2025/ui_texture.nefx2.sm51.erp` and `_amd.erp`; the launcher starts from the game's array in `ui_package` and writes only the slices that differ from it. Texture array views (`.texarray`) go in whole with `put-resource`.
 - `kind` lists `database`, `erp`, `text` and `files` as the addon has them.
-- A mod with a shader archive that holds a resource named with `serps`, as Simplified Studio builds them, needs Team Simplified's SERPs Base Files, which add the shared materials and textures Studio mods use. Its `load_after` names the base files' addon (`mod.team-simplified.serps-base-files-for-f1-25` unless the library holds them under another id), and turning the mod on turns that addon on when it is installed, as the Simplified Launcher turns the base files on with such a mod. Without the base files in the library, the report warns.
 - `category` comes from what the mod changes. A track package or mostly track resources is Tracks. 1000 or more records with car resources or team and driver text is Seasons. Mostly car resources is Cars, or Liveries when they are all textures and materials and not tyres. Then Audio, Drivers & teams, Database, UI and Other. The name decides only between Database and Seasons (`season`, `calendar`) and towards Liveries (`livery`).
 
 The record is `addon-data/teamsimplified.mods/importer.json`:

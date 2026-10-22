@@ -10,16 +10,15 @@ use crate::texarray;
 
 // A resource a mod adds or changes in an asset group archive goes into an overlay on
 // that archive, as the mod's archive replaces the game's there and nowhere else.
-// Resources a Simplified Studio shader archive carries go into that shader archive, as
-// the Simplified Launcher merges them there: moved to the boot overlay instead, a car
-// they hold never finishes loading. Resources from other archives no asset group lists
-// go into an overlay on this archive, which the boot groups load before any car or UI
-// group.
+// Resources from shader archives, and from archives no asset group lists, go into an
+// overlay on this archive, which the boot groups load before any car or UI group:
+// they override the game's copies everywhere, as the shader archives Simplified
+// Studio packs a mod into do.
 pub const BOOT_ERP: &str = "2025_asset_groups/vfx_package/common.erp";
 const GROUPS: &str = "2025_asset_groups/";
 
 pub fn target(rel: &str) -> &str {
-    match rel.starts_with(GROUPS) || carrier(rel) {
+    match rel.starts_with(GROUPS) {
         true => rel,
         false => BOOT_ERP,
     }
@@ -38,29 +37,12 @@ pub struct Merged {
 }
 
 pub const MARKER: &str = "eaid://tools_package/";
-// Team Simplified's SERPs Base Files carry this marker. The Simplified Launcher turns
-// them on for any mod with a shader archive that names "serps", and they add the
-// shared materials and textures Simplified Studio mods use.
-pub const BASE_MARKER: &str = "eaid://tools_package/default/serps_basefiles";
-pub const BASE_ADDON: &str = "mod.team-simplified.serps-base-files-for-f1-25";
-
-pub fn needs_base(diff: &Diff) -> bool {
-    diff.archives.iter().any(|a| {
-        carrier(&a.path)
-            && a.changed
-                .iter()
-                .chain(&a.added)
-                .any(|uri| uri.contains("serps") && uri != BASE_MARKER)
-    })
-}
-
 // Simplified Studio adds this vehicle shadow material to every shader package it
-// builds, beside the marker (SerpsOverlay.cs in the Simplified Suite). Both load with
-// the rest of the mod, as they do from the shader package.
+// builds, beside the marker (SerpsOverlay.cs in the Simplified Suite). Loaded at boot
+// it would replace the game's own shadow material, so it is left out too.
 const SHADOW: &str = "/shared/shadows/materials/f1_vehicle_shadow.material";
 
-// What Simplified Studio adds to every shader package it builds. Every Studio mod
-// writes the same copies, so they are not conflicts.
+// What Simplified Studio adds to every shader package it builds.
 pub fn studio_only(uri: &str) -> bool {
     uri.starts_with(MARKER) || uri.ends_with(SHADOW)
 }
@@ -69,9 +51,11 @@ pub fn carrier(rel: &str) -> bool {
     rel.starts_with("shader_package")
 }
 
-// Texture arrays in ui_texture archives merge slice by slice instead.
+// Resources added to ui_texture archives are merged across mods by texarray::build,
+// and Simplified Studio's marker does nothing in the game.
 pub fn loaded(a: &crate::diff::Archive, uri: &str) -> bool {
-    !(texarray::carrier(&a.path) && texarray::merged_by_slice(uri))
+    let studio = uri.starts_with(MARKER) || carrier(&a.path) && studio_only(uri);
+    !(texarray::carrier(&a.path) && texarray::merged_by_slice(uri) || studio)
 }
 
 pub fn key(k: u64) -> String {
@@ -226,31 +210,20 @@ mod tests {
     use crate::diff::{Archive, Records};
 
     #[test]
-    fn resources_carried_in_shader_archives_stay_in_their_shader_archive() {
+    fn resources_carried_in_shader_archives_go_to_the_boot_archive() {
         let shader = "shader_package_2025/object_auto_illuminate.nefx2.sm51.erp";
-        let amd = "shader_package_2025/object_auto_illuminate.nefx2.sm51_amd.erp";
-        let loose = "character_package/drivers/x.erp";
-        let genesis = "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image";
-        let carried = |path: &str| Archive {
-            path: path.into(),
-            changed: vec!["eaid://shader_package/x".into()],
-            added: vec![genesis.into()],
-            removed: Vec::new(),
-        };
         let diff = Diff {
             archives: vec![
-                carried(shader),
-                carried(amd),
+                Archive {
+                    path: shader.into(),
+                    changed: vec!["eaid://shader_package/x".into()],
+                    added: vec!["eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image".into()],
+                    removed: Vec::new(),
+                },
                 Archive {
                     path: "2025_asset_groups/ui_package/flow_boot.erp".into(),
                     changed: Vec::new(),
                     added: vec!["eaid://ui_package/b".into()],
-                    removed: Vec::new(),
-                },
-                Archive {
-                    path: loose.into(),
-                    changed: Vec::new(),
-                    added: vec!["eaid://character_package/c".into()],
                     removed: Vec::new(),
                 },
             ],
@@ -270,31 +243,30 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let from = |rel: &str| format!("library/m/files/{rel}");
-        let (from_shader, from_amd) = (from(shader), from(amd));
         assert_eq!(
             puts,
             [
-                (shader, "eaid://shader_package/x", from_shader.as_str()),
-                (shader, genesis, from_shader.as_str()),
-                (amd, "eaid://shader_package/x", from_amd.as_str()),
-                (amd, genesis, from_amd.as_str()),
+                (
+                    BOOT_ERP,
+                    "eaid://shader_package/x",
+                    "library/m/files/shader_package_2025/object_auto_illuminate.nefx2.sm51.erp"
+                ),
+                (
+                    BOOT_ERP,
+                    "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image",
+                    "library/m/files/shader_package_2025/object_auto_illuminate.nefx2.sm51.erp"
+                ),
                 (
                     "2025_asset_groups/ui_package/flow_boot.erp",
                     "eaid://ui_package/b",
                     "library/m/files/2025_asset_groups/ui_package/flow_boot.erp"
                 ),
-                (BOOT_ERP, "eaid://character_package/c", from(loose).as_str()),
             ]
         );
-        assert_eq!((merged.resources, merged.carried), (6, 4));
-        let t = targets(&diff);
-        assert!(t.contains(&format!("{genesis} in {shader}")));
-        assert!(t.contains(&format!("{genesis} in {amd}")));
-        assert!(
-            !t.iter().any(|t| t.contains(BOOT_ERP) && t.contains("genesis")),
-            "nothing a shader archive carries goes to the boot overlay"
-        );
+        assert_eq!((merged.resources, merged.carried), (3, 2));
+        assert!(targets(&diff).contains(&format!(
+            "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image in {BOOT_ERP}"
+        )));
     }
 
     #[test]
@@ -335,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn studio_s_marker_and_shadow_material_load_with_the_mod() {
+    fn studio_s_marker_and_shadow_material_are_left_out() {
         let shadow = "eaid://f1_2025_vehicle_package/shared/shadows/materials/f1_vehicle_shadow.material";
         let car = "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image";
         let diff = Diff {
@@ -374,25 +346,18 @@ mod tests {
         assert_eq!(
             puts,
             [
-                (shadow, opaque),
-                (shadow, opaque),
                 (car, opaque),
-                ("eaid://tools_package/default/serps", opaque),
                 (
                     shadow,
                     "library/m/files/2025_asset_groups/f1_2025_vehicle_package/shared/shared.erp"
                 ),
             ]
         );
-        assert_eq!(merged.carried, 4);
-        let opaque_rel = "shader_package_2025/object_opaque.nefx2.sm51.erp";
-        assert_eq!(
-            targets(&diff)
-                .into_iter()
-                .filter(|t| t.ends_with(opaque_rel))
-                .collect::<Vec<_>>(),
-            [format!("{car} in {opaque_rel}")],
-            "the marker and shadow material travel with their shader archive and are no conflict"
+        assert_eq!(merged.carried, 1);
+        assert!(
+            !targets(&diff)
+                .iter()
+                .any(|t| t.contains("object_opaque") || t.starts_with("eaid://tools"))
         );
     }
 
@@ -482,7 +447,7 @@ mod tests {
         assert!(targets(&d).is_empty());
         assert_eq!(clashes(&[Some(&d), Some(&d)]), []);
         let merged = ops("m", &d, &Gvdb::default());
-        assert_eq!((merged.resources, merged.carried), (1, 1));
+        assert_eq!((merged.resources, merged.carried), (0, 0));
     }
 
     #[test]

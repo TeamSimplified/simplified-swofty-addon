@@ -1,6 +1,6 @@
-// The Mod Importer: every mod in the library becomes a standalone Swofty data addon,
-// installed and switched through the Launcher API's addon host calls. The library
-// stays as the source each addon is made from again.
+// The Simplified Importer: every imported mod becomes a standalone Swofty data addon,
+// installed and switched through the Launcher API's addon host calls. A mod is unpacked
+// into the library only while it converts; once it is an addon, its copy is deleted.
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -31,8 +31,6 @@ pub struct Made {
     pub lines: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub needs: Vec<String>,
 }
 
 pub type Report<'a> = &'a mut dyn FnMut(f32, &str);
@@ -68,7 +66,6 @@ impl Convert for Converter {
             category: Some(c.category),
             kinds: c.kinds.into_iter().map(|k| kind(k).into()).collect(),
             summary: c.summary,
-            needs: c.needs,
             warnings: c
                 .report
                 .iter()
@@ -95,8 +92,9 @@ fn kind(k: Kind) -> &'static str {
 }
 
 // Raised when converting the same mod gives a different addon. 2: removals only
-// apply to a mod made for the installed game version.
-pub const CONVERTER: u32 = 2;
+// apply to a mod made for the installed game version. 3: shader archive resources
+// load from the mod's own boot overlay again.
+pub const CONVERTER: u32 = 3;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Record {
@@ -227,42 +225,17 @@ pub fn pending(cx: &Cx, record: &Record) -> Result<Pending> {
     Ok(Pending { convert, place })
 }
 
-// A mod converts by comparing it with the game's own files; a track package needs none.
-// Turns on the addons a mod needs, such as the SERPs Base Files, when they are
-// installed, as the Simplified Launcher turns them on with the mod.
-fn enable_needs(addons: &dyn AddonStore, made: &Made, lines: &mut Vec<String>) {
-    if made.needs.is_empty() {
-        return;
-    }
-    let installed: HashSet<String> = addons
-        .list()
-        .map(|l| l.into_iter().filter(|a| !a.enabled).map(|a| a.id).collect())
-        .unwrap_or_default();
-    for need in made.needs.iter().filter(|n| installed.contains(*n)) {
-        match addons.set_enabled(need, true) {
-            Ok(()) => lines.push(format!("{} needs {need}, which is now on", made.name)),
-            Err(e) => lines.push(format!("{} needs {need}, which did not turn on: {e}", made.name)),
-        }
-    }
-}
-
-// A mod converts when it has no addon yet, or when an older converter made its addon
-// and the change since applies to it: a converter before 2 kept the removals of a mod
-// made for another game version.
+// A mod converts when it has no addon yet, or when an older converter made its addon:
+// one before 3 merged shader archive resources into the game's shader archives, which
+// any mod may carry.
 fn due(cx: &Cx, record: &Record, p: &Package) -> bool {
     match record.mods.get(&p.id) {
         None => true,
-        Some(e) => {
-            e.made.is_some()
-                && e.converter < CONVERTER
-                && p.track.is_none()
-                && cx
-                    .game
-                    .is_some_and(|g| p.game_version.is_none() || p.game_version != g.exe_version())
-        }
+        Some(e) => e.made.is_some() && p.track.is_none() && cx.game.is_some() && e.converter < CONVERTER,
     }
 }
 
+// A mod converts by comparing it with the game's own files; a track package needs none.
 fn convertible(cx: &Cx, p: &Package) -> bool {
     cx.game.is_some() || p.track.is_some()
 }
@@ -294,6 +267,9 @@ fn convert_one(
         Ok(made)
     })();
     std::fs::remove_dir_all(&out).ok();
+    if made.is_ok() {
+        library.remove(&p.id).ok();
+    }
     let entry = record.mods.entry(p.id.clone()).or_default();
     entry.name = p.name.clone();
     entry.at = now();
@@ -327,9 +303,6 @@ fn place(cx: &Cx, addons: &dyn AddonStore, record: &Record) -> Result<Vec<String
         match addons.set_enabled(&made.id, slot.enabled) {
             Ok(()) => placed.push(slot.id.clone()),
             Err(e) => lines.push(format!("{}: {e}", made.name)),
-        }
-        if slot.enabled {
-            enable_needs(addons, made, &mut lines);
         }
     }
     if !placed.is_empty() {
@@ -423,6 +396,16 @@ pub fn migrate(cx: &Cx, conv: &dyn Convert, progress: &dyn Progress) -> Result<V
 pub const BUDGET: Duration = Duration::from_secs(270);
 const BYTES_PER_SEC: u64 = 40 << 20;
 
+// Deletes the library copies of mods that are addons now and convert no more.
+fn drop_converted(cx: &Cx, library: &Library, record: &Record) -> Result<()> {
+    for p in library.list()? {
+        if record.addon(&p.id).is_some() && !due(cx, record, &p) {
+            library.remove(&p.id).ok();
+        }
+    }
+    Ok(())
+}
+
 // The startup event: converts what is pending within the budget, and says so.
 pub fn startup(
     cx: &Cx,
@@ -430,7 +413,12 @@ pub fn startup(
     progress: &dyn Progress,
     budget: Duration,
 ) -> Result<Option<String>> {
-    if cx.addons().is_none() || !pending(cx, &Record::load(cx.data_dir)?)?.any() {
+    if cx.addons().is_none() {
+        return Ok(None);
+    }
+    let record = Record::load(cx.data_dir)?;
+    drop_converted(cx, &Library::new(cx.data_dir), &record)?;
+    if !pending(cx, &record)?.any() {
         return Ok(None);
     }
     let m = migrated(cx, conv, progress, Some(budget))?;
@@ -445,7 +433,7 @@ pub fn startup(
     }
     if m.left > 0 {
         parts.push(format!(
-            "{} more convert at the next start, or with Convert now on the Mod Importer",
+            "{} more convert at the next start, or with Convert now on the Simplified Importer",
             m.left
         ));
     }
@@ -569,7 +557,7 @@ fn migrated(
     }
     if !m.failed.is_empty() {
         m.lines.push(format!(
-            "{} still {} through the Mod Importer's build step",
+            "{} still {} through the Simplified Importer's build step",
             crate::plural(m.failed.len(), "mod", "mods"),
             if m.failed.len() == 1 { "loads" } else { "load" }
         ));
@@ -580,6 +568,7 @@ fn migrated(
             crate::plural(m.left, "mod", "mods")
         ));
     }
+    drop_converted(cx, &library, &record)?;
     if !tried.is_empty() {
         record.last = Some(Last {
             at: now(),
@@ -600,6 +589,8 @@ pub struct Done {
     pub variants: bool,
 }
 
+// Unpacks each mod, converts it and installs the addon, then deletes the unpacked
+// copy. A mod that can't convert is not kept either.
 pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Convert) -> Result<Done> {
     let Migrated {
         lines,
@@ -611,13 +602,12 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
         ..Done::default()
     };
     let library = Library::new(cx.data_dir);
-    let known: Vec<String> = library.list()?.into_iter().map(|p| p.id).collect();
     let mut record = Record::load(cx.data_dir)?;
     let mut last = Last {
         at: now(),
         ..Last::default()
     };
-    let mut kept = Vec::new();
+    let mut made_any = false;
     let total = paths.len().max(1) as f32;
     for (i, path) in paths.iter().enumerate() {
         let file = package::file_name(path);
@@ -640,17 +630,11 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
         let groups = variants(cx, &library, &record, &imported.packages);
         for p in &imported.packages {
             progress.report((i as f32 + 0.5) / total, &format!("Converting {}", p.name));
-            if let Some(Err(e)) = cx.game.map(|g| library.diff(p, g)) {
-                done.lines
-                    .push(format!("{}: not compared with the game: {e}", p.name));
-            }
             last.mods.push(p.id.clone());
             let Some(addons) = cx.addons().filter(|_| convertible(cx, p)) else {
                 let why = if cx.addons().is_none() { UPDATE } else { NO_GAME };
-                done.lines.push(format!("Imported {}. {why}", p.name));
-                if !known.contains(&p.id) {
-                    kept.push(p.id.clone());
-                }
+                last.errors.push(format!("{} was not imported. {why}", p.name));
+                library.remove(&p.id).ok();
                 continue;
             };
             let mut report = |f: f32, text: &str| {
@@ -672,16 +656,16 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
             let on = group.is_none_or(|g| g.on == p.id);
             match made {
                 Ok(made) => {
+                    made_any = true;
                     if group.is_none() {
                         done.lines
                             .push(format!("{} is now the addon {}", p.name, made.name));
                     }
+                    done.lines
+                        .extend(made.warnings.iter().map(|w| format!("{}: {w}", made.name)));
                     if !cx.profile.vanilla {
                         if let Err(e) = addons.set_enabled(&made.id, on) {
                             done.lines.push(format!("{}: not switched: {e}", made.name));
-                        }
-                        if on {
-                            enable_needs(addons, &made, &mut done.lines);
                         }
                         hand_over(cx, &p.id)?;
                     }
@@ -690,10 +674,8 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
                     }
                 }
                 Err(e) => {
-                    done.lines.push(format!("{} was not converted: {e}", p.name));
-                    if !known.contains(&p.id) {
-                        kept.push(p.id.clone());
-                    }
+                    last.errors.push(format!("{} was not converted: {e}", p.name));
+                    library.remove(&p.id).ok();
                 }
             }
         }
@@ -703,14 +685,7 @@ pub fn import(cx: &Cx, paths: &[PathBuf], progress: &dyn Progress, conv: &dyn Co
             last.variants.push(g);
         }
     }
-    if !kept.is_empty() && !cx.profile.vanilla {
-        let mut loaded = Loaded::read(cx)?;
-        for id in &kept {
-            loaded.set(id, true)?;
-        }
-        loaded.save(cx)?;
-    }
-    done.failed = !last.errors.is_empty() && last.mods.is_empty();
+    done.failed = !last.errors.is_empty() && !made_any;
     done.lines.splice(0..0, last.errors.iter().cloned());
     record.last = Some(last);
     record.save(cx.data_dir)?;
@@ -798,42 +773,6 @@ fn variants(cx: &Cx, library: &Library, record: &Record, packages: &[Package]) -
             }
         })
         .collect()
-}
-
-// Makes a library mod's addon again from the library copy, replacing the
-// installed one, and hands it over in the profile when the profile lists the mod.
-// An addon removed since, or a mod the profile never had, is turned on.
-pub fn reimport(cx: &Cx, id: &str, conv: &dyn Convert) -> Result<Done> {
-    let addons = cx.addons().ok_or_else(|| err(UPDATE.into()))?;
-    let library = Library::new(cx.data_dir);
-    let p = library.get(id)?;
-    let mut record = Record::load(cx.data_dir)?;
-    let removed = record
-        .addon(id)
-        .is_some_and(|m| addons.list().is_ok_and(|l| l.iter().all(|i| i.id != m.id)));
-    let made = convert_one(cx, addons, conv, &library, &p, &mut record, &mut |_, _| {});
-    record.last = Some(Last {
-        at: now(),
-        files: vec![p.source.clone()],
-        mods: vec![p.id.clone()],
-        ..Last::default()
-    });
-    record.save(cx.data_dir)?;
-    let made = made?;
-    let mut lines = vec![format!("{} is now the addon {}", p.name, made.name)];
-    let state: State = cx.state()?;
-    let new = !state.addons.iter().any(|a| a == id) && !state.mods.iter().any(|s| s.id == id);
-    if (removed || new) && !cx.profile.vanilla {
-        addons.set_enabled(&made.id, true)?;
-        enable_needs(addons, &made, &mut lines);
-        hand_over(cx, id)?;
-    }
-    lines.extend(place(cx, addons, &record)?);
-    Ok(Done {
-        lines,
-        show: Some(made.id),
-        ..Done::default()
-    })
 }
 
 #[cfg(test)]
@@ -998,10 +937,6 @@ mod tests {
                 summary: "1 archive resource".into(),
                 lines: vec![format!("2025_asset_groups/{}.erp: 1 resource", p.id)],
                 warnings: Vec::new(),
-                needs: match p.id.contains("studio") {
-                    true => vec!["imported.base".into()],
-                    false => Vec::new(),
-                },
             })
         }
     }
@@ -1263,8 +1198,8 @@ mod tests {
                 .contains("could not be read")
         );
         assert!(
-            library.dir("b").is_dir() && library.dir("a").is_dir(),
-            "the library stays"
+            library.dir("b").is_dir() && !library.dir("a").is_dir(),
+            "a converted mod leaves the library; one that failed stays to load through the build hook"
         );
         std::fs::remove_dir_all(&host.root).ok();
     }
@@ -1387,6 +1322,9 @@ mod tests {
             .unwrap()
         };
         startup();
+        let library = Library::new(&host.data);
+        assert!(library.list().unwrap().is_empty());
+        library.import(&host.mod_dir("a"), None, &mut |_, _| {}).unwrap();
         let mut record = Record::load(&host.data).unwrap();
         assert!(record.mods.values().all(|e| e.converter == CONVERTER));
         for e in record.mods.values_mut() {
@@ -1397,6 +1335,7 @@ mod tests {
         assert_eq!(startup(), Effect::None);
         assert_eq!(conv.made.lock().unwrap().len(), 2);
         assert_eq!(host.order("one").last(), Some(&on("a", true)));
+        assert!(library.list().unwrap().is_empty());
         std::fs::remove_dir_all(&host.root).ok();
     }
 
@@ -1499,7 +1438,7 @@ mod tests {
         assert_eq!(
             start().as_deref(),
             Some(
-                "Converted 1 mod into an addon; 1 more convert at the next start, or with Convert now on the Mod Importer"
+                "Converted 1 mod into an addon; 1 more convert at the next start, or with Convert now on the Simplified Importer"
             )
         );
         assert_eq!(start().as_deref(), Some("Converted 1 mod into an addon"));
@@ -1636,39 +1575,6 @@ mod tests {
     }
 
     #[test]
-    fn a_studio_mod_turns_on_the_serps_base_files_it_needs() {
-        let host = Host::new("needs", &["one"]);
-        let (base, studio) = (host.mod_dir("base"), host.mod_dir("studio"));
-        let conv = Fake::default();
-        let addon = Simplified::new();
-        let pick = |path: &PathBuf| Event::Picked {
-            id: IMPORT.into(),
-            paths: vec![path.clone()],
-        };
-        with(&host, "one", |cx| {
-            addon.event_with(cx, SECTION, pick(&base), &conv)
-        })
-        .unwrap();
-        host.addons("one").set_enabled("imported.base", false).unwrap();
-        host.calls();
-        with(&host, "one", |cx| {
-            addon.event_with(cx, SECTION, pick(&studio), &conv)
-        })
-        .unwrap();
-        assert_eq!(
-            host.calls(),
-            [
-                "install imported.studio",
-                "on imported.studio",
-                "on imported.base"
-            ]
-        );
-        let made = Record::load(&host.data).unwrap().addon("studio").unwrap().clone();
-        assert_eq!(made.needs, ["imported.base"]);
-        std::fs::remove_dir_all(&host.root).ok();
-    }
-
-    #[test]
     fn an_import_installs_the_addon_turns_it_on_and_shows_it() {
         let host = Host::new("import", &["one"]);
         let livery = host.mod_dir("livery");
@@ -1701,34 +1607,17 @@ mod tests {
             ["2025_asset_groups/livery.erp: 1 resource"]
         );
         assert!(with(&host, "one", handed_over).unwrap().contains("livery"));
+        assert!(
+            Library::new(&host.data).list().unwrap().is_empty(),
+            "the converted mod keeps no library copy"
+        );
 
         let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
-        assert_eq!(
-            cards(&view),
-            ["Mod Importer", "Import a mod", "Last import", "Your library"]
-        );
+        assert_eq!(cards(&view), ["Import a mod"]);
         assert!(view.notices.is_empty(), "{:?}", view.notices);
         let text = all_text(&view);
-        assert!(
-            text.contains(&"Became the addon livery · Liveries · 1 archive resource".to_owned()),
-            "{text:?}"
-        );
-        assert!(!text.iter().any(|t| t.contains("2025_asset_groups")), "{text:?}");
-        assert!(text.contains(&"[Details]".to_owned()));
         assert_eq!(view.footer, None);
         assert_eq!(text.last().map(String::as_str), Some(page::FOOTER));
-        let details = Event::Click {
-            id: page::DETAILS.into(),
-        };
-        with(&host, "one", |cx| {
-            addon.event_with(cx, SECTION, details.clone(), &conv)
-        })
-        .unwrap();
-        let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
-        let text = all_text(&view);
-        assert!(text.contains(&"2025_asset_groups/livery.erp: 1 resource".to_owned()));
-        assert!(text.contains(&"[Hide details]".to_owned()));
-        with(&host, "one", |cx| addon.event_with(cx, SECTION, details, &conv)).unwrap();
 
         let effect = with(&host, "one", |cx| {
             addon.event_with(cx, SECTION, pick(vec![livery.clone()]), &conv)
@@ -1746,16 +1635,6 @@ mod tests {
 
         let click = |id: String| Event::Click { id };
         let effect = with(&host, "one", |cx| {
-            addon.event_with(cx, SECTION, click(format!("{}livery", page::REIMPORT)), &conv)
-        })
-        .unwrap();
-        assert_eq!(effect, Effect::ShowAddon("imported.livery".into()));
-        assert_eq!(
-            host.calls(),
-            ["install imported.livery"],
-            "re-import keeps the switch"
-        );
-        let effect = with(&host, "one", |cx| {
             addon.event_with(
                 cx,
                 SECTION,
@@ -1765,35 +1644,11 @@ mod tests {
         })
         .unwrap();
         assert_eq!(effect, Effect::ShowAddon("imported.livery".into()));
-
-        let effect = with(&host, "one", |cx| {
-            addon.event_with(cx, SECTION, click(page::TEAM.into()), &conv)
-        })
-        .unwrap();
-        assert_eq!(effect, Effect::Reload);
-        let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
-        assert_eq!(
-            cards(&view)[..3],
-            ["Mod Importer", "Team Simplified", "Import a mod"],
-            "the panel opens below the header, above the panes"
-        );
-        assert!(
-            !all_text(&view).iter().any(|t| t.contains("https://")),
-            "links show once, as buttons"
-        );
-        let effect = with(&host, "one", |cx| {
-            addon.event_with(cx, SECTION, click(format!("{}suite", page::LINK)), &conv)
-        })
-        .unwrap();
-        assert_eq!(
-            effect,
-            Effect::Open("https://github.com/TeamSimplified/simplified-suite".into())
-        );
         std::fs::remove_dir_all(&host.root).ok();
     }
 
     #[test]
-    fn vanilla_shows_the_addons_made_before_without_importing() {
+    fn vanilla_shows_no_import() {
         let mut host = Host::new("vanilla", &["one", "vanilla"]);
         host.profiles.get_mut("vanilla").unwrap().vanilla = true;
         let addon = Simplified::new();
@@ -1806,10 +1661,7 @@ mod tests {
         })
         .unwrap();
         let view = with(&host, "vanilla", |cx| addon.view(cx, SECTION)).unwrap();
-        assert_eq!(cards(&view), ["Mod Importer", "Your library"]);
-        let text = all_text(&view);
-        assert!(text.contains(&"[Show in Addons]".to_owned()));
-        assert!(!text.contains(&"[Re-import]".to_owned()), "{text:?}");
+        assert!(cards(&view).is_empty());
         assert!(
             view.notices[0]
                 .text
@@ -1819,7 +1671,7 @@ mod tests {
     }
 
     #[test]
-    fn a_mod_that_does_not_convert_stays_on_through_the_build_hook() {
+    fn a_mod_that_does_not_convert_is_not_kept() {
         let host = Host::new("refuse", &["one"]);
         let logos = host.mod_dir("logos");
         let conv = Fake {
@@ -1827,7 +1679,7 @@ mod tests {
             ..Fake::default()
         };
         let addon = Simplified::new();
-        let effect = with(&host, "one", |cx| {
+        let failed = with(&host, "one", |cx| {
             addon.event_with(
                 cx,
                 SECTION,
@@ -1838,26 +1690,13 @@ mod tests {
                 &conv,
             )
         })
-        .unwrap();
-        assert!(
-            matches!(&effect, Effect::Notice(t) if t.contains("logos was not converted")),
-            "{effect:?}"
-        );
+        .unwrap_err();
+        assert!(failed.to_string().contains("logos was not converted"), "{failed}");
         assert!(host.calls().is_empty());
+        assert!(Library::new(&host.data).list().unwrap().is_empty());
         let state: State = with(&host, "one", |cx| cx.state()).unwrap();
-        assert_eq!(state.mods, [slot("logos", true)]);
-        assert_eq!(
-            with(&host, "one", |cx| addon.summary(cx)).unwrap().items,
-            ["logos"]
-        );
-        let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
-        let text = all_text(&view);
-        assert!(text.iter().any(|t| t.starts_with("Not converted")), "{text:?}");
-        assert!(
-            view.notices.is_empty(),
-            "a failed mod is not pending: {:?}",
-            view.notices
-        );
+        assert!(state.mods.is_empty());
+        assert!(with(&host, "one", |cx| addon.summary(cx)).is_none());
         std::fs::remove_dir_all(&host.root).ok();
     }
 
@@ -1901,36 +1740,23 @@ mod tests {
             id: IMPORT.into(),
             paths: vec![dir],
         };
-        let effect = with_game(&host, "one", None, |cx| {
+        let refused = with_game(&host, "one", None, |cx| {
+            addon.event_with(cx, SECTION, pick.clone(), &Converter)
+        })
+        .unwrap_err();
+        assert!(refused.to_string().contains(NO_GAME), "{refused}");
+        assert!(
+            Library::new(&host.data).list().unwrap().is_empty(),
+            "without a game the mod is not kept"
+        );
+        let effect = with(&host, "one", |cx| {
             addon.event_with(cx, SECTION, pick.clone(), &Converter)
         })
         .unwrap();
-        assert!(
-            matches!(&effect, Effect::Notice(t) if t.contains(NO_GAME)),
-            "{effect:?}"
-        );
-        assert!(
-            Record::load(&host.data).unwrap().mods.is_empty(),
-            "without a game the mod stays pending"
-        );
-        let view = with_game(&host, "one", None, |cx| addon.view(cx, SECTION)).unwrap();
-        assert!(
-            view.notices.iter().any(|n| n.text.contains(NO_GAME)),
-            "{:?}",
-            view.notices
-        );
-        let id = crate::convert::addon_id(&Library::new(&host.data).get("you.helmet").unwrap());
-        let click = Event::Click {
-            id: page::CONVERT.into(),
+        let Effect::ShowAddon(shown) = &effect else {
+            panic!("{effect:?}");
         };
-        let effect = with(&host, "one", |cx| {
-            addon.event_with(cx, SECTION, click, &Converter)
-        })
-        .unwrap();
-        assert!(
-            matches!(&effect, Effect::Notice(t) if t.starts_with("Converted 1 mod from")),
-            "{effect:?}"
-        );
+        let id = shown.id().to_owned();
         assert_eq!(host.calls(), [format!("install {id}"), format!("on {id}")]);
         let installed = host.installed.join(&id).join("swofty.json");
         let manifest =

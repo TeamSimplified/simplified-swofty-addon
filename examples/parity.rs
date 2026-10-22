@@ -1,4 +1,4 @@
-// Parity harness: converts each mod with the Mod Importer, applies the addon's ops
+// Parity harness: converts each mod with the Simplified Importer, applies the addon's ops
 // with the launcher's crates to clean copies of the game's files, and compares the
 // game state with what the Simplified Launcher's install gives for the same mod.
 //

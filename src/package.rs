@@ -96,7 +96,7 @@ pub fn claims(path: &Path) -> Claim {
         return if yes { Claim::Yes } else { Claim::No };
     }
     match extension(path).as_str() {
-        "serps" | "7z" | "rar" => return Claim::Yes,
+        "7z" | "rar" => return Claim::Yes,
         "zip" => {}
         _ => return Claim::No,
     }
@@ -146,6 +146,11 @@ pub fn unpack(src: &Path, dest: &Path, progress: &mut dyn FnMut(f32)) -> Result<
             Some(tool) => unpack_with(&tool, src, dest),
             None => Err(e),
         }),
+        // A .serps file is Simplified Studio's description of a mod, not the mod.
+        "serps" => Err(err(format!(
+            "{} is not a mod: import the mod's zip, 7z, rar or folder",
+            file_name(src)
+        ))),
         _ => unpack_zip(src, dest, progress),
     }
 }
@@ -619,6 +624,22 @@ mod tests {
             std::io::Write::write_all(&mut w, b"x").unwrap();
         }
         w.finish().unwrap();
+    }
+
+    #[test]
+    fn a_serps_file_is_not_a_mod() {
+        let dir = std::env::temp_dir().join(format!("simplified-serps-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Livery.serps");
+        zip_of(&path, &["2025_asset_groups/ui_package/a.erp"]);
+        assert_eq!(claims(&path), Claim::No);
+        let failed = unpack(&path, &dir.join("out"), &mut |_| {}).unwrap_err();
+        assert!(
+            failed.to_string().contains("Livery.serps is not a mod"),
+            "{failed}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
