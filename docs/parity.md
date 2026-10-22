@@ -14,9 +14,9 @@ How the Mod Importer's conversion compares with how Team Simplified's Simplified
 
 | | Rows |
 |---|---|
-| Identical before the audit | 21 |
+| Identical before the audit | 20 |
 | Different or missing, now fixed | 11 |
-| Different by design | 9 |
+| Different by design | 10 |
 | Not applicable to a converted addon | 5 |
 
 ## Matrix
@@ -71,7 +71,7 @@ How the Mod Importer's conversion compares with how Team Simplified's Simplified
 | 29 | Resources the mod's archive lacks | Gone with the file | Removed only under the `game_version` rule of row 15 | **fixed** with row 15 (`diff.rs:232-241`); shader archives remove nothing, as in v3 (row 30) |
 | 30 | Shader archives (`shader_package_2025/*.erp`) | v3 merges the game's archive and each mod's by resource, later wins (`actions.prepare_mods:440-507`); loaded at boot, so they replace URIs everywhere | Into the boot overlay (`merge.rs:20-25`) | identical |
 | 31 | Simplified Studio's marker and shadow material in shader archives | Loaded with the shader archive | Left out | **fixed**: `fix: load simplified studio's marker and shadow material with the mod` (`merge.rs:57-74`) |
-| 32 | Two mods ship one non-shader archive | v3: the first mod's archive with each later mod's resources over it (`actions.prepare_mods:510-552`). v4: the later file wins | Each mod's changes over the game's, later addon wins per resource | identical to v3 per resource; resources only the first mod removed stay removed in both |
+| 32 | Two mods ship one archive | v3: the first mod's archive with each later mod's resources over it, every resource the later mod carries winning, changed or not (`actions.prepare_mods:510-552`); shader archives likewise over the game's (`actions.prepare_mods:440-507`). v4: the later file wins whole | Each mod's changes over the game's, later addon wins per changed resource | different by design: a resource only the earlier mod changes keeps its change in ours, where the later mod's unchanged copy restores the game's in the Simplified Launcher. Two mods that change different cars in one archive both apply |
 | 33 | Seven `ui_texarrays_*` kinds (car images, championship branding, drivers, engine branding, nationality flags, team branding, track images) | v3: the `.texarray.image` arrays in mods' `ui_texture.nefx2.sm51(_amd).erp`, the first mod's archive as the base, each slice compared with the `app/original/ui` arrays, later mod wins per slice, written to both shader archives (`actions.merge_resources:104-254`, `326-417`) | `erp.merge-slices` of each `.texarray.image` from `ui_texture*` shader archives into the boot archive; the launcher writes the slices that differ from the game's over the array in place (`convert.rs:571-615`, launcher `ops/erp.md#texture-arrays`); `.texarray` views whole | identical for arrays of the game's size. An array with fewer slices: v3 uses the mod's array as it is, ours merges its slices over the game's. Another format: both use it whole |
 | 34 | Texture arrays elsewhere (`ui_package` archives) | Replaced with the archive | Per resource on that archive (row 26) | identical |
 | 35 | `.texarray` views and other `ui_texture` resources | v3 keeps the first mod's whole archive | Views whole into the boot overlay; other resources with the boot overlay | identical |
@@ -147,11 +147,13 @@ Before the fixes, V10 and koenigsegg differed in the Studio shadow material (row
 
 ## Launcher ops still needed
 
-None. Every row converts with ops the launcher has: `put-record`, `remove-record`, `lang.set`, `lang.default`, `erp.overlay` on any asset group archive (with the launcher's fallback to rewriting an archive whose layout changes), `remove-resource`, `merge-slices`, `add-mipmaps`, `file.put`, `track.add`, and `load_after` for the SERPs Base Files.
+Every row converts with ops the launcher has: `put-record`, `remove-record`, `lang.set`, `lang.default`, `erp.overlay` on any asset group archive (with the launcher's fallback to rewriting an archive whose layout changes), `remove-resource`, `merge-slices`, `add-mipmaps`, `file.put`, `track.add`, and `load_after` for the SERPs Base Files. One change keeps two converted mods from failing a build:
+
+- `remove-record` and `remove-resource` fail when the key or resource is gone (`apply_db_op` in `addon-api/src/ops.rs:737-743`, `ErpBuild::apply` in `core/src/erpbuild.rs:396-401`). Two mods built from the same older database or archive both remove what it lacks, and the second addon's removal fails the build. Wanted: a removal of a key or resource an earlier op in the same build already removed is left out, with a line such as `erp: <addon>: eaid://… already removed by <earlier addon>`, as the Mod Importer's build hook already does for library mods (`lib.rs` `without_repeats`).
 
 ## Cannot be identical
 
-- **Conflicts between mods** follow v4 and the launcher's load order: the later addon wins a record, a text key or a resource. v3 keeps the clean value when two mods change the same record or key (rows 16, 23).
+- **Conflicts between mods** follow v4 and the launcher's load order: the later addon wins a record, a text key or a resource. v3 keeps the clean value when two mods change the same record or key (rows 16, 23). Mods that share an archive merge their changes; the Simplified Launcher lets the later archive restore the game's copy of everything it carries unchanged (row 32).
 - **Text in every language** follows v4. v3 gives all eleven languages the union of a mod's edits, so a mod with its own translations shows its last file's text everywhere (row 20).
 - **Text without an exe patch.** The loader adds text at runtime; there is no patched exe and no anticheat bypass (rows 24, 43).
 - **Programs.** `.dll` and `.asi` files are never copied (row 46).
