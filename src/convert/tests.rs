@@ -592,29 +592,29 @@ fn archive_changes_become_one_overlay_and_remove_resource_ops() {
     assert_eq!(
         got.resources.keys().cloned().collect::<Vec<_>>(),
         [
+            key(CAR, &uri("decal")),
             key(CAR, &uri("old")),
+            key(CAR, &uri("paint")),
             key(boot, shadow),
             key(boot, genesis),
-            key(boot, &uri("decal")),
-            key(boot, &uri("paint")),
             key(boot, marker),
         ]
     );
     assert_eq!(got.resources[&key(CAR, &uri("old"))], None);
-    let paint = got.resources[&key(boot, &uri("paint"))].as_ref().unwrap();
+    let paint = got.resources[&key(CAR, &uri("paint"))].as_ref().unwrap();
     assert_eq!(paint.2[1].3, b"a much bigger texture");
     let (_, ops) = addon_ops(&out);
     let overlays: Vec<&AssetOp> = ops
         .iter()
         .filter(|op| matches!(op, AssetOp::Erp(ErpOp::Overlay { .. })))
         .collect();
-    assert_eq!(overlays.len(), 1);
-    let overlay = ErpFile::open(&out.join(overlay_name(0))).unwrap();
-    let names: Vec<&str> = overlay.erp.resources.iter().map(|r| r.name.as_str()).collect();
-    assert_eq!(
-        names,
-        [uri("paint").as_str(), &uri("decal"), genesis, marker, shadow]
-    );
+    assert_eq!(overlays.len(), 2);
+    let names = |n: usize| -> Vec<String> {
+        let overlay = ErpFile::open(&out.join(overlay_name(n))).unwrap();
+        overlay.erp.resources.iter().map(|r| r.name.clone()).collect()
+    };
+    assert_eq!(names(0), [uri("paint"), uri("decal")]);
+    assert_eq!(names(1), [genesis, marker, shadow]);
     assert!(reported(&c, "archives: 5 resource(s) → erp.overlay"));
     assert!(reported(&c, "archives: 1 resource(s) removed"));
 }
@@ -649,7 +649,7 @@ fn a_resource_a_mod_carries_twice_keeps_its_last_copy() {
 }
 
 #[test]
-fn a_resource_two_archives_change_differently_keeps_a_copy_in_each() {
+fn each_archive_of_a_mod_keeps_its_own_copies() {
     let case = Case::new("split");
     let logo = "eaid://environment_package/core_assets/shared_textures/myteam/logo.tif.image";
     let same = "eaid://f1_2025_vehicle_package/shared/same.tif.image";
@@ -688,15 +688,14 @@ fn a_resource_two_archives_change_differently_keeps_a_copy_in_each() {
     assert_eq!(
         targets,
         [
-            (vec![common.to_owned()], vec![logo.to_owned(), kept.to_owned()]),
-            (vec![fom.to_owned()], vec![logo.to_owned()]),
-            (vec![merge::BOOT_ERP.to_owned()], vec![same.to_owned()]),
+            (
+                vec![common.to_owned()],
+                vec![logo.to_owned(), same.to_owned(), kept.to_owned()]
+            ),
+            (vec![fom.to_owned()], vec![logo.to_owned(), same.to_owned()]),
         ]
     );
-    assert!(reported(
-        &c,
-        "archives: 2 resource(s) the mod changes differently"
-    ));
+    assert!(reported(&c, "archives: 5 resource(s) → erp.overlay"));
 }
 
 #[test]
@@ -1064,7 +1063,7 @@ fn installed() -> Option<PathBuf> {
 }
 
 #[test]
-fn a_mod_of_a_real_archive_round_trips_through_the_overlay() {
+fn a_mod_of_a_real_archive_round_trips_through_an_overlay_on_it() {
     let Some(game_dir) = installed() else {
         eprintln!("F1_25_GAME is not set; skipped");
         return;
@@ -1086,9 +1085,9 @@ fn a_mod_of_a_real_archive_round_trips_through_the_overlay() {
     let game: &dyn GameFiles = &case.game;
     let (c, out) = case.convert(&p, Some(game));
     let (_, got) = check(&case, &p, &out, None);
-    let boot = merge::BOOT_ERP.to_owned();
-    assert!(got.resources[&(boot.clone(), changed.clone())].is_some());
-    assert!(got.resources[&(boot, "eaid://ui_package/swofty/convert_test.tif".into())].is_some());
+    let own = rel.to_owned();
+    assert!(got.resources[&(own.clone(), changed.clone())].is_some());
+    assert!(got.resources[&(own, "eaid://ui_package/swofty/convert_test.tif".into())].is_some());
     assert_eq!(got.resources[&(rel.to_owned(), removed)], None);
     let overlay = Erp::parse(&std::fs::read(out.join(overlay_name(0))).unwrap()).unwrap();
     assert_eq!(overlay.resources.len(), 2);

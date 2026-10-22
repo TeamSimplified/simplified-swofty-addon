@@ -8,11 +8,21 @@ use crate::diff::Diff;
 use crate::library::{FILES, LIBRARY};
 use crate::texarray;
 
-// Every resource a mod adds or changes, in any archive, goes into an overlay on this
-// archive, which the boot groups load before any car or UI group. Each mod's
-// resources make an overlay archive of their own, and they override the game's
-// copies, as the shader archives Simplified Studio packs a mod into do.
+// A resource a mod adds or changes in an asset group archive goes into an overlay on
+// that archive, as the mod's archive replaces the game's there and nowhere else.
+// Resources from shader archives, and from archives no asset group lists, go into an
+// overlay on this archive, which the boot groups load before any car or UI group:
+// they override the game's copies everywhere, as the shader archives Simplified
+// Studio packs a mod into do.
 pub const BOOT_ERP: &str = "2025_asset_groups/vfx_package/common.erp";
+const GROUPS: &str = "2025_asset_groups/";
+
+pub fn target(rel: &str) -> &str {
+    match rel.starts_with(GROUPS) {
+        true => rel,
+        false => BOOT_ERP,
+    }
+}
 
 pub struct Merged {
     pub ops: Vec<AssetOp>,
@@ -95,7 +105,7 @@ pub fn ops(id: &str, diff: &Diff, records: &Gvdb) -> Merged {
         let adds: Vec<&String> = a.added.iter().filter(|uri| loaded(a, uri)).collect();
         for &uri in changed.iter().chain(&adds) {
             ops.push(AssetOp::Erp(ErpOp::PutResource {
-                erp: BOOT_ERP.into(),
+                erp: target(&a.path).into(),
                 resource: uri.clone(),
                 source: source(&a.path),
                 rename: None,
@@ -163,7 +173,7 @@ pub fn targets(diff: &Diff) -> Vec<String> {
             .iter()
             .chain(&a.added)
             .filter(|uri| loaded(a, uri) && !studio_only(uri));
-        out.extend(written.map(|uri| format!("{uri} in {BOOT_ERP}")));
+        out.extend(written.map(|uri| format!("{uri} in {}", target(&a.path))));
         out.extend(a.removed.iter().map(|uri| format!("{uri} in {}", a.path)));
     }
     for t in &diff.text {
@@ -262,7 +272,7 @@ mod tests {
                     "library/m/files/shader_package_2025/object_auto_illuminate.nefx2.sm51.erp"
                 ),
                 (
-                    BOOT_ERP,
+                    "2025_asset_groups/ui_package/flow_boot.erp",
                     "eaid://ui_package/b",
                     "library/m/files/2025_asset_groups/ui_package/flow_boot.erp"
                 ),
@@ -275,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn every_change_to_a_car_archive_loads_with_the_boot_archive() {
+    fn every_change_to_a_car_archive_loads_with_that_archive() {
         let car = "2025_asset_groups/f1_2026_vehicle_package/teams/mclaren/wep/mclaren.erp";
         let diff = Diff {
             archives: vec![Archive {
@@ -301,14 +311,14 @@ mod tests {
         assert_eq!(
             writes,
             [
-                (BOOT_ERP, "eaid://paint"),
-                (BOOT_ERP, "eaid://handling"),
-                (BOOT_ERP, "eaid://decal"),
+                (car, "eaid://paint"),
+                (car, "eaid://handling"),
+                (car, "eaid://decal"),
                 (car, "eaid://old"),
             ]
         );
         assert_eq!((merged.resources, merged.carried), (3, 0));
-        assert!(targets(&diff).contains(&format!("eaid://paint in {BOOT_ERP}")));
+        assert!(targets(&diff).contains(&format!("eaid://paint in {car}")));
     }
 
     #[test]

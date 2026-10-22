@@ -114,9 +114,9 @@ struct OpFile<'a, T> {
 
 #[derive(Default)]
 struct Tally {
-    split: usize,
     filled: usize,
     put: usize,
+    overlays: usize,
     sources: usize,
     mips: usize,
     logos: usize,
@@ -491,19 +491,6 @@ impl Writer {
             Root::Data => s.path.strip_prefix(&prefix).map(str::to_owned),
             _ => None,
         };
-        let archives: Vec<&str> = p
-            .files
-            .iter()
-            .filter(|f| f.class == Class::Archive)
-            .map(|f| f.path.as_str())
-            .collect();
-        let split = differing_copies(&ops, &lib_files, &archives, &rel)?;
-        for uri in &split {
-            self.log.line(format!(
-                "approximated: {uri} differs between the mod's archives, so each archive gets its own copy"
-            ));
-        }
-        tally.split = split.len();
         let mut overlays: Vec<(String, Vec<(PathBuf, String)>)> = Vec::new();
         for op in ops {
             match op.op {
@@ -516,10 +503,6 @@ impl Writer {
                     rename: None,
                 }) => {
                     let r = rel(&source).ok_or_else(|| err(format!("{resource}: no source in the mod")))?;
-                    let erp = match split.contains(&resource) {
-                        true => r.clone(),
-                        false => erp,
-                    };
                     let at = match overlays.iter().position(|(target, _)| *target == erp) {
                         Some(at) => at,
                         None => {
@@ -568,6 +551,7 @@ impl Writer {
             tally.put += write_overlay(resources, &self.dir.join(overlay_name(n)))?;
         }
         tally.sources = sources.len();
+        tally.overlays = overlays.len();
         self.log.time("overlay archives");
         progress(0.8, &p.name);
         (tally.logos, tally.views) = self.logos(library, p, &diff)?;
@@ -832,18 +816,9 @@ impl Writer {
         }
         if t.put > 0 {
             self.report.push(format!(
-                "archives: {} resource(s) → erp.overlay into {} in {ERP_OPS}, from {} that holds only \
-                 those resources, copied out of {} of the mod's archive(s)",
-                t.put,
-                merge::BOOT_ERP,
-                overlay_name(0),
-                t.sources
-            ));
-        }
-        if t.split > 0 {
-            self.report.push(format!(
-                "archives: {} resource(s) the mod changes differently in several archives → an overlay on each archive",
-                t.split
+                "archives: {} resource(s) → erp.overlay in {ERP_OPS}, from {} overlay archive(s) under {ERP_DIR}/ \
+                 that hold only those resources, copied out of {} of the mod's archive(s)",
+                t.put, t.overlays, t.sources
             ));
         }
         if merged.carried > 0 {
@@ -1054,67 +1029,6 @@ fn fill_in(op: AssetOp) -> AssetOp {
         }
         other => other,
     }
-}
-
-// A resource the mod writes into the boot archive, and holds with other content in
-// another of its archives, keeps one copy per archive, as each archive of the mod
-// replaces the game's whole. Shader archives take no overlays, so a resource they
-// carry keeps the boot archive's single copy.
-fn differing_copies(
-    ops: &[Op],
-    files: &Path,
-    archives: &[&str],
-    rel: &dyn Fn(&Source) -> Option<String>,
-) -> Result<BTreeSet<String>> {
-    let mut holders: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for op in ops {
-        if let AssetOp::Erp(ErpOp::PutResource {
-            erp,
-            resource,
-            source,
-            rename: None,
-        }) = &op.op
-            && erp == merge::BOOT_ERP
-            && let Some(r) = rel(source)
-        {
-            holders.entry(resource.clone()).or_default().insert(r);
-        }
-    }
-    holders.retain(|_, a| !a.iter().any(|a| merge::carrier(a)));
-    if holders.is_empty() {
-        return Ok(BTreeSet::new());
-    }
-    let mut open: BTreeMap<String, ErpFile> = BTreeMap::new();
-    for a in archives.iter().filter(|a| !merge::carrier(a)) {
-        let path = files.join(a);
-        let file = ErpFile::open(&path).map_err(|e| err(format!("{}: {e}", path.display())))?;
-        for r in &file.erp.resources {
-            if let Some(h) = holders.get_mut(&r.name) {
-                h.insert((*a).to_owned());
-            }
-        }
-        open.insert((*a).to_owned(), file);
-    }
-    let mut split = BTreeSet::new();
-    for (uri, archives) in holders.iter().filter(|(_, a)| a.len() > 1) {
-        let mut contents = Vec::new();
-        for a in archives {
-            let file = &open[a];
-            let fail = |e: swofty_formats::Error| err(format!("{a}: {uri}: {e}"));
-            let r = file.load(file.erp.find(uri).map_err(fail)?).map_err(fail)?;
-            let data: Vec<Vec<u8>> = r
-                .fragments
-                .iter()
-                .map(|f| f.data())
-                .collect::<std::result::Result<_, _>>()
-                .map_err(fail)?;
-            contents.push((r.kind, r.unk, data));
-        }
-        if contents.windows(2).any(|w| w[0] != w[1]) {
-            split.insert(uri.clone());
-        }
-    }
-    Ok(split)
 }
 
 fn overlay_name(n: usize) -> String {
