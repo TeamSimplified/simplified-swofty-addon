@@ -12,7 +12,7 @@ use crate::package::{self, Class};
 use crate::{Result, err};
 
 pub const FALLBACK: &str = "eng";
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Diff {
@@ -324,12 +324,14 @@ fn defaults(out: &mut [Text], game: &dyn GameFiles, names: &HashMap<String, Stri
     };
     for t in out.iter_mut() {
         // A translation replaced with the game's English text is untranslated
-        // filler, not a change.
+        // filler: it applies, as in the Simplified Launcher, unless an addon sets
+        // the key.
         if t.language != FALLBACK && t.from.is_none() {
             let keys: Vec<String> = t.changed.keys().cloned().collect();
             for key in keys {
                 if lookup(FALLBACK, &key)?.as_deref() == Some(t.changed[&key].as_str()) {
-                    t.changed.remove(&key);
+                    let value = t.changed.remove(&key).expect("listed above");
+                    t.defaults.insert(key, value);
                 }
             }
         }
@@ -596,7 +598,10 @@ mod tests {
         );
         assert_eq!(
             ger.defaults,
-            BTreeMap::from([("lng_ast_26".to_owned(), "Aston ger".to_owned())])
+            BTreeMap::from([
+                ("lng_ast_26".to_owned(), "Aston ger".to_owned()),
+                ("lng_rac".to_owned(), "Bulls eng".to_owned()),
+            ])
         );
         let kor = &d.text[2];
         assert_eq!((kor.language.as_str(), kor.from.as_deref()), ("kor", Some("eng")));
@@ -605,7 +610,7 @@ mod tests {
             BTreeMap::from([("lng_ast_26".to_owned(), "Aston kor".to_owned())])
         );
         let merged = crate::merge::ops("m", &d, &Gvdb::default());
-        assert_eq!((merged.strings, merged.defaults.len()), (3, 3));
+        assert_eq!((merged.strings, merged.defaults.len()), (3, 4));
         std::fs::remove_dir_all(&root).ok();
     }
 

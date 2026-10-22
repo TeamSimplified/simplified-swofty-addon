@@ -118,7 +118,7 @@ Simplified Studio packages carry a mod's textures and models in archives under `
 Team rename packages point the team name records at keys of their own, such as `lng_team_ast_title_26`, and give every team a value: the renamed team's new name, and the game's text for the rest. Those values would undo another package's rename.
 
 - An added key whose text is the game's text of the key the stock record pointed at is a default, kept in the diff's `defaults`. English text counts too, since packages fill in untranslated names.
-- A changed translation whose text is the game's English text of the same key is left out.
+- A changed translation whose text is the game's English text of the same key is a default too: it applies, as in the Simplified Launcher, unless a package renames the key.
 - Defaults go in once for each key no package renames, before every package's own changes. The diff has a `version`, and a cached diff of another version is computed again.
 
 ### 4.7 Conflicts
