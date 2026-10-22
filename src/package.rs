@@ -427,7 +427,15 @@ pub fn parts(root: &Path) -> Result<Vec<PartDir>> {
             .replace('\\', "/");
         let segs: Vec<&str> = rel.split('/').collect();
         let dirs = &segs[..segs.len() - 1];
-        if let Some(i) = dirs.iter().position(|d| is_game_folder(d) || is_marker(d)) {
+        // The part is the folder above the game folder that holds the game's own
+        // folders, so a part folder named like the game, such as "F1 25 Engine Sounds
+        // for 2026 Cars/F1 25/audio", is not taken for the game folder itself.
+        let at = match dirs.iter().position(|d| is_marker(d)) {
+            Some(i) if i > 0 && is_game_folder(dirs[i - 1]) => Some(i - 1),
+            Some(i) => Some(i),
+            None => dirs.iter().position(|d| is_game_folder(d)),
+        };
+        if let Some(i) = at {
             candidates.insert(dirs[..i].join("/"));
         }
     }
@@ -465,7 +473,7 @@ pub fn parts(root: &Path) -> Result<Vec<PartDir>> {
 // "Liveries -c/Ferrari -x" shows as "Liveries › Ferrari", as in the Simplified Launcher.
 fn part_segments(rel: &str) -> Vec<String> {
     let mut segs: Vec<&str> = rel.split('/').filter(|s| !s.is_empty()).collect();
-    if segs.last().is_some_and(|s| is_game_folder(s)) {
+    if segs.last().is_some_and(|s| s.eq_ignore_ascii_case(GAME_FOLDER)) {
         segs.pop();
     }
     segs.iter()
@@ -678,6 +686,23 @@ mod tests {
         assert_eq!(
             names(&["F1 25/game_package/db.bin", "F1 25/2025_asset_groups/a.erp"]),
             [part("", "")]
+        );
+        assert_eq!(
+            names(&[
+                "READ ME.txt",
+                "F1 2019 Engine Sounds/F1 25/audio/2025/a.bdl",
+                "F1 25 Engine Sounds for 2026 Cars/F1 25/audio/2025/a.bdl",
+                "V10 Engine Sounds/F1 25/audio/2025/a.bdl",
+            ]),
+            [
+                part("F1 2019 Engine Sounds", "F1 2019 Engine Sounds"),
+                part(
+                    "F1 25 Engine Sounds for 2026 Cars",
+                    "F1 25 Engine Sounds for 2026 Cars"
+                ),
+                part("V10 Engine Sounds", "V10 Engine Sounds"),
+            ],
+            "a part folder named like the game is a part, not the game folder"
         );
         assert_eq!(
             names(&["Wrap/v2/2025_asset_groups/a.erp"]),
