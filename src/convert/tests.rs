@@ -480,8 +480,24 @@ fn a_conversion_writes_a_log_for_developers() {
     case.stock("lang/language_eng.lng", &lng(&[("lng_a", "A")]));
     let uri = "eaid://f1_2026_vehicle_package/teams/mclaren/paint.tif.image";
     case.stock(CAR, &archive(vec![texture(uri, b"small")]));
+    let shader = resource("eaid://shader_package/opaque", "Shader", &[b"code"]);
+    let amd = OPAQUE.replace(".sm51.erp", ".sm51_amd.erp");
+    let livery = texture(
+        "eaid://f1_2026_vehicle_package/teams/mercedes/livery.tif.image",
+        b"w17",
+    );
+    let studio = archive(vec![
+        shader.clone(),
+        resource("eaid://tools_package/default/serps", "Marker", &[b"x"]),
+        livery,
+    ]);
+    for rel in [OPAQUE, amd.as_str()] {
+        case.stock(rel, &archive(vec![shader.clone()]));
+    }
     let p = case.import(
         &[
+            (OPAQUE, studio.clone()),
+            (amd.as_str(), studio),
             (DATABASE, db(&[("rules.laps", 0, "7")])),
             (
                 "localisatioa/2025_release/language_eng.lng",
@@ -514,12 +530,17 @@ fn a_conversion_writes_a_log_for_developers() {
         "[files]",
         "class database: 1 file(s)",
         "class text: 1 file(s)",
-        "class archive: 1 file(s)",
+        "class archive: 3 file(s)",
         "skipped file readme.exe: programs, EA AntiCheat and EA installer files are never copied",
         "[diff]",
         "database: 1 changed, 0 added, 1 removed record(s)",
         &format!("archive {CAR}: 1 changed, 0 added, 0 removed resource(s)"),
         "text eng: 1 changed, 0 added, 0 filled in",
+        &format!("archive {OPAQUE}: 0 changed, 2 added, 0 removed resource(s)"),
+        &format!("archive {amd}: 0 changed, 2 added, 0 removed resource(s)"),
+        "gpu: 2 resource(s) the generic and AMD shader archives both carry load once, 0 of them differ",
+        "needs: mod.team-simplified.serps-base-files-for-f1-25 (not in the library)",
+        "ops/erp.json: erp.overlay erp/overlay-2.erp into 2025_asset_groups/vfx_package/common.erp (2 resource(s)",
         "[ops]",
         "ops/database.json: 1 put-record, 1 remove-record",
         "ops/text.json: 1 lang.set for eng",
@@ -540,6 +561,44 @@ fn a_conversion_writes_a_log_for_developers() {
         .unwrap()
         .count();
     assert_eq!(logs, 2, "a failed conversion logs its error too");
+}
+
+#[test]
+fn a_studio_livery_in_both_gpu_shader_archives_loads_once_at_boot() {
+    let case = Case::new("gpu");
+    let shader = resource("eaid://shader_package/mask", "Shader", &[b"code"]);
+    let generic = "shader_package_2025/object_mask.nefx2.sm51.erp";
+    let amd = "shader_package_2025/object_mask.nefx2.sm51_amd.erp";
+    for rel in [generic, amd] {
+        case.stock(rel, &archive(vec![shader.clone()]));
+    }
+    let livery = |n: usize| format!("eaid://f1_2026_vehicle_package/teams/mercedes/livery_{n}.tif.image");
+    let build = |differs: &[u8]| {
+        let mut r = vec![shader.clone()];
+        r.extend((0..40).map(|n| texture(&livery(n), format!("w17 {n}").as_bytes())));
+        r.push(texture(&livery(99), differs));
+        archive(r)
+    };
+    let p = case.import(
+        &[(generic, build(b"nvidia")), (amd, build(b"amd"))],
+        &serps("Merc26", "1"),
+    );
+    let game: &dyn GameFiles = &case.game;
+    let (c, out) = case.convert(&p, Some(game));
+    let (_, ops) = addon_ops(&out);
+    let overlays: Vec<&AssetOp> = ops
+        .iter()
+        .filter(|op| matches!(op, AssetOp::Erp(ErpOp::Overlay { erps, .. }) if erps == &[merge::BOOT_ERP]))
+        .collect();
+    assert_eq!(overlays.len(), 1);
+    let overlay = ErpFile::open(&out.join(overlay_name(0))).unwrap();
+    assert_eq!(overlay.erp.resources.len(), 41, "every livery resource, once");
+    let kept = overlay.load(overlay.erp.find(&livery(99)).unwrap()).unwrap();
+    assert_eq!(kept.fragments[1].data().unwrap(), b"nvidia");
+    assert!(reported(
+        &c,
+        "warning: 1 resource(s) differ between the mod's generic and AMD shader archives"
+    ));
 }
 
 #[test]
