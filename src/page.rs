@@ -323,95 +323,76 @@ fn last(record: &Record, details: bool) -> Option<Block> {
     }))
 }
 
-fn converted(record: &Record, installed: Option<&[AddonInfo]>, editable: bool) -> Option<Block> {
-    let cards: Vec<Block> = record
-        .mods
-        .iter()
-        .filter_map(|(id, e)| Some((id, e, e.made.as_ref()?)))
-        .map(|(id, e, made)| {
-            let present = installed.is_none_or(|list| list.iter().any(|a| a.id == made.id));
-            let on = installed.and_then(|list| list.iter().find(|a| a.id == made.id).map(|a| a.enabled));
-            let mut pills = kinds(e);
-            match (present, on) {
-                (false, _) => pills.push(Pill {
-                    text: "Removed from Addons".into(),
-                    tone: Tone::Warn,
-                    ..Pill::default()
-                }),
-                (true, Some(on)) => pills.push(Pill {
-                    text: if on { "On".into() } else { "Off".into() },
-                    tone: if on { Tone::Good } else { Tone::Muted },
-                    dot: true,
-                    ..Pill::default()
-                }),
-                (true, None) => {}
-            }
-            let mut buttons = Vec::new();
-            if present {
-                buttons.push(show_button(&made.id));
-            }
-            if editable {
-                buttons.push(Button {
-                    icon: Some(Icon::Refresh),
-                    ..Button::new(format!("{REIMPORT}{id}"), "Re-import")
-                });
-            }
-            let mut blocks = vec![Block::Pills(pills)];
-            if let Some(error) = &e.error {
-                blocks.push(Block::Text {
-                    text: format!("The last re-import failed: {error}"),
-                    tone: Tone::Warn,
-                });
-            }
-            blocks.push(Block::Buttons(buttons));
-            Block::Card(Card {
-                title: Some(e.name.clone()),
-                subtitle: Some(format!("Converted {}", date(e.at))),
-                blocks,
-                ..Card::default()
-            })
-        })
-        .collect();
-    if cards.is_empty() {
-        return None;
-    }
-    Some(Block::Card(Card {
-        title: Some("Converted from your library".into()),
-        subtitle: Some("The library keeps each mod as imported, so its addon can be made again.".into()),
-        blocks: vec![Block::Grid(Grid {
-            columns: Columns::Count(2),
-            blocks: cards,
-        })],
-        ..Card::default()
-    }))
-}
-
-fn failed(cx: &Cx, record: &Record) -> Result<Option<Block>> {
-    let loaded = Loaded::read(cx)?;
-    let mut cards = Vec::new();
-    for (p, on) in &loaded.order {
-        let Some(e) = record.mods.get(&p.id).filter(|e| e.made.is_none()) else {
-            continue;
-        };
-        let mut buttons = vec![
-            Button {
-                icon: Some(Icon::Refresh),
-                ..Button::new(format!("{REIMPORT}{}", p.id), "Convert again")
-            },
-            Button {
-                icon: Some(Icon::FolderOpen),
-                ..Button::new(format!("{SHOW}{}", p.id), "Show files")
-            },
-        ];
-        if !cx.profile.vanilla {
-            buttons.insert(
-                1,
-                Button::new(
-                    format!("{TOGGLE}{}", p.id),
-                    if *on { "Turn off" } else { "Turn on" },
-                ),
-            );
+// One mod in the library as a compact card: converted (its addon's category,
+// on/off state and actions) or not converted (the error and how to retry it).
+fn library_entry(
+    cx: &Cx,
+    record: &Record,
+    installed: Option<&[AddonInfo]>,
+    p: &crate::library::Package,
+    on: bool,
+    editable: bool,
+) -> Block {
+    let entry = record.mods.get(&p.id);
+    if let Some(made) = entry.and_then(|e| e.made.as_ref()) {
+        let present = installed.is_none_or(|list| list.iter().any(|a| a.id == made.id));
+        let shown_on = installed.and_then(|list| list.iter().find(|a| a.id == made.id).map(|a| a.enabled));
+        let mut pills = entry.map(kinds).unwrap_or_default();
+        match (present, shown_on) {
+            (false, _) => pills.push(Pill {
+                text: "Removed from Addons".into(),
+                tone: Tone::Warn,
+                ..Pill::default()
+            }),
+            (true, Some(is_on)) => pills.push(Pill {
+                text: if is_on { "On".into() } else { "Off".into() },
+                tone: if is_on { Tone::Good } else { Tone::Muted },
+                dot: true,
+                ..Pill::default()
+            }),
+            (true, None) => {}
         }
+        let mut buttons = Vec::new();
+        if present {
+            buttons.push(show_button(&made.id));
+        }
+        if editable {
+            buttons.push(Button {
+                icon: Some(Icon::Refresh),
+                ..Button::new(format!("{REIMPORT}{}", p.id), "Re-import")
+            });
+        }
+        let mut blocks = vec![Block::Pills(pills)];
+        if let Some(error) = entry.and_then(|e| e.error.as_ref()) {
+            blocks.push(Block::Text {
+                text: format!("The last re-import failed: {error}"),
+                tone: Tone::Warn,
+            });
+        }
+        if !buttons.is_empty() {
+            blocks.push(Block::Buttons(buttons));
+        }
+        Block::Card(Card {
+            title: Some(p.name.clone()),
+            subtitle: made.category.map(|c| c.label().to_owned()),
+            blocks,
+            ..Card::default()
+        })
+    } else {
+        let mut buttons = vec![Button {
+            icon: Some(Icon::Refresh),
+            ..Button::new(format!("{REIMPORT}{}", p.id), "Convert again")
+        }];
+        if !cx.profile.vanilla {
+            buttons.push(Button::new(
+                format!("{TOGGLE}{}", p.id),
+                if on { "Turn off" } else { "Turn on" },
+            ));
+        }
+        buttons.push(Button {
+            icon: Some(Icon::FolderOpen),
+            ..Button::new(format!("{SHOW}{}", p.id), "Show files")
+        });
         buttons.push(Button {
             icon: Some(Icon::Trash),
             style: Style::Danger,
@@ -421,34 +402,69 @@ fn failed(cx: &Cx, record: &Record) -> Result<Option<Block>> {
             },
             ..Button::new(format!("{REMOVE}{}", p.id), "Remove from library")
         });
-        cards.push(Block::Card(Card {
+        let mut blocks = vec![Block::Pills(vec![Pill {
+            text: "Not converted".into(),
+            tone: Tone::Warn,
+            ..Pill::default()
+        }])];
+        if let Some(error) = entry.and_then(|e| e.error.as_ref()) {
+            blocks.push(Block::Text {
+                text: error.clone(),
+                tone: Tone::Bad,
+            });
+        }
+        blocks.push(Block::Buttons(buttons));
+        Block::Card(Card {
             title: Some(p.name.clone()),
             subtitle: Some(format!(
-                "{} in {} · loads through the Mod Importer's build step",
-                if *on { "On" } else { "Off" },
+                "Not converted · {} in {}",
+                if on { "on" } else { "off" },
                 cx.profile.name
             )),
-            blocks: vec![
-                Block::Text {
-                    text: e.error.clone().unwrap_or_default(),
-                    tone: Tone::Bad,
-                },
-                Block::Buttons(buttons),
-            ],
+            blocks,
             ..Card::default()
-        }));
+        })
     }
-    if cards.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(Block::Card(Card {
-        title: Some("Not converted".into()),
-        subtitle: Some(
-            "These mods could not be made into addons. They load as before, in the library's order.".into(),
-        ),
-        blocks: cards,
+}
+
+// The right pane: every mod in the library in its order, or an empty state.
+fn library(cx: &Cx, record: &Record, installed: Option<&[AddonInfo]>, editable: bool) -> Result<Block> {
+    let loaded = Loaded::read(cx)?;
+    let body = if loaded.order.is_empty() {
+        Block::Text {
+            text: "No mods imported yet. Drop a mod on the left, or choose one, to add it here."
+                .into(),
+            tone: Tone::Muted,
+        }
+    } else {
+        Block::Grid(Grid {
+            columns: Columns::Count(1),
+            blocks: loaded
+                .order
+                .iter()
+                .map(|(p, on)| library_entry(cx, record, installed, p, *on, editable))
+                .collect(),
+        })
+    };
+    Ok(Block::Card(Card {
+        title: Some("Your library".into()),
+        subtitle: Some(format!(
+            "{} · each is kept so its addon can be remade",
+            plural(loaded.order.len(), "mod", "mods")
+        )),
+        blocks: vec![body],
         ..Card::default()
-    })))
+    }))
+}
+
+// The left pane: the drop/choose card, then the most recent import's result.
+fn importing(cx: &Cx, record: &Record, details: bool) -> Block {
+    let mut col = vec![choose(&cx.profile.name)];
+    col.extend(last(record, details));
+    Block::Grid(Grid {
+        columns: Columns::Count(1),
+        blocks: col,
+    })
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -467,17 +483,20 @@ pub fn view(cx: &Cx, open: bool, details: bool) -> Result<View> {
     let count = record.mods.values().filter(|e| e.made.is_some()).count();
     let vanilla = cx.profile.vanilla;
     let mut blocks = vec![hero(cx, count, open)];
-    if !vanilla {
-        blocks.push(choose(&cx.profile.name));
-    }
     if open {
         blocks.push(team());
     }
-    blocks.extend(last(&record, details));
-    if !vanilla {
-        blocks.extend(failed(cx, &record)?);
+    if vanilla {
+        blocks.push(library(cx, &record, installed.as_deref(), false)?);
+    } else {
+        blocks.push(Block::Grid(Grid {
+            columns: Columns::Weights(vec![1.0, 1.2]),
+            blocks: vec![
+                importing(cx, &record, details),
+                library(cx, &record, installed.as_deref(), true)?,
+            ],
+        }));
     }
-    blocks.extend(converted(&record, installed.as_deref(), !vanilla));
     blocks.push(Block::Text {
         text: FOOTER.into(),
         tone: Tone::Muted,
