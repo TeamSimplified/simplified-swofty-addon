@@ -570,7 +570,7 @@ impl Writer {
         self.log.time("logo arrays");
         self.mips = tally.mips;
         self.contents.read(&diff);
-        self.report_package(p, &diff, &merged, &tally);
+        self.report_package(p, &diff, &merged, &tally, game.exe_version());
         Ok(())
     }
 
@@ -633,13 +633,6 @@ impl Writer {
             r.added.len(),
             r.removed.len()
         ));
-        if diff.dropped > 0 {
-            log.line(format!(
-                "approximated: {} removal(s) left out, the mod was made for game version {}",
-                diff.dropped,
-                p.game_version.as_deref().unwrap_or("unknown")
-            ));
-        }
         for a in &diff.archives {
             log.line(format!(
                 "archive {}: {} changed, {} added, {} removed resource(s)",
@@ -744,7 +737,14 @@ impl Writer {
         }
     }
 
-    fn report_package(&mut self, p: &Package, diff: &Diff, merged: &merge::Merged, t: &Tally) {
+    fn report_package(
+        &mut self,
+        p: &Package,
+        diff: &Diff,
+        merged: &merge::Merged,
+        t: &Tally,
+        exe: Option<String>,
+    ) {
         let r = &diff.records;
         if !r.is_empty() {
             self.report.push(format!(
@@ -756,11 +756,15 @@ impl Writer {
                 r.removed.len()
             ));
         }
-        if diff.dropped > 0 {
+        let removals = r.removed.len() + diff.archives.iter().map(|a| a.removed.len()).sum::<usize>();
+        if let Some(made) = p
+            .game_version
+            .as_deref()
+            .filter(|v| removals > 0 && Some(*v) != exe.as_deref())
+        {
             self.report.push(format!(
-                "warning: {} left out: the mod was made for {}, not this game version",
-                crate::plural(diff.dropped, "removal", "removals"),
-                p.game_version.as_deref().unwrap_or("an unknown version")
+                "warning: the mod was made for game version {made}; its {} of what this game version has apply, as in the Simplified Launcher",
+                crate::plural(removals, "removal", "removals")
             ));
         }
         let languages = diff.text.iter().filter(|t| t.entries().next().is_some()).count();

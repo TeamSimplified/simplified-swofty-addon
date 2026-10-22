@@ -79,7 +79,7 @@ Each mod is compared with clean files from `GameFiles`, never with the game fold
 | Text | language and key | value differs | key not in stock | never |
 | Replacement, Addition | file | whole file | whole file | never |
 
-- Removals count only when `game_version` equals the installed exe's version. Otherwise they are dropped, and the row says how many and for which version the package was made.
+- Removals count whatever game version the package was made for, as the Simplified Launcher installs a mod's database and archives whole. A shader archive removes nothing: the Simplified Launcher merges it into the game's. When `mod.serps` names another game version, the report warns how many removals apply.
 - A language the package lacks takes the changes of the package's `language_eng.lng`, or of its first language file by name.
 - Archive diffs read the index only (`ErpFile::open`). The database diff parses both files once.
 - Diffs are cached per game build key in `diff/<build key>.json`, with the changed and added records in `diff/<build key>.db`. Import computes the diff when a game is found. A mod without a diff for the installed build gets one at the next build, or from `Compare` in the section.

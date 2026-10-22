@@ -12,7 +12,7 @@ use crate::package::{self, Class};
 use crate::{Result, err};
 
 pub const FALLBACK: &str = "eng";
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Diff {
@@ -107,7 +107,6 @@ impl Diff {
 }
 
 pub fn compute(p: &Package, files: &Path, game: &dyn GameFiles) -> Result<(Diff, Gvdb)> {
-    let removals = p.game_version.is_some() && p.game_version == game.exe_version();
     let mut diff = Diff {
         build_key: game.build_key(),
         version: VERSION,
@@ -120,17 +119,15 @@ pub fn compute(p: &Package, files: &Path, game: &dyn GameFiles) -> Result<(Diff,
         let path = files.join(&f.path);
         match f.class {
             Class::Database => {
-                let (r, values, dropped, pointed) = database(&path, game, removals)?;
+                let (r, values, pointed) = database(&path, game)?;
                 diff.records = r;
-                diff.dropped += dropped;
                 records = values;
                 names = pointed;
             }
             Class::Text => texts.push(f.path.as_str()),
             _ => match package::class(&f.path, Some(game)) {
                 Some(Class::Archive) => {
-                    let (a, dropped) = archive(&f.path, &path, game, removals)?;
-                    diff.dropped += dropped;
+                    let a = archive(&f.path, &path, game)?;
                     if !a.is_empty() {
                         diff.archives.push(a);
                     }
@@ -151,11 +148,12 @@ fn read(path: &Path) -> Result<Vec<u8>> {
     package::read_file(path)
 }
 
-type Database = (Records, Gvdb, usize, HashMap<String, String>);
+type Database = (Records, Gvdb, HashMap<String, String>);
 
 // Besides the records, the text keys the mod points string records at, each with
-// the key the game's own record points at.
-fn database(path: &Path, game: &dyn GameFiles, removals: bool) -> Result<Database> {
+// the key the game's own record points at. A stock record the mod's database lacks
+// is removed, as the Simplified Launcher installs the mod's database whole.
+fn database(path: &Path, game: &dyn GameFiles) -> Result<Database> {
     let stock = Gvdb::parse(&read(&game.original(package::DATABASE)?)?)
         .map_err(|e| err(format!("the game's database: {e}")))?;
     let ours = Gvdb::parse(&read(path)?).map_err(|e| err(format!("{}: {e}", path.display())))?;
@@ -178,20 +176,13 @@ fn database(path: &Path, game: &dyn GameFiles, removals: bool) -> Result<Databas
         }
         values.records.push(r.clone());
     }
-    let removed: Vec<u64> = stock
+    out.removed = stock
         .records
         .iter()
         .map(|r| r.key)
         .filter(|k| !seen.contains(k))
         .collect();
-    let dropped = match removals {
-        true => {
-            out.removed = removed;
-            0
-        }
-        false => removed.len(),
-    };
-    Ok((out, values, dropped, pointed))
+    Ok((out, values, pointed))
 }
 
 fn layout_same(s: &Resource, r: &Resource) -> bool {
@@ -217,7 +208,10 @@ fn same(stock: &ErpFile, s: &Resource, ours: &ErpFile, r: &Resource) -> swofty_f
     Ok(stock.load(s)?.content_hash()? == ours.load(r)?.content_hash()?)
 }
 
-fn archive(rel: &str, path: &Path, game: &dyn GameFiles, removals: bool) -> Result<(Archive, usize)> {
+// A stock resource the mod's archive lacks is removed, as the archive replaces the
+// game's whole. Shader archives are merged into the game's instead, so they remove
+// nothing.
+fn archive(rel: &str, path: &Path, game: &dyn GameFiles) -> Result<Archive> {
     let fail = |e: swofty_formats::Error| err(format!("{rel}: {e}"));
     let stock = ErpFile::open(&game.original(rel)?).map_err(&fail)?;
     let ours = ErpFile::open(path).map_err(&fail)?;
@@ -235,22 +229,17 @@ fn archive(rel: &str, path: &Path, game: &dyn GameFiles, removals: bool) -> Resu
             None => out.added.push(r.name.clone()),
         }
     }
-    let names: HashSet<&str> = ours.erp.resources.iter().map(|r| r.name.as_str()).collect();
-    let removed: Vec<String> = stock
-        .erp
-        .resources
-        .iter()
-        .filter(|r| !names.contains(r.name.as_str()))
-        .map(|r| r.name.clone())
-        .collect();
-    let dropped = match removals {
-        true => {
-            out.removed = removed;
-            0
-        }
-        false => removed.len(),
-    };
-    Ok((out, dropped))
+    if !crate::merge::carrier(rel) {
+        let names: HashSet<&str> = ours.erp.resources.iter().map(|r| r.name.as_str()).collect();
+        out.removed = stock
+            .erp
+            .resources
+            .iter()
+            .filter(|r| !names.contains(r.name.as_str()))
+            .map(|r| r.name.clone())
+            .collect();
+    }
+    Ok(out)
 }
 
 pub fn language(path: &str) -> Option<&str> {
@@ -460,8 +449,36 @@ mod tests {
             dir: stock,
             exe: "1.0",
         };
-        let (a, _) = archive(rel, &ours.join(rel), &game, false).unwrap();
+        let a = archive(rel, &ours.join(rel), &game).unwrap();
         assert_eq!(a.changed, ["paint"]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn shader_archives_remove_nothing_and_others_remove_what_they_lack() {
+        let root = std::env::temp_dir().join(format!("simplified-removals-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let (stock, ours) = (root.join("game"), root.join("files"));
+        let shader = "shader_package_2025/object_opaque.nefx2.sm51.erp";
+        let car = "2025_asset_groups/f1_2026_vehicle_package/teams/mclaren/wep/mclaren.erp";
+        for rel in [shader, car] {
+            archive_of(
+                &stock.join(rel),
+                vec![texture("kept", b"a", [1; 16]), texture("gone", b"b", [2; 16])],
+            );
+            archive_of(&ours.join(rel), vec![texture("kept", b"a", [1; 16])]);
+        }
+        let game = Game {
+            dir: stock,
+            exe: "1.0",
+        };
+        assert!(
+            archive(shader, &ours.join(shader), &game)
+                .unwrap()
+                .removed
+                .is_empty()
+        );
+        assert_eq!(archive(car, &ours.join(car), &game).unwrap().removed, ["gone"]);
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -593,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn diffs_records_and_text_and_keeps_removals_for_the_same_version() {
+    fn diffs_records_and_text_and_keeps_removals_whatever_the_version() {
         let root = std::env::temp_dir().join(format!("simplified-diff-{}", std::process::id()));
         let (stock, ours) = (root.join("game"), root.join("files"));
         let db = |records: &[(&str, &str)]| Gvdb {
@@ -662,8 +679,7 @@ mod tests {
             exe: "1.1",
         };
         let (d, _) = compute(&p, &ours, &older).unwrap();
-        assert!(d.records.removed.is_empty());
-        assert_eq!(d.dropped, 1);
+        assert_eq!(d.records.removed, [key("c")]);
         std::fs::remove_dir_all(&root).ok();
     }
 }
