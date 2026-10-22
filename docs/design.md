@@ -134,11 +134,9 @@ The section `mods`, titled `Simplified Importer`, is one of the launcher's big s
 
 - **Header.** Subtitle `<n> mods converted into addons`. Action `Choose a mod…`, a picker for `.zip`, `.7z`, `.rar` and `.serps` files and folders, several at once.
 - **Notices.** The addon is off in this profile (button `Turn on`). The vanilla profile is active. The launcher has no addon host calls. Library mods are not converted yet and convert on the next start, or this profile is not handed over yet (button `Convert now`).
-- **Hero.** Team Simplified's mark (`art/simplified-mark.png`, the sidebar's `sections/mods.svg` drawn at half size, written to the cache directory), the title `Simplified Importer`, `By Team Simplified. Mods convert into Swofty addons using the Simplified Importer.` and the `Team Simplified` button.
-- **Team Simplified panel.** The button toggles a card below `Import a mod`, closed at first: who Team Simplified are, what the Simplified Importer does, the Swofty addon format in two sentences, and buttons that open https://github.com/TeamSimplified, https://github.com/TeamSimplified/simplified-suite and https://github.com/TeamSimplified/SERPs-Launcher. `LINKS` in `src/page.rs` holds placeholders for a website and a Discord link, shown once they have a URL.
 - **Import a mod.** A card with `Choose a mod…`: a drop anywhere on the window imports too.
 - **Credit.** The last block is `Based on Simplified Suite by Team Simplified.`, part of the page, not a fixed footer.
-- **Vanilla.** The page shows the hero without `Import a mod`, and a notice to switch profiles to import.
+- **Vanilla.** The page shows no `Import a mod`, only a notice to switch profiles to import.
 - **Profile cards.** `summary` adds `MODS` with the enabled mods that still load through the build hook, and nothing when there are none.
 - **CLI.** `swofty mods list` shows each library mod with its addon or why it was not converted. `import <path>…` converts as the page does. `remove <id>` deletes a mod from the library and leaves its addon. `enable`, `disable` and `move` change the mods that load through the build hook.
 

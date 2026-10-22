@@ -1613,7 +1613,7 @@ mod tests {
         );
 
         let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
-        assert_eq!(cards(&view), ["Simplified Importer", "Import a mod"]);
+        assert_eq!(cards(&view), ["Import a mod"]);
         assert!(view.notices.is_empty(), "{:?}", view.notices);
         let text = all_text(&view);
         assert_eq!(view.footer, None);
@@ -1644,30 +1644,6 @@ mod tests {
         })
         .unwrap();
         assert_eq!(effect, Effect::ShowAddon("imported.livery".into()));
-
-        let effect = with(&host, "one", |cx| {
-            addon.event_with(cx, SECTION, click(page::TEAM.into()), &conv)
-        })
-        .unwrap();
-        assert_eq!(effect, Effect::Reload);
-        let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
-        assert_eq!(
-            cards(&view)[..3],
-            ["Simplified Importer", "Team Simplified", "Import a mod"],
-            "the panel opens below the header, above the panes"
-        );
-        assert!(
-            !all_text(&view).iter().any(|t| t.contains("https://")),
-            "links show once, as buttons"
-        );
-        let effect = with(&host, "one", |cx| {
-            addon.event_with(cx, SECTION, click(format!("{}suite", page::LINK)), &conv)
-        })
-        .unwrap();
-        assert_eq!(
-            effect,
-            Effect::Open("https://github.com/TeamSimplified/simplified-suite".into())
-        );
         std::fs::remove_dir_all(&host.root).ok();
     }
 
@@ -1685,7 +1661,7 @@ mod tests {
         })
         .unwrap();
         let view = with(&host, "vanilla", |cx| addon.view(cx, SECTION)).unwrap();
-        assert_eq!(cards(&view), ["Simplified Importer"]);
+        assert!(cards(&view).is_empty());
         assert!(
             view.notices[0]
                 .text

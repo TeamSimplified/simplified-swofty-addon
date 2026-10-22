@@ -12,7 +12,7 @@ pub mod track;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use swofty_addon::asset::{AssetBatch, AssetOp, LangOp, Op, Origin};
@@ -126,7 +126,6 @@ pub struct Slot {
 
 pub struct Simplified {
     manifest: AddonManifest,
-    open: Mutex<bool>,
 }
 
 impl Default for Simplified {
@@ -139,7 +138,6 @@ impl Simplified {
     pub fn new() -> Self {
         Self {
             manifest: AddonManifest::parse(MANIFEST).expect("the built-in manifest is valid"),
-            open: Mutex::new(false),
         }
     }
 
@@ -256,8 +254,7 @@ impl Addon for Simplified {
         if section != SECTION {
             return Err(Error::NoSection(section.into()));
         }
-        let flag = |m: &Mutex<bool>| *m.lock().unwrap_or_else(|e| e.into_inner());
-        page::view(cx, flag(&self.open))
+        page::view(cx)
     }
 
     fn event(&self, cx: &Cx, section: &str, event: Event) -> Result<Effect> {
@@ -511,16 +508,7 @@ impl Simplified {
         if section != SECTION {
             return Err(Error::NoSection(section.into()));
         }
-        let lock = |m: &Mutex<bool>| *m.lock().unwrap_or_else(|e| e.into_inner());
-        let before = page::Panels {
-            team: lock(&self.open),
-        };
-        let mut panels = before.clone();
-        let effect = page::event(cx, event, conv, &mut panels)?;
-        if before.team != panels.team {
-            *self.open.lock().unwrap_or_else(|e| e.into_inner()) = panels.team;
-        }
-        Ok(effect.unwrap_or(Effect::None))
+        Ok(page::event(cx, event, conv)?.unwrap_or(Effect::None))
     }
 }
 

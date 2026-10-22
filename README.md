@@ -13,7 +13,6 @@ How it works is in [docs/design.md](docs/design.md).
 
 ## The Simplified Importer page
 
-- Team Simplified's logo and a short about. The **Team Simplified** button opens a panel about Team Simplified and the Swofty addon format, with links to their GitHub, the Simplified Suite and the SERPs Launcher.
 - **Choose a mod…** picks zips, 7z and rar archives, `.serps` files and folders, several at once. A drop anywhere on the window does the same.
 - After an import, the launcher shows the new addon on **Addons**, or a notice with what went wrong. A mod that can't be made into an addon isn't kept.
 
