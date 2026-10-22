@@ -79,5 +79,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "Simplified for Swofty $TAG" --notes ""
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --latest=false --title "Simplified for Swofty $TAG" --notes ""
           gh release upload "$TAG" teamsimplified.mods.swoftyaddon SHA256SUMS swofty.json --clobber

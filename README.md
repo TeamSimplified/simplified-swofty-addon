@@ -25,9 +25,9 @@ The library converts into addons once, when the launcher starts, on the first im
 
 ## Using it in Swofty Launcher
 
-The Mod Importer is a launcher plugin: a helper program (`bin/simplified-helper`) that the launcher runs, packaged with its `swofty.json` as `teamsimplified.mods.swoftyaddon`. Each [release](https://github.com/TeamSimplified/simplified-swofty-addon/releases) attaches it, built for Windows and Linux, with its `SHA256SUMS`.
+The Mod Importer is a launcher plugin: a helper program (`bin/simplified-helper`) that the launcher runs, packaged with its `swofty.json` as `teamsimplified.mods.swoftyaddon`. Each [release](https://github.com/TeamSimplified/simplified-swofty-addon/releases) attaches it, built for Windows and Linux, with its `SHA256SUMS` and its `swofty.json`.
 
-Swofty Launcher 1.0.4 and later installs the addon itself from the latest release, checks it against `SHA256SUMS`, and keeps it up to date. To install it by hand, drop the `.swoftyaddon` on the launcher, or run:
+Swofty Launcher 1.0.4 and later installs the addon itself, checks it against `SHA256SUMS`, and keeps it up to date. Launchers from 1.3.1 install the newest release whose `swofty.json` accepts them. Earlier launchers install the release GitHub marks as latest, which stays at one every launcher from 1.0.4 can install; new releases are published without that mark. To install it by hand, drop the `.swoftyaddon` on the launcher, or run:
 
 ```sh
 swofty addons install teamsimplified.mods.swoftyaddon
