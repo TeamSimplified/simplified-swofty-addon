@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use swofty_addon::launcher::{AddonInfo, Cx};
 use swofty_addon::view::{
-    Art, Block, Body, Button, ButtonKind, Card, Columns, Effect, Event, Grid, Hero, Icon, Notice, Pill,
-    Shown, Style, Tone, View,
+    Art, Block, Body, Button, ButtonKind, ButtonSize, Card, Columns, DropZone, Effect, Event, Grid, Hero,
+    Icon, Notice, Pill, Shown, Style, Tone, View,
 };
 
 use crate::importer::{self, Convert, Done, Entry, Made, Record};
@@ -75,6 +75,7 @@ pub fn choose_button() -> Button {
             folders: true,
             multiple: true,
         },
+        size: ButtonSize::Large,
         ..Button::new(IMPORT, "Choose a mod…")
     }
 }
@@ -189,22 +190,32 @@ fn team() -> Block {
     })
 }
 
-fn choose(profile: &str) -> Block {
-    Block::Card(Card {
-        title: Some("Import a mod".into()),
-        subtitle: Some(
-            "Drop a mod's zip, 7z, RAR or .serps file, or its folder, anywhere on the window, or choose one."
-                .into(),
-        ),
-        buttons: vec![choose_button()],
-        blocks: vec![Block::Text {
-            text: format!(
-                "Each mod becomes a Swofty addon on the Addons page, turned on in {profile}. Mods made with Simplified Studio and track zips import too. Importing a mod again replaces its addon."
-            ),
-            tone: Tone::Muted,
-        }],
-        ..Card::default()
+fn choose() -> Block {
+    Block::DropZone(DropZone {
+        title: "Import a mod".into(),
+        text: "Drop a mod's zip, 7z, RAR or .serps file, or its folder, anywhere on the window."
+            .into(),
+        button: choose_button(),
+        icon: Some(Icon::Upload),
     })
+}
+
+// The dashed list where imports land: the last import's result, or a
+// placeholder showing the list fills as you add mods.
+fn conversions(record: &Record, details: bool) -> Block {
+    match last(record, details) {
+        Some(Block::Card(card)) => Block::Card(Card { dashed: true, ..card }),
+        _ => Block::Card(Card {
+            title: Some("Imported mods".into()),
+            subtitle: Some("Nothing imported yet".into()),
+            blocks: vec![Block::Text {
+                text: "Imported mods slot in here as you add them, then join your library.".into(),
+                tone: Tone::Muted,
+            }],
+            dashed: true,
+            ..Card::default()
+        }),
+    }
 }
 
 fn kinds(e: &Entry) -> Vec<Pill> {
@@ -457,13 +468,11 @@ fn library(cx: &Cx, record: &Record, installed: Option<&[AddonInfo]>, editable: 
     }))
 }
 
-// The left pane: the drop/choose card, then the most recent import's result.
-fn importing(cx: &Cx, record: &Record, details: bool) -> Block {
-    let mut col = vec![choose(&cx.profile.name)];
-    col.extend(last(record, details));
+// The left pane: the big drop/choose card, then the dashed list imports land in.
+fn importing(record: &Record, details: bool) -> Block {
     Block::Grid(Grid {
         columns: Columns::Count(1),
-        blocks: col,
+        blocks: vec![choose(), conversions(record, details)],
     })
 }
 
@@ -490,9 +499,9 @@ pub fn view(cx: &Cx, open: bool, details: bool) -> Result<View> {
         blocks.push(library(cx, &record, installed.as_deref(), false)?);
     } else {
         blocks.push(Block::Grid(Grid {
-            columns: Columns::Weights(vec![1.0, 1.2]),
+            columns: Columns::Weights(vec![1.8, 1.0]),
             blocks: vec![
-                importing(cx, &record, details),
+                importing(&record, details),
                 library(cx, &record, installed.as_deref(), true)?,
             ],
         }));
