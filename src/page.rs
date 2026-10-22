@@ -193,8 +193,7 @@ fn team() -> Block {
 fn choose() -> Block {
     Block::DropZone(DropZone {
         title: "Import a mod".into(),
-        text: "Drop a mod's zip, 7z, RAR or .serps file, or its folder, anywhere on the window."
-            .into(),
+        text: "Drop a mod's zip, 7z, RAR or .serps file, or its folder, anywhere on the window.".into(),
         button: choose_button(),
         icon: Some(Icon::Upload),
     })
@@ -443,8 +442,7 @@ fn library(cx: &Cx, record: &Record, installed: Option<&[AddonInfo]>, editable: 
     let loaded = Loaded::read(cx)?;
     let body = if loaded.order.is_empty() {
         Block::Text {
-            text: "No mods imported yet. Drop a mod on the left, or choose one, to add it here."
-                .into(),
+            text: "No mods imported yet. Drop a mod on the left, or choose one, to add it here.".into(),
             tone: Tone::Muted,
         }
     } else {
