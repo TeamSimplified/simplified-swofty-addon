@@ -7,7 +7,7 @@ The **Simplified Importer** is Team Simplified's addon for [Swofty Launcher for 
 - The addon holds what the mod changes from the game's own files: database records, text, archive resources, files and tracks.
 - After an import the addon is on in the active profile, and the launcher switches to **Addons** with the addon highlighted.
 - A mod whose parts are alternatives, such as tyre sets for different seasons, installs every part as an addon with one on. Pick another on **Addons**.
-- The library keeps every mod as imported. **Re-import** makes its addon again, under the same id.
+- Nothing is kept besides the addon: the mod is unpacked only while it converts. To make an addon again, import the mod again; it keeps the same id.
 
 How it works is in [docs/design.md](docs/design.md).
 
@@ -15,13 +15,11 @@ How it works is in [docs/design.md](docs/design.md).
 
 - Team Simplified's logo and a short about. The **Team Simplified** button opens a panel about Team Simplified and the Swofty addon format, with links to their GitHub, the Simplified Suite and the SERPs Launcher.
 - **Choose a mod…** picks zips, 7z and rar archives, `.serps` files and folders, several at once. A drop anywhere on the window does the same.
-- **Last import** has a line per addon of the last import, with its category and what it holds, and its warnings. **Details** shows what became what.
-- **Not converted** lists the mods that could not be made into addons, with the reason. They load through the addon's build step, as mods did before 0.7.0, and each has **Convert again**, **Turn on** or **Turn off**, **Show files** and **Remove from library**.
-- **Converted from your library** lists each mod with its addon, **Show in Addons** and **Re-import**.
+- After an import, the launcher shows the new addon on **Addons**, or a notice with what went wrong. A mod that can't be made into an addon isn't kept.
 
 ## Mods imported before 0.7.0
 
-The library converts into addons once, when the launcher starts, on the first import or on **Convert now** on the page, when the launcher has found the game. Each profile then turns the addons on in its own mod order, on where the mod was on, and puts them where the Simplified Importer loaded its mods in the load order. A profile that hasn't been handed over yet loads its mods through the build step, as before. Mods that fail to convert stay in the library and keep loading through the build step. The library is never deleted. Track packages convert into track addons; the Tracks page is gone.
+The library converts into addons once, when the launcher starts, on the first import or on **Convert now** on the page, when the launcher has found the game. Each profile then turns the addons on in its own mod order, on where the mod was on, and puts them where the Simplified Importer loaded its mods in the load order. A profile that hasn't been handed over yet loads its mods through the build step, as before. Each mod's library copy is deleted once it is an addon. Mods that fail to convert stay in the library and keep loading through the build step. Track packages convert into track addons; the Tracks page is gone.
 
 ## Using it in Swofty Launcher
 

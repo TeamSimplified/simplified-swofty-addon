@@ -137,12 +137,8 @@ The section `mods`, titled `Simplified Importer`, is one of the launcher's big s
 - **Hero.** Team Simplified's mark (`art/simplified-mark.png`, the sidebar's `sections/mods.svg` drawn at half size, written to the cache directory), the title `Simplified Importer`, `By Team Simplified. Mods convert into Swofty addons using the Simplified Importer.`, a pill with the count converted and the `Team Simplified` button.
 - **Team Simplified panel.** The button toggles a card below `Import a mod`, closed at first: who Team Simplified are, what the Simplified Importer does, the Swofty addon format in two sentences, and buttons that open https://github.com/TeamSimplified, https://github.com/TeamSimplified/simplified-suite and https://github.com/TeamSimplified/SERPs-Launcher. `LINKS` in `src/page.rs` holds placeholders for a website and a Discord link, shown once they have a URL.
 - **Import a mod.** A card with `Choose a mod…`: a drop anywhere on the window imports too.
-- **Last import.** The date and files of the last import, a line per set of variants (`<mod>: <n> variants installed as addons; <variant> is on. Pick another on Addons.`), and one line per addon: `Became the addon <name> · <category> · <counts>`, such as `205 car assets`, with `· off` for a variant that is off. Warnings follow in plain words. `Details` shows what became what (the conversion report with op names and paths), and `Hide details` hides it.
-- **Not converted.** Each mod whose conversion failed, with the reason and `Convert again`, `Turn on` or `Turn off`, `Show files` and `Remove from library`.
-- **Converted from your library.** A card per converted mod: the date it converted, its category, kinds, whether the addon is on, or `Removed from Addons`, with `Show in Addons` and `Re-import`.
 - **Credit.** The last block is `Based on Simplified Suite by Team Simplified.`, part of the page, not a fixed footer.
-- **Vanilla.** The page shows the hero, `Last import` and `Converted from your library` without `Import a mod`, `Not converted` or `Re-import`, and a notice to switch profiles to import.
-- **Dates.** Local time, as `22 October 2026, 14:05`.
+- **Vanilla.** The page shows the hero without `Import a mod`, and a notice to switch profiles to import.
 - **Profile cards.** `summary` adds `MODS` with the enabled mods that still load through the build hook, and nothing when there are none.
 - **CLI.** `swofty mods list` shows each library mod with its addon or why it was not converted. `import <path>…` converts as the page does. `remove <id>` deletes a mod from the library and leaves its addon. `enable`, `disable` and `move` change the mods that load through the build hook.
 
@@ -150,12 +146,12 @@ The section `mods`, titled `Simplified Importer`, is one of the launcher's big s
 
 Every mod becomes a standalone Swofty data addon. `src/convert.rs` writes one addon folder for one library mod; `src/importer.rs` installs it and keeps the record.
 
-1. A drop on the window (`import`), `Choose a mod…` (a `picked` event) or `swofty mods import` imports each path into the library and diffs it ([section 4.3](#43-import)).
+1. A drop on the window (`import`), `Choose a mod…` (a `picked` event) or `swofty mods import` unpacks each path into the library and diffs it ([section 4.3](#43-import)). The library copy is only for converting: it is deleted once the addon is installed, and when the mod can't convert.
 2. Each library entry converts into `addon-data/teamsimplified.mods/.convert/<mod id>/`, which `install_addon` installs. The staging folder is deleted after.
 3. Outside the vanilla profile, `set_addon_enabled` turns the addon on in the active profile and the profile records the mod as handed over.
 4. A `picked` event returns `{ "show_addon": "<addon id>" }` for the first addon, and the launcher switches to **Addons** with it highlighted. An import with no addon made returns a notice, and one where every file failed returns an error.
-5. `Re-import` and `Convert again` convert the library copy again and install it over the same addon id. The addon keeps its switch.
-6. Converting compares a mod with the game's own files. Without a game a mod stays in the library with no record entry, loads through the build hook and converts on a later import or `Convert now` with a game. Track packages convert without one.
+5. Importing a mod again converts it again and installs it over the same addon id. The addon keeps its switch.
+6. Converting compares a mod with the game's own files. Without a game, or on a launcher with no addon host calls, a mod is not imported. Track packages convert without a game. Mods left in the library from before (section "Mods imported before 0.7.0" in the README) convert at startup or on `Convert now`, and their copies are deleted once converted.
 7. Report lines that start with `warning:` show as warnings on the page.
 8. A mod already converted keeps its addon id, also when the importer now names its parts differently.
 9. Each conversion writes `logs/convert-<UTC time>-<addon id>.log` in the addon's data folder, one fact per line: the source file, its size and SHA-256, the game build, the file classes, the diff, the ops written per archive and language, each file, resource or removal left out with its reason, warnings, errors and timings, and the addon made. The newest 20 logs are kept, and the home folder shows as `~`.
@@ -177,7 +173,6 @@ Parts of one import that write mostly the same things are variants. Two parts ar
 - Text is `lang.set`. Text a mod fills in with the game's own text is `lang.default`, which never undoes another addon's rename.
 - Team logo texture arrays from `ui_texture*` archives ship in `logos/ui_textures.erp` as the mod has them, with one `erp.merge-slices` each into `shader_package_2025/ui_texture.nefx2.sm51.erp` and `_amd.erp`; the launcher starts from the game's array in `ui_package` and writes only the slices that differ from it. Texture array views (`.texarray`) go in whole with `put-resource`.
 - `kind` lists `database`, `erp`, `text` and `files` as the addon has them.
-- A mod with a shader archive that holds a resource named with `serps`, as Simplified Studio builds them, needs Team Simplified's SERPs Base Files, which add the shared materials and textures Studio mods use. Its `load_after` names the base files' addon (`mod.team-simplified.serps-base-files-for-f1-25` unless the library holds them under another id), and turning the mod on turns that addon on when it is installed, as the Simplified Launcher turns the base files on with such a mod. Without the base files in the library, the report warns.
 - `category` comes from what the mod changes. A track package or mostly track resources is Tracks. 1000 or more records with car resources or team and driver text is Seasons. Mostly car resources is Cars, or Liveries when they are all textures and materials and not tyres. Then Audio, Drivers & teams, Database, UI and Other. The name decides only between Database and Seasons (`season`, `calendar`) and towards Liveries (`livery`).
 
 The record is `addon-data/teamsimplified.mods/importer.json`:

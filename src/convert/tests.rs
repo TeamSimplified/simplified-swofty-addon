@@ -542,7 +542,6 @@ fn a_conversion_writes_a_log_for_developers() {
             "skipped resource eaid://tools_package/default/serps in {OPAQUE}: Simplified Studio adds it to every shader archive"
         ),
         "gpu: 1 resource(s) the generic and AMD shader archives both carry load once, 0 of them differ",
-        "needs: mod.team-simplified.serps-base-files-for-f1-25 (not in the library)",
         "ops/erp.json: erp.overlay erp/overlay-2.erp into 2025_asset_groups/vfx_package/common.erp (1 resource(s)",
         "[ops]",
         "ops/database.json: 1 put-record, 1 remove-record",
@@ -756,57 +755,6 @@ fn each_archive_of_a_mod_keeps_its_own_copies() {
         ]
     );
     assert!(reported(&c, "archives: 5 resource(s) → erp.overlay"));
-}
-
-#[test]
-fn a_studio_mod_loads_after_the_serps_base_files() {
-    let case = Case::new("base");
-    let vfx = "2025_asset_groups/vfx_package/common.erp";
-    let shader = resource("eaid://shader_package/opaque", "Shader", &[b"code"]);
-    case.stock(OPAQUE, &archive(vec![shader.clone()]));
-    case.stock(
-        vfx,
-        &archive(vec![texture("eaid://vfx_package/a.tif.image", b"a")]),
-    );
-    let studio = |extra: Resource| {
-        archive(vec![
-            shader.clone(),
-            resource("eaid://tools_package/default/serps", "Marker", &[b"x"]),
-            extra,
-        ])
-    };
-    let car = texture("eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image", b"car");
-    let p = case.import(&[(OPAQUE, studio(car.clone()))], &serps("Genesis", "1"));
-    let game: &dyn GameFiles = &case.game;
-    let (c, out) = case.convert(&p, Some(game));
-    assert_eq!(c.needs, [merge::BASE_ADDON]);
-    assert!(reported(&c, "warning: made with Simplified Studio"));
-    let m = AddonManifest::load(&out).unwrap();
-    assert_eq!(m.load_after, [merge::BASE_ADDON]);
-    std::fs::remove_dir_all(&out).ok();
-
-    let base_src = case.root.join("base");
-    write(
-        &base_src.join("mod.serps"),
-        br#"{"mod_name":"SERPs Base Files for F1 25","author":"Team Simplified","version":"v4.1"}"#,
-    );
-    write(
-        &base_src.join("F1 25").join(vfx),
-        &archive(vec![
-            texture("eaid://vfx_package/a.tif.image", b"a"),
-            resource(merge::BASE_MARKER, "Marker", &[b"x"]),
-        ]),
-    );
-    let base = case
-        .library()
-        .import(&base_src, Some(game), &mut |_, _| {})
-        .unwrap();
-    let (c, _) = case.convert(&p, Some(game));
-    let id = addon_id(&base.packages[0]);
-    assert_eq!(id, merge::BASE_ADDON);
-    assert_eq!(c.needs, [id]);
-    assert!(reported(&c, "needs: SERPs Base Files for F1 25 load before it"));
-    assert!(!c.report.iter().any(|l| l.starts_with("warning:")));
 }
 
 #[test]

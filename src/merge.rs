@@ -37,22 +37,6 @@ pub struct Merged {
 }
 
 pub const MARKER: &str = "eaid://tools_package/";
-// Team Simplified's SERPs Base Files carry this marker. The Simplified Launcher turns
-// them on for any mod with a shader archive that names "serps", and they add the
-// shared materials and textures Simplified Studio mods use.
-pub const BASE_MARKER: &str = "eaid://tools_package/default/serps_basefiles";
-pub const BASE_ADDON: &str = "mod.team-simplified.serps-base-files-for-f1-25";
-
-pub fn needs_base(diff: &Diff) -> bool {
-    diff.archives.iter().any(|a| {
-        carrier(&a.path)
-            && a.changed
-                .iter()
-                .chain(&a.added)
-                .any(|uri| uri.contains("serps") && uri != BASE_MARKER)
-    })
-}
-
 // Simplified Studio adds this vehicle shadow material to every shader package it
 // builds, beside the marker (SerpsOverlay.cs in the Simplified Suite). Loaded at boot
 // it would replace the game's own shadow material, so it is left out too.

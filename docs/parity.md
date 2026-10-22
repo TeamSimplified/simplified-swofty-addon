@@ -35,7 +35,7 @@ How the Simplified Importer's conversion compares with how Team Simplified's Sim
 | 8 | ` -c` and ` -x` | ` -c` names a category, ` -x` makes parts in one category exclusive (`actions.list_mods:195-236`) | Both left out of the part's name (`package.rs:465-480`); parts that write mostly the same things are variants with one on (`importer.rs:704`) | different: exclusivity comes from overlap, not ` -x` |
 | 9 | Load order | v3: name order of the mods folder (`actions.list_mods:309-370`). v4: tick order | The profile's addon order; migration keeps each profile's mod order | identical in effect |
 | 10 | Blocked files | `f1_25.exe` and its spellings, the anticheat launcher and `preloader_l.dll`, names starting `eaanticheat`, `eajavelin`, `preloader_`, except `eaanticheat.splash.png` (`actions.prepare_mods:30-52`). v4 blocks nothing | `.exe`, `.dll`, `.asi` and names starting `eaanticheat` were skipped | **fixed** (`eajavelin`, `preloader_` added): same commit as row 6 (`package.rs:32-38`). Other `.dll` and `.asi` files stay skipped by design (row 46) |
-| 11 | Re-import | Replaces the library copy (`ModImport.cs:146-181`) | Same (`library.rs:336-353`) | identical |
+| 11 | Re-import | Replaces the library copy (`ModImport.cs:146-181`) | Importing the mod again converts it again over the same addon id; no library copy is kept | different by design |
 | 12 | A folder with no game files | v4 imports it and installs nothing (`ModStaging.cs:88`) | Refused with a reason | different by design |
 
 ### Database
@@ -83,7 +83,7 @@ How the Simplified Importer's conversion compares with how Team Simplified's Sim
 
 | # | Behaviour | Simplified Launcher | Ours | Status |
 |---|---|---|---|---|
-| 38 | When they apply | Turned on whenever a selected mod has a shader archive with a resource named with `serps`, pinned at the top (`actions.archive_reader:365-470`, `webui/app.js` `autoEnableSerpsBasefiles`) | Converted like any mod, with no tie to the mods that need them | **fixed**: `feat: load simplified studio mods after the serps base files and turn them on` (`merge.rs:39-54`, `convert.rs:619-646`, `importer.rs:228-244`). Such a mod's `load_after` names the base files' addon, turning the mod on turns them on, and the report warns when the library lacks them |
+| 38 | When they apply | Turned on whenever a selected mod has a shader archive with a resource named with `serps`, pinned at the top (`actions.archive_reader:365-470`, `webui/app.js` `autoEnableSerpsBasefiles`) | Converted like any mod, with no tie to the mods that need them | different: the importer does not handle them yet |
 | 39 | Their content | `vfx_package/common.erp`, both `teams/common.erp`, `EAAntiCheat.splash.png` | Converted per resource and file | identical (harness) |
 
 ### Files

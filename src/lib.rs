@@ -30,8 +30,6 @@ pub const SECTION: &str = "mods";
 const MANIFEST: &str = include_str!("../swofty.json");
 const IMPORT: &str = "import";
 const ENABLE: &str = "enable";
-const SHOW: &str = "show:";
-const REMOVE: &str = "remove:";
 
 // Mods built from the same tools write many records and strings with the same
 // values. A write that repeats the value already in place is left out, so it is
@@ -129,7 +127,6 @@ pub struct Slot {
 pub struct Simplified {
     manifest: AddonManifest,
     open: Mutex<bool>,
-    details: Mutex<bool>,
 }
 
 impl Default for Simplified {
@@ -143,7 +140,6 @@ impl Simplified {
         Self {
             manifest: AddonManifest::parse(MANIFEST).expect("the built-in manifest is valid"),
             open: Mutex::new(false),
-            details: Mutex::new(false),
         }
     }
 
@@ -241,20 +237,6 @@ pub(crate) fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-fn date(secs: u64) -> String {
-    stamp(secs, &chrono::Local)
-}
-
-fn stamp<Tz: chrono::TimeZone>(secs: u64, tz: &Tz) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    tz.timestamp_opt(secs as i64, 0)
-        .single()
-        .map(|t| t.format("%-d %B %Y, %H:%M").to_string())
-        .unwrap_or_default()
-}
-
 impl Addon for Simplified {
     fn manifest(&self) -> &AddonManifest {
         &self.manifest
@@ -275,7 +257,7 @@ impl Addon for Simplified {
             return Err(Error::NoSection(section.into()));
         }
         let flag = |m: &Mutex<bool>| *m.lock().unwrap_or_else(|e| e.into_inner());
-        page::view(cx, flag(&self.open), flag(&self.details))
+        page::view(cx, flag(&self.open))
     }
 
     fn event(&self, cx: &Cx, section: &str, event: Event) -> Result<Effect> {
@@ -532,17 +514,11 @@ impl Simplified {
         let lock = |m: &Mutex<bool>| *m.lock().unwrap_or_else(|e| e.into_inner());
         let before = page::Panels {
             team: lock(&self.open),
-            details: lock(&self.details),
         };
         let mut panels = before.clone();
         let effect = page::event(cx, event, conv, &mut panels)?;
-        for (m, (was, now)) in [
-            (&self.open, (before.team, panels.team)),
-            (&self.details, (before.details, panels.details)),
-        ] {
-            if was != now {
-                *m.lock().unwrap_or_else(|e| e.into_inner()) = now;
-            }
+        if before.team != panels.team {
+            *self.open.lock().unwrap_or_else(|e| e.into_inner()) = panels.team;
         }
         Ok(effect.unwrap_or(Effect::None))
     }
@@ -571,11 +547,7 @@ mod merge_tests {
     use super::*;
 
     #[test]
-    fn dates_show_in_local_time() {
-        let at = 1_792_629_000;
-        let melbourne = chrono::FixedOffset::east_opt(11 * 3600).unwrap();
-        assert_eq!(stamp(at, &melbourne), "22 October 2026, 11:30");
-        assert_eq!(stamp(at, &chrono::Utc), "22 October 2026, 00:30");
+    fn counts_read_as_words() {
         assert_eq!(plural(1, "mod", "mods"), "1 mod");
         assert_eq!(plural(16, "mod", "mods"), "16 mods");
     }
