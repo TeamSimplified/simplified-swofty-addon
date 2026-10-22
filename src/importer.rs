@@ -1539,18 +1539,25 @@ mod tests {
         std::fs::remove_dir_all(&host.root).ok();
     }
 
+    // The page's cards in reading order, through the panes' grids but not into a
+    // card's own blocks.
     fn cards(view: &swofty_addon::view::View) -> Vec<String> {
-        match &view.body {
-            Body::Blocks(blocks) => blocks
-                .iter()
-                .filter_map(|b| match b {
-                    Block::Card(c) => c.title.clone(),
-                    Block::Hero(h) => Some(h.title.clone()),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
+        fn walk(blocks: &[Block], out: &mut Vec<String>) {
+            for b in blocks {
+                match b {
+                    Block::Card(c) => out.extend(c.title.clone()),
+                    Block::Hero(h) => out.push(h.title.clone()),
+                    Block::DropZone(d) => out.push(d.title.clone()),
+                    Block::Grid(g) => walk(&g.blocks, out),
+                    _ => {}
+                }
+            }
         }
+        let mut out = Vec::new();
+        if let Body::Blocks(blocks) = &view.body {
+            walk(blocks, &mut out);
+        }
+        out
     }
 
     fn texts(blocks: &[Block], out: &mut Vec<String>) {
@@ -1651,12 +1658,7 @@ mod tests {
         let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
         assert_eq!(
             cards(&view),
-            [
-                "Mod Importer",
-                "Import a mod",
-                "Last import",
-                "Converted from your library"
-            ]
+            ["Mod Importer", "Import a mod", "Last import", "Your library"]
         );
         assert!(view.notices.is_empty(), "{:?}", view.notices);
         let text = all_text(&view);
@@ -1725,8 +1727,8 @@ mod tests {
         let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
         assert_eq!(
             cards(&view)[..3],
-            ["Mod Importer", "Import a mod", "Team Simplified"],
-            "the panel opens below the import card"
+            ["Mod Importer", "Team Simplified", "Import a mod"],
+            "the panel opens below the header, above the panes"
         );
         assert!(
             !all_text(&view).iter().any(|t| t.contains("https://")),
@@ -1757,10 +1759,7 @@ mod tests {
         })
         .unwrap();
         let view = with(&host, "vanilla", |cx| addon.view(cx, SECTION)).unwrap();
-        assert_eq!(
-            cards(&view),
-            ["Mod Importer", "Last import", "Converted from your library"]
-        );
+        assert_eq!(cards(&view), ["Mod Importer", "Your library"]);
         let text = all_text(&view);
         assert!(text.contains(&"[Show in Addons]".to_owned()));
         assert!(!text.contains(&"[Re-import]".to_owned()), "{text:?}");
@@ -1805,7 +1804,8 @@ mod tests {
             ["logos"]
         );
         let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
-        assert!(cards(&view).contains(&"Not converted".to_owned()));
+        let text = all_text(&view);
+        assert!(text.iter().any(|t| t.starts_with("Not converted")), "{text:?}");
         assert!(
             view.notices.is_empty(),
             "a failed mod is not pending: {:?}",
