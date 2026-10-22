@@ -649,6 +649,57 @@ fn a_resource_a_mod_carries_twice_keeps_its_last_copy() {
 }
 
 #[test]
+fn a_resource_two_archives_change_differently_keeps_a_copy_in_each() {
+    let case = Case::new("split");
+    let logo = "eaid://environment_package/core_assets/shared_textures/myteam/logo.tif.image";
+    let same = "eaid://f1_2025_vehicle_package/shared/same.tif.image";
+    let common = "2025_asset_groups/f1_2025_vehicle_package/teams/common.erp";
+    let fom = "2025_asset_groups/f1_2025_vehicle_package/teams/common_fom.erp";
+    let kept = "eaid://environment_package/core_assets/shared_textures/myteam/kept.tif.image";
+    let both =
+        |a: &[u8], b: &[u8], c: &[u8]| archive(vec![texture(logo, a), texture(same, b), texture(kept, c)]);
+    for rel in [common, fom] {
+        case.stock(rel, &both(b"stock", b"stock", b"stock"));
+    }
+    let p = case.import(
+        &[
+            (common, both(b"in common", b"new", b"changed")),
+            (fom, both(b"in fom", b"new", b"stock")),
+        ],
+        &serps("Logos", "1"),
+    );
+    let game: &dyn GameFiles = &case.game;
+    let (c, out) = case.convert(&p, Some(game));
+    let (_, ops) = addon_ops(&out);
+    let mut targets: Vec<(Vec<String>, Vec<String>)> = ops
+        .iter()
+        .filter_map(|op| match op {
+            AssetOp::Erp(ErpOp::Overlay { erps, source }) => {
+                let f = ErpFile::open(&source.resolve(&out).unwrap()).unwrap();
+                Some((
+                    erps.clone(),
+                    f.erp.resources.iter().map(|r| r.name.clone()).collect(),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    targets.sort();
+    assert_eq!(
+        targets,
+        [
+            (vec![common.to_owned()], vec![logo.to_owned(), kept.to_owned()]),
+            (vec![fom.to_owned()], vec![logo.to_owned()]),
+            (vec![merge::BOOT_ERP.to_owned()], vec![same.to_owned()]),
+        ]
+    );
+    assert!(reported(
+        &c,
+        "archives: 2 resource(s) the mod changes differently"
+    ));
+}
+
+#[test]
 fn team_logo_arrays_ship_merged_with_the_game_s_arrays() {
     let case = Case::new("logos");
     let image = format!("{LOGO_ARRAY}.image");

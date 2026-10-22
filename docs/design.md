@@ -102,6 +102,7 @@ The build hook merges only the mods a profile has not handed over to their addon
 - Resource removals are `erp.remove-resource` ops on the archive the mod removed them from, and put every `erp` op on the build route. A removal of a record or resource an earlier mod already removed is left out.
 - Database records are written as raw `db.put-record` values from `diff/<build key>.db`. Archive and file sources are `{ "root": "data", "path": "library/<id>/files/<game path>" }`.
 - Every resource a mod adds or changes, in any archive, is put into `2025_asset_groups/vfx_package/common.erp`. Its overlay loads with the boot groups that list that archive, before any car or UI group, and overrides the game's copies, as Simplified Studio's shader archives do. A replacement may change a resource's size, which a replacement in its own archive can't at runtime. With a launcher that writes one overlay archive per origin, each mod has its own, numbered in load order.
+- A resource that one archive of a mod changes and another archive of the same mod holds with other content, outside shader archives, goes into an overlay on each archive that changes it instead, as each of the mod's archives replaces the game's whole.
 - A write that repeats the value already in place, from an earlier mod, is left out.
 
 #### Shader archive carriers
