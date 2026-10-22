@@ -16,7 +16,7 @@ How Simplified for Swofty, Team Simplified's addon, uses its Simplified Importer
 
 Any mod works, as copying it into the game folder would.
 
-- A package is a zip archive under any name, `.serps` included, a 7z or RAR archive, or a folder.
+- A package is a zip archive, a 7z or RAR archive, or a folder. A `.serps` file is refused: it is Simplified Studio's description of a mod, not the mod.
 - Dropped on the launcher, a folder or zip is claimed when it holds `mod.serps` at its root, a folder whose name starts with `F1 25`, or a game folder (see the content root below) at most three folders down. 7z and RAR archives are claimed by their extension.
 - Zip archives may use Deflate, Deflate64, BZip2, LZMA, XZ, PPMd or Zstandard. 7z archives are read by `sevenz-rust2`, and RAR archives of every version, RAR 1.3 to 7, by `rars`. An archive either reader can't read is unpacked by 7-Zip or UnRAR from `PATH` or where their installers put them, when one is installed.
 - `mod.serps` at the package root is JSON: `mod_name` or `name` (`mod_name` wins), `author`, `version`, `game` (for example `F1® 25`), `game_version` (for example `1.0.141.7865`), and `studio_version` from Simplified Studio. Every field is optional. The reader accepts a UTF-8 byte order mark, comments and trailing commas.
@@ -132,10 +132,10 @@ Team rename packages point the team name records at keys of their own, such as `
 
 The section `mods`, titled `Simplified Importer`, is one of the launcher's big sidebar sections. Its body is blocks:
 
-- **Header.** Subtitle `Adapt your copy and paste mods to work with the Swofty Launcher.` Action `Choose a mod…`, a picker for `.zip`, `.7z`, `.rar` and `.serps` files and folders, several at once.
+- **Header.** Subtitle `Adapt your copy and paste mods to work with the Swofty Launcher.` Action `Choose a mod…`, a picker for `.zip`, `.7z` and `.rar` files and folders, several at once.
 - **Notices.** The addon is off in this profile (button `Turn on`). The vanilla profile is active. The launcher has no addon host calls. Library mods are not converted yet and convert on the next start, or this profile is not handed over yet (button `Convert now`).
 - **Import a mod.** A card with `Choose a mod…`: a drop anywhere on the window imports too.
-- **Credit.** The last block is `Based on Simplified Suite by Team Simplified.`, part of the page, not a fixed footer.
+- **Credit.** The last block is `Based on the Simplified Suite by Team Simplified.`, part of the page, not a fixed footer.
 - **Vanilla.** The page shows no `Import a mod`, only a notice to switch profiles to import.
 - **Profile cards.** `summary` adds `MODS` with the enabled mods that still load through the build hook, and nothing when there are none.
 - **CLI.** `swofty mods list` shows each library mod with its addon or why it was not converted. `import <path>…` converts as the page does. `remove <id>` deletes a mod from the library and leaves its addon. `enable`, `disable` and `move` change the mods that load through the build hook.

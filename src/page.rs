@@ -12,14 +12,14 @@ use crate::{ENABLE, IMPORT, NoProgress, Result, err, plural};
 pub const CONVERT: &str = "convert-library";
 pub const SHOW_ADDON: &str = "show-addon:";
 const SUBTITLE: &str = "Adapt your copy and paste mods to work with the Swofty Launcher.";
-pub const FOOTER: &str = "Based on Simplified Suite by Team Simplified.";
+pub const FOOTER: &str = "Based on the Simplified Suite by Team Simplified.";
 pub fn choose_button() -> Button {
     Button {
         icon: Some(Icon::Upload),
         style: Style::Primary,
         kind: ButtonKind::Pick {
             title: "Choose a mod".into(),
-            extensions: vec!["zip".into(), "7z".into(), "rar".into(), "serps".into()],
+            extensions: vec!["zip".into(), "7z".into(), "rar".into()],
             folders: true,
             multiple: true,
         },
@@ -79,7 +79,7 @@ fn notices(cx: &Cx, pending: &importer::Pending) -> Vec<Notice> {
 fn choose() -> Block {
     Block::DropZone(DropZone {
         title: "Import a mod".into(),
-        text: "Drop a mod's zip, 7z, RAR or .serps file, or its folder, anywhere on the window.".into(),
+        text: "Drop a mod's zip, 7z or RAR file, or its folder, anywhere on the window.".into(),
         button: choose_button(),
         icon: Some(Icon::Upload),
     })

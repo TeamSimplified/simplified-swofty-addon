@@ -2,7 +2,7 @@
 
 **Simplified for Swofty** is Team Simplified's addon for [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). Its **Simplified Importer** turns any F1 25 mod into a standalone Swofty addon. The importer shows as **Simplified Importer** under **Simplified for Swofty** in the launcher's sidebar and as `swofty mods` on the command line.
 
-- Works with any mod: drop its zip, 7z, rar, `.serps` or folder on the launcher, or choose it on the Simplified Importer page. The game folders can sit at the top or up to three folders down, or in a folder named like `F1 25`. Mods made with Simplified Studio (`.serps`) and community track zips import too.
+- Works with any mod: drop its zip, 7z, rar or folder on the launcher, or choose it on the Simplified Importer page. The game folders can sit at the top or up to three folders down, or in a folder named like `F1 25`. Mods made with Simplified Studio (`.serps`) and community track zips import too.
 - Each mod becomes a Swofty data addon on the **Addons** page, with its own switch, place in the load order and conflicts. Lower in the list wins.
 - The addon holds what the mod changes from the game's own files: database records, text, archive resources, files and tracks.
 - After an import the addon is on in the active profile, and the launcher switches to **Addons** with the addon highlighted.
@@ -13,7 +13,7 @@ How it works is in [docs/design.md](docs/design.md).
 
 ## The Simplified Importer page
 
-- **Choose a mod…** picks zips, 7z and rar archives, `.serps` files and folders, several at once. A drop anywhere on the window does the same.
+- **Choose a mod…** picks zips, 7z and rar archives and folders, several at once. A drop anywhere on the window does the same.
 - After an import, the launcher shows the new addon on **Addons**, or a notice with what went wrong. A mod that can't be made into an addon isn't kept.
 
 ## Mods imported before 0.7.0
