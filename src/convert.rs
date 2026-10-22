@@ -623,12 +623,6 @@ impl Writer {
             ));
         }
         for a in &diff.archives {
-            let left: Vec<&String> = a
-                .changed
-                .iter()
-                .chain(&a.added)
-                .filter(|uri| !merge::loaded(a, uri) && !texarray::carrier(&a.path))
-                .collect();
             log.line(format!(
                 "archive {}: {} changed, {} added, {} removed resource(s)",
                 a.path,
@@ -636,20 +630,6 @@ impl Writer {
                 a.added.len(),
                 a.removed.len()
             ));
-            for uri in left {
-                log.line(format!(
-                    "skipped resource {uri} in {}: Simplified Studio adds it to every shader archive",
-                    a.path
-                ));
-            }
-            if texarray::carrier(&a.path) {
-                for uri in a.changed.iter().chain(&a.added).filter(|u| merge::studio_only(u)) {
-                    log.line(format!(
-                        "skipped resource {uri} in {}: Simplified Studio adds it to every shader archive",
-                        a.path
-                    ));
-                }
-            }
         }
         for t in &diff.text {
             log.line(format!(
@@ -810,24 +790,6 @@ impl Writer {
             self.report.push(format!(
                 "archives: {} resource(s) removed → remove-resource on their own archives",
                 merged.removals
-            ));
-        }
-        let studio: usize = diff
-            .archives
-            .iter()
-            .map(|a| {
-                a.changed
-                    .iter()
-                    .chain(&a.added)
-                    .filter(|uri| {
-                        uri.starts_with(merge::MARKER) || merge::carrier(&a.path) && merge::studio_only(uri)
-                    })
-                    .count()
-            })
-            .sum();
-        if studio > 0 {
-            self.report.push(format!(
-                "archives: {studio} Simplified Studio marker or vehicle shadow resource(s) left out"
             ));
         }
         if t.logos > 0 {

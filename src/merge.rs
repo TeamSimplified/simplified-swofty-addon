@@ -28,11 +28,12 @@ pub struct Merged {
 
 pub const MARKER: &str = "eaid://tools_package/";
 // Simplified Studio adds this vehicle shadow material to every shader package it
-// builds, beside the marker (SerpsOverlay.cs in the Simplified Suite). Loaded at boot
-// it would replace the game's own shadow material, so it is left out too.
+// builds, beside the marker (SerpsOverlay.cs in the Simplified Suite). Both load with
+// the rest of the mod, as they do from the shader package.
 const SHADOW: &str = "/shared/shadows/materials/f1_vehicle_shadow.material";
 
-// What Simplified Studio adds to every shader package it builds.
+// What Simplified Studio adds to every shader package it builds. Every Studio mod
+// writes the same copies, so they are not conflicts.
 pub fn studio_only(uri: &str) -> bool {
     uri.starts_with(MARKER) || uri.ends_with(SHADOW)
 }
@@ -41,11 +42,9 @@ pub fn carrier(rel: &str) -> bool {
     rel.starts_with("shader_package")
 }
 
-// Resources added to ui_texture archives are merged across mods by texarray::build,
-// and Simplified Studio's marker does nothing in the game.
+// Texture arrays in ui_texture archives merge slice by slice instead.
 pub fn loaded(a: &crate::diff::Archive, uri: &str) -> bool {
-    let studio = uri.starts_with(MARKER) || carrier(&a.path) && studio_only(uri);
-    !(texarray::carrier(&a.path) && texarray::merged_by_slice(uri) || studio)
+    !(texarray::carrier(&a.path) && texarray::merged_by_slice(uri))
 }
 
 pub fn key(k: u64) -> String {
@@ -143,7 +142,11 @@ pub fn targets(diff: &Diff) -> Vec<String> {
             .map(|k| key(*k)),
     );
     for a in &diff.archives {
-        let written = a.changed.iter().chain(&a.added).filter(|uri| loaded(a, uri));
+        let written = a
+            .changed
+            .iter()
+            .chain(&a.added)
+            .filter(|uri| loaded(a, uri) && !studio_only(uri));
         out.extend(written.map(|uri| format!("{uri} in {BOOT_ERP}")));
         out.extend(a.removed.iter().map(|uri| format!("{uri} in {}", a.path)));
     }
@@ -293,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn studio_s_shadow_material_is_left_out_of_shader_archives() {
+    fn studio_s_marker_and_shadow_material_load_with_the_mod() {
         let shadow = "eaid://f1_2025_vehicle_package/shared/shadows/materials/f1_vehicle_shadow.material";
         let car = "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image";
         let diff = Diff {
@@ -328,20 +331,21 @@ mod tests {
                 _ => None,
             })
             .collect();
+        let opaque = "library/m/files/shader_package_2025/object_opaque.nefx2.sm51.erp";
         assert_eq!(
             puts,
             [
-                (
-                    car,
-                    "library/m/files/shader_package_2025/object_opaque.nefx2.sm51.erp"
-                ),
+                (shadow, opaque),
+                (shadow, opaque),
+                (car, opaque),
+                ("eaid://tools_package/default/serps", opaque),
                 (
                     shadow,
                     "library/m/files/2025_asset_groups/f1_2025_vehicle_package/shared/shared.erp"
                 ),
             ]
         );
-        assert_eq!(merged.carried, 1);
+        assert_eq!(merged.carried, 4);
         assert!(
             !targets(&diff)
                 .iter()
@@ -435,7 +439,7 @@ mod tests {
         assert!(targets(&d).is_empty());
         assert_eq!(clashes(&[Some(&d), Some(&d)]), []);
         let merged = ops("m", &d, &Gvdb::default());
-        assert_eq!((merged.resources, merged.carried), (0, 0));
+        assert_eq!((merged.resources, merged.carried), (1, 1));
     }
 
     #[test]

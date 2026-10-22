@@ -588,13 +588,16 @@ fn archive_changes_become_one_overlay_and_remove_resource_ops() {
     assert_eq!(m.version.to_string(), "2.1.0");
     let key = |erp: &str, uri: &str| (erp.to_owned(), uri.to_owned());
     let boot = merge::BOOT_ERP;
+    let marker = "eaid://tools_package/default/serps";
     assert_eq!(
         got.resources.keys().cloned().collect::<Vec<_>>(),
         [
             key(CAR, &uri("old")),
+            key(boot, shadow),
             key(boot, genesis),
             key(boot, &uri("decal")),
             key(boot, &uri("paint")),
+            key(boot, marker),
         ]
     );
     assert_eq!(got.resources[&key(CAR, &uri("old"))], None);
@@ -608,9 +611,11 @@ fn archive_changes_become_one_overlay_and_remove_resource_ops() {
     assert_eq!(overlays.len(), 1);
     let overlay = ErpFile::open(&out.join(overlay_name(0))).unwrap();
     let names: Vec<&str> = overlay.erp.resources.iter().map(|r| r.name.as_str()).collect();
-    assert_eq!(names, [uri("paint").as_str(), &uri("decal"), genesis]);
-    assert!(reported(&c, "archives: 3 resource(s) → erp.overlay"));
-    assert!(reported(&c, "archives: 2 Simplified Studio marker"));
+    assert_eq!(
+        names,
+        [uri("paint").as_str(), &uri("decal"), genesis, marker, shadow]
+    );
+    assert!(reported(&c, "archives: 5 resource(s) → erp.overlay"));
     assert!(reported(&c, "archives: 1 resource(s) removed"));
 }
 

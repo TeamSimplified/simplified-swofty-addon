@@ -110,7 +110,7 @@ Simplified Studio packages carry a mod's textures and models in archives under `
 
 - Their resources load with `common.erp` like every other resource a mod adds or changes.
 - Team logo texture arrays carried in `ui_texture*` archives are merged across every enabled mod; anything else those archives add loads with the mod's own archive. Each `.texarray.image` starts from the game's own array, from the first of eight `ui_package` archives that holds it. Fragment 1 is split into the array's slices, and each mod's slices that differ from the game's go in, later mods winning. An array built for an older game, with fewer slices of the same format and size, merges over the slices it has. An array of another format is used whole, and the build warns. The result is written to `cache/addons/teamsimplified.mods/ui_textures.erp` and put into `common.erp` with the addon as its origin, so it loads as an overlay of its own, apart from every mod's. Ported from the Simplified Launcher's `merge_resources.py` and the Team Editor's logo code.
-- Simplified Studio's `eaid://tools_package/` marker is left out, and so is the `…/shared/shadows/materials/f1_vehicle_shadow.material` it adds to every shader package, which would otherwise replace the game's vehicle shadow material.
+- Simplified Studio's `eaid://tools_package/default/serps` marker and the `…/shared/shadows/materials/f1_vehicle_shadow.material` it adds to every shader package load with the rest of the mod, as they do from the shader package. They are not conflicts between mods.
 
 #### Text a package fills in
 
