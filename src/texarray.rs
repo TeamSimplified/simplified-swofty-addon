@@ -16,10 +16,14 @@ use crate::{Result, err, io_err};
 
 // Team logos sit in texture arrays that mods carry in the ui_texture shader
 // archives. Each mod's arrays are compared with the game's own slice by slice, and
-// the slices that differ are combined into one archive, later mods winning. It loads
-// with the boot archive as an overlay of its own, apart from every mod's, because
-// the build hook gives it the addon as its origin.
-pub const UI_ERP: &str = crate::merge::BOOT_ERP;
+// the slices that differ are combined into one archive, later mods winning. The
+// result goes into both GPU builds of the ui_texture shader archive, as the
+// Simplified Launcher writes its merged arrays there; delivered through the boot
+// overlay instead, shader-carried resources never finish loading.
+pub const UI_ERPS: [&str; 2] = [
+    "shader_package_2025/ui_texture.nefx2.sm51.erp",
+    "shader_package_2025/ui_texture.nefx2.sm51_amd.erp",
+];
 pub const MERGED: &str = "ui_textures.erp";
 const IMAGE: &str = ".texarray.image";
 const STOCK: [&str; 8] = [
@@ -249,15 +253,17 @@ pub fn build(game: &dyn GameFiles, carried: &[Carried], out: &Path) -> Result<Bu
     let (header, version) = header.expect("set with the first resource");
     built.ops = resources
         .iter()
-        .map(|r| {
-            AssetOp::Erp(ErpOp::PutResource {
-                erp: UI_ERP.into(),
-                resource: r.name.clone(),
-                source: Source {
-                    root: Root::Cache,
-                    path: MERGED.into(),
-                },
-                rename: None,
+        .flat_map(|r| {
+            UI_ERPS.iter().map(|erp| {
+                AssetOp::Erp(ErpOp::PutResource {
+                    erp: (*erp).into(),
+                    resource: r.name.clone(),
+                    source: Source {
+                        root: Root::Cache,
+                        path: MERGED.into(),
+                    },
+                    rename: None,
+                })
             })
         })
         .collect();
@@ -442,7 +448,11 @@ mod tests {
                 _ => panic!("only resource puts"),
             })
             .collect();
-        assert_eq!(targets, [(UI_ERP, MERGED), (UI_ERP, MERGED)]);
+        let [sm51, amd] = UI_ERPS;
+        assert_eq!(
+            targets,
+            [(sm51, MERGED), (amd, MERGED), (sm51, MERGED), (amd, MERGED)]
+        );
         let file = ErpFile::open(&out).unwrap();
         let srv = file.load(file.erp.find(LOGOS).unwrap()).unwrap();
         assert_eq!(srv.fragments[0].data().unwrap(), b"srv c");

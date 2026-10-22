@@ -367,9 +367,9 @@ impl Addon for Simplified {
         let ui = texarray::build(game, &carried, &cx.cache_dir.join(texarray::MERGED))?;
         if !ui.ops.is_empty() {
             batch.lines.push(format!(
-                "ui textures: {} resource(s) load with {}",
+                "ui textures: {} resource(s) go into {}",
                 ui.ops.len(),
-                texarray::UI_ERP
+                texarray::UI_ERPS.join(" and ")
             ));
         }
         batch.lines.extend(ui.lines);
