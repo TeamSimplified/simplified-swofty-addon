@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use swofty_addon::launcher::{AddonStore, Cx, Progress, TaskItem, TaskList, TaskState};
-use swofty_addon::manifest::{Category, Kind};
+use swofty_addon::manifest::{AddonManifest, Category, Kind, MANIFEST_FILE};
 
 use crate::library::{Library, Package};
 use crate::{Loaded, Result, Slot, State, err, io_err, package};
@@ -410,6 +410,55 @@ fn drop_converted(cx: &Cx, library: &Library, record: &Record) -> Result<()> {
     Ok(())
 }
 
+// Mods converted before 0.10.0 were flagged for the base files only as Studio or My Team
+// mods, and all carried ID as their origin: each is flagged from its import report and
+// its manifest given the origin the launcher labels it by.
+fn relabel(cx: &Cx, mut record: Record) -> Result<Record> {
+    let Some(addons) = cx.addons() else {
+        return Ok(record);
+    };
+    let dirs: BTreeMap<String, PathBuf> = addons.list()?.into_iter().map(|a| (a.id, a.dir)).collect();
+    let mut changed = false;
+    for made in record.mods.values_mut().filter_map(|e| e.made.as_mut()) {
+        let Some(dir) = dirs.get(&made.id) else { continue };
+        if !made.base {
+            let report = std::fs::read_to_string(dir.join(crate::convert::REPORT)).unwrap_or_default();
+            made.base = report.contains(crate::convert::CARRIED);
+            changed |= made.base;
+        }
+        let path = dir.join(MANIFEST_FILE);
+        let Ok(text) = std::fs::read(&path) else { continue };
+        let Ok(mut m) = serde_json::from_slice::<AddonManifest>(&text) else {
+            continue;
+        };
+        let tool = if made.base { crate::ID } else { crate::COPY_PASTE };
+        let Some(origin) = m.origin.as_mut() else { continue };
+        let relabelled = origin.tool != tool;
+        origin.tool = tool.into();
+        // "Converted from <file> by the Simplified Importer: <counts>." keeps its counts.
+        let described: Option<String> = m.description.as_deref().and_then(|d| {
+            let d = d.strip_prefix("Converted from ")?;
+            let rest = d
+                .split_once(" by the Simplified Importer")
+                .map_or(d, |(_, rest)| rest);
+            Some(rest.trim_start_matches([':', '.']).trim().to_owned())
+        });
+        let redescribed = described.is_some();
+        if let Some(d) = described {
+            m.description = (!d.is_empty()).then_some(d);
+        }
+        if !relabelled && !redescribed {
+            continue;
+        }
+        let json = serde_json::to_vec_pretty(&m).expect("serialisable");
+        std::fs::write(&path, json).map_err(io_err(&path))?;
+    }
+    if changed {
+        record.save(cx.data_dir)?;
+    }
+    Ok(record)
+}
+
 // The startup event: converts what is pending within the budget, and says so.
 pub fn startup(
     cx: &Cx,
@@ -420,7 +469,7 @@ pub fn startup(
     if cx.addons().is_none() {
         return Ok(None);
     }
-    let record = Record::load(cx.data_dir)?;
+    let record = relabel(cx, Record::load(cx.data_dir)?)?;
     drop_converted(cx, &Library::new(cx.data_dir), &record)?;
     if !pending(cx, &record)?.any() {
         return Ok(None);
@@ -1577,6 +1626,70 @@ mod tests {
             texts(blocks, &mut out);
         }
         out
+    }
+
+    #[test]
+    fn earlier_imports_are_labelled_by_whether_they_load_from_a_shader_package() {
+        let host = Host::new("relabel", &["one"]);
+        let conv = Fake::default();
+        let addon = Simplified::new();
+        for name in ["plain", "shaded"] {
+            let pick = Event::Picked {
+                id: IMPORT.into(),
+                paths: vec![host.mod_dir(name)],
+            };
+            with(&host, "one", |cx| addon.event_with(cx, SECTION, pick, &conv)).unwrap();
+        }
+        let dirs: BTreeMap<String, PathBuf> = host
+            .addons("one")
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|a| (a.id, a.dir))
+            .collect();
+        for (id, report) in [
+            ("imported.plain", "version 1.0.0"),
+            ("imported.shaded", crate::convert::CARRIED),
+        ] {
+            let dir = &dirs[id];
+            let manifest = json!({"schema_version": 1, "id": id, "name": id, "version": "1.0.0",
+                "author": "Team Simplified", "compat": {"game": swofty_addon::GAME_ID},
+                "description": format!("Converted from {id}.zip by the Simplified Importer: 3 car assets."),
+                "origin": {"tool": crate::ID}});
+            std::fs::write(dir.join(MANIFEST_FILE), manifest.to_string()).unwrap();
+            std::fs::write(
+                dir.join(crate::convert::REPORT),
+                format!(
+                    "archives: 2 of them {report}
+"
+                ),
+            )
+            .unwrap();
+        }
+        let record = with(&host, "one", |cx| relabel(cx, Record::load(cx.data_dir).unwrap())).unwrap();
+        let tool = |id: &str| {
+            let m: AddonManifest =
+                serde_json::from_slice(&std::fs::read(dirs[id].join(MANIFEST_FILE)).unwrap()).unwrap();
+            m.origin.unwrap().tool
+        };
+        assert_eq!(tool("imported.plain"), crate::COPY_PASTE);
+        assert_eq!(tool("imported.shaded"), crate::ID);
+        let description = |id: &str| {
+            let m: AddonManifest =
+                serde_json::from_slice(&std::fs::read(dirs[id].join(MANIFEST_FILE)).unwrap()).unwrap();
+            m.description
+        };
+        assert_eq!(description("imported.plain").as_deref(), Some("3 car assets."));
+        let base = |id: &str| {
+            record
+                .mods
+                .values()
+                .filter_map(|e| e.made.as_ref())
+                .any(|m| m.id == id && m.base)
+        };
+        assert!(!base("imported.plain"));
+        assert!(base("imported.shaded"));
+        assert_eq!(Record::load(&host.data).unwrap(), record);
     }
 
     #[test]
