@@ -538,9 +538,12 @@ fn a_conversion_writes_a_log_for_developers() {
         "text eng: 1 changed, 0 added, 0 filled in",
         &format!("archive {OPAQUE}: 0 changed, 2 added, 0 removed resource(s)"),
         &format!("archive {amd}: 0 changed, 2 added, 0 removed resource(s)"),
-        "gpu: 2 resource(s) the generic and AMD shader archives both carry load once, 0 of them differ",
+        &format!(
+            "skipped resource eaid://tools_package/default/serps in {OPAQUE}: Simplified Studio adds it to every shader archive"
+        ),
+        "gpu: 1 resource(s) the generic and AMD shader archives both carry load once, 0 of them differ",
         "needs: mod.team-simplified.serps-base-files-for-f1-25 (not in the library)",
-        "ops/erp.json: erp.overlay erp/overlay-2.erp into 2025_asset_groups/vfx_package/common.erp (2 resource(s)",
+        "ops/erp.json: erp.overlay erp/overlay-2.erp into 2025_asset_groups/vfx_package/common.erp (1 resource(s)",
         "[ops]",
         "ops/database.json: 1 put-record, 1 remove-record",
         "ops/text.json: 1 lang.set for eng",
@@ -647,16 +650,13 @@ fn archive_changes_become_one_overlay_and_remove_resource_ops() {
     assert_eq!(m.version.to_string(), "2.1.0");
     let key = |erp: &str, uri: &str| (erp.to_owned(), uri.to_owned());
     let boot = merge::BOOT_ERP;
-    let marker = "eaid://tools_package/default/serps";
     assert_eq!(
         got.resources.keys().cloned().collect::<Vec<_>>(),
         [
             key(CAR, &uri("decal")),
             key(CAR, &uri("old")),
             key(CAR, &uri("paint")),
-            key(boot, shadow),
             key(boot, genesis),
-            key(boot, marker),
         ]
     );
     assert_eq!(got.resources[&key(CAR, &uri("old"))], None);
@@ -673,8 +673,9 @@ fn archive_changes_become_one_overlay_and_remove_resource_ops() {
         overlay.erp.resources.iter().map(|r| r.name.clone()).collect()
     };
     assert_eq!(names(0), [uri("paint"), uri("decal")]);
-    assert_eq!(names(1), [genesis, marker, shadow]);
-    assert!(reported(&c, "archives: 5 resource(s) → erp.overlay"));
+    assert_eq!(names(1), [genesis]);
+    assert!(reported(&c, "archives: 3 resource(s) → erp.overlay"));
+    assert!(reported(&c, "archives: 2 Simplified Studio marker"));
     assert!(reported(&c, "archives: 1 resource(s) removed"));
 }
 

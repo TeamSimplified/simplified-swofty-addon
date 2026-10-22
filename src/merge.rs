@@ -54,12 +54,11 @@ pub fn needs_base(diff: &Diff) -> bool {
 }
 
 // Simplified Studio adds this vehicle shadow material to every shader package it
-// builds, beside the marker (SerpsOverlay.cs in the Simplified Suite). Both load with
-// the rest of the mod, as they do from the shader package.
+// builds, beside the marker (SerpsOverlay.cs in the Simplified Suite). Loaded at boot
+// it would replace the game's own shadow material, so it is left out too.
 const SHADOW: &str = "/shared/shadows/materials/f1_vehicle_shadow.material";
 
-// What Simplified Studio adds to every shader package it builds. Every Studio mod
-// writes the same copies, so they are not conflicts.
+// What Simplified Studio adds to every shader package it builds.
 pub fn studio_only(uri: &str) -> bool {
     uri.starts_with(MARKER) || uri.ends_with(SHADOW)
 }
@@ -68,9 +67,11 @@ pub fn carrier(rel: &str) -> bool {
     rel.starts_with("shader_package")
 }
 
-// Texture arrays in ui_texture archives merge slice by slice instead.
+// Resources added to ui_texture archives are merged across mods by texarray::build,
+// and Simplified Studio's marker does nothing in the game.
 pub fn loaded(a: &crate::diff::Archive, uri: &str) -> bool {
-    !(texarray::carrier(&a.path) && texarray::merged_by_slice(uri))
+    let studio = uri.starts_with(MARKER) || carrier(&a.path) && studio_only(uri);
+    !(texarray::carrier(&a.path) && texarray::merged_by_slice(uri) || studio)
 }
 
 pub fn key(k: u64) -> String {
@@ -322,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn studio_s_marker_and_shadow_material_load_with_the_mod() {
+    fn studio_s_marker_and_shadow_material_are_left_out() {
         let shadow = "eaid://f1_2025_vehicle_package/shared/shadows/materials/f1_vehicle_shadow.material";
         let car = "eaid://f1_2026_vehicle_package/teams/genesis/a.tif.image";
         let diff = Diff {
@@ -361,17 +362,14 @@ mod tests {
         assert_eq!(
             puts,
             [
-                (shadow, opaque),
-                (shadow, opaque),
                 (car, opaque),
-                ("eaid://tools_package/default/serps", opaque),
                 (
                     shadow,
                     "library/m/files/2025_asset_groups/f1_2025_vehicle_package/shared/shared.erp"
                 ),
             ]
         );
-        assert_eq!(merged.carried, 4);
+        assert_eq!(merged.carried, 1);
         assert!(
             !targets(&diff)
                 .iter()
@@ -465,7 +463,7 @@ mod tests {
         assert!(targets(&d).is_empty());
         assert_eq!(clashes(&[Some(&d), Some(&d)]), []);
         let merged = ops("m", &d, &Gvdb::default());
-        assert_eq!((merged.resources, merged.carried), (1, 1));
+        assert_eq!((merged.resources, merged.carried), (0, 0));
     }
 
     #[test]
