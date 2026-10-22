@@ -14,6 +14,7 @@ use crate::{Result, err, io_err};
 
 pub const GAME_FOLDER: &str = "F1 25";
 pub const DATABASE: &str = "game_package/gamedatabases/gamedatabases.2025.bin";
+const DATABASE_FILE: &str = "gamedatabases.2025.bin";
 pub const TEXT_FOLDERS: [&str; 2] = ["localisation", "localisatioa"];
 const MAX_DEPTH: usize = 3;
 const EXACT_MARKERS: [&str; 8] = [
@@ -52,15 +53,12 @@ pub fn class(rel: &str, game: Option<&dyn GameFiles>) -> Option<Class> {
     if CODE.contains(&ext) || BLOCKED.iter().any(|b| file.starts_with(b)) && file != ANTICHEAT_SPLASH {
         return None;
     }
-    if lower == DATABASE {
+    // The Simplified Launcher merges a game database and language files wherever
+    // the mod keeps them.
+    if file == DATABASE_FILE {
         return Some(Class::Database);
     }
-    let mut parts = lower.split('/');
-    if let (Some(top), Some(_), Some(name), None) = (parts.next(), parts.next(), parts.next(), parts.next())
-        && TEXT_FOLDERS.contains(&top)
-        && name.starts_with("language_")
-        && ext == "lng"
-    {
+    if file.starts_with("language_") && ext == "lng" {
         return Some(Class::Text);
     }
     match (game.is_none_or(|g| g.is_stock(rel)), ext == "erp") {
@@ -78,6 +76,9 @@ pub fn skip_reason(rel: &str) -> &'static str {
 }
 
 pub fn game_path(rel: &str) -> String {
+    if rel.to_ascii_lowercase().rsplit('/').next() == Some(DATABASE_FILE) {
+        return DATABASE.to_owned();
+    }
     match rel.split_once('/') {
         Some((top, rest)) if top.eq_ignore_ascii_case(TEXT_FOLDERS[1]) => {
             format!("{}/{rest}", TEXT_FOLDERS[0])
@@ -563,6 +564,9 @@ mod tests {
             Some(Class::Archive)
         );
         assert_eq!(class("audio/x.bnk", None), Some(Class::Replacement));
+        assert_eq!(class("text/language_ger.lng", None), Some(Class::Text));
+        assert_eq!(class("mod/gamedatabases.2025.bin", None), Some(Class::Database));
+        assert_eq!(game_path("mod/gamedatabases.2025.bin"), DATABASE);
         assert_eq!(class("bin/hook.DLL", None), None);
         assert_eq!(
             game_path("localisatioa/2025_release/language_eng.lng"),

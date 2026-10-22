@@ -33,8 +33,8 @@ Any mod works, as copying it into the game folder would.
 
 | Path | Class |
 |---|---|
-| `game_package/gamedatabases/gamedatabases.2025.bin` | Database. It must parse as F1 25's database, or the import fails |
-| `localisation/*/language_<code>.lng`, `localisatioa/*/language_<code>.lng` | Text |
+| `gamedatabases.2025.bin` in any folder, which goes to `game_package/gamedatabases/` | Database. It must parse as F1 25's database, or the import fails |
+| `language_<code>.lng` in any folder, such as `localisatioa/2025_release/` | Text |
 | A `.erp` the game ships | Archive |
 | Any other file the game ships | Replacement |
 | A file the game does not ship | Addition |
