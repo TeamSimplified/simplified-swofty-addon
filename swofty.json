@@ -22,6 +22,11 @@
         "id": "mods",
         "title": "Simplified Importer",
         "icon": "package"
+      },
+      {
+        "id": "about",
+        "title": "About",
+        "icon": "info"
       }
     ],
     "imports": [
