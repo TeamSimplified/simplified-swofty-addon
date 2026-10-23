@@ -1,6 +1,6 @@
 # Simplified for Swofty
 
-**Simplified for Swofty** is Team Simplified's addon for [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). Its **Simplified Importer** turns any F1 25 mod into a standalone Swofty addon. The importer shows as **Simplified Importer** under **Simplified for Swofty** in the launcher's sidebar and as `swofty mods` on the command line.
+**Simplified for Swofty** is Team Simplified's addon for [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). Its **Simplified Importer** turns any F1 25 mod into a standalone Swofty addon. The importer shows as **Simplified Importer** under **Simplified for Swofty** in the launcher's sidebar, below an **About** page, and as `swofty mods` on the command line.
 
 - Works with any mod: drop its zip, 7z, rar or folder on the launcher, or choose it on the Simplified Importer page. The game folders can sit at the top or up to three folders down, or in a folder named like `F1 25`. Mods made with Simplified Studio (`.serps`) and community track zips import too.
 - Each mod becomes a Swofty data addon on the **Addons** page, with its own switch, place in the load order and conflicts. Lower in the list wins.
@@ -8,6 +8,7 @@
 - After an import the addon is on in the active profile, and the launcher switches to **Addons** with the addon highlighted.
 - A mod whose parts are alternatives, such as tyre sets for different seasons, installs every part as an addon with one on. Pick another on **Addons**.
 - Mods that use the game's shader packages, such as those made with Simplified Studio and My Team packages, load with Team Simplified's SERPs Base Files, which come with the addon.
+- A mod that uses the shader packages gets its category from what they replace: Cars for a team, the car performance or the tyres, Seasons for three or more teams, Tracks for the sponsor boards. Every other mod is Uncategorised.
 - A converted mod's description lists what it changes. A mod that uses the shader packages also says what they replace, such as the Ferrari team, and whether Simplified Studio made it.
 - Nothing is kept besides the addon: the mod is unpacked only while it converts. To make an addon again, import the mod again; it keeps the same id.
 
@@ -17,6 +18,10 @@ How it works is in [docs/design.md](docs/design.md).
 
 - **Choose a mod…** picks zips, 7z and rar archives and folders, several at once. A drop anywhere on the window does the same.
 - After an import, the launcher shows the new addon on **Addons**, or a notice with what went wrong. A mod that can't be made into an addon isn't kept.
+
+## The About page
+
+- Team Simplified's logo and a short about Team Simplified and Simplified for Swofty, with links to their GitHub and the Simplified Suite.
 
 ## Mods imported before 0.7.0
 

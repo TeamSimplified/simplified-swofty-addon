@@ -66,7 +66,7 @@ impl Convert for Converter {
         Ok(Made {
             id: c.id,
             name: c.name,
-            category: Some(c.category),
+            category: c.category,
             kinds: c.kinds.into_iter().map(|k| kind(k).into()).collect(),
             summary: c.summary,
             base: c.base,
@@ -413,7 +413,8 @@ fn drop_converted(cx: &Cx, library: &Library, record: &Record) -> Result<()> {
 // Mods converted before 0.10.0 were flagged for the base files only as Studio or My Team
 // mods: each is flagged from its import report. 0.10.0 gave some addons another
 // origin.tool; each gets ID back, and loses the "Converted from …" prefix of earlier
-// descriptions.
+// descriptions. Each gets its category from what its description says it replaces, as
+// convert does from its shader packages: none for a mod that uses none.
 fn relabel(cx: &Cx, mut record: Record) -> Result<Record> {
     let Some(addons) = cx.addons() else {
         return Ok(record);
@@ -433,10 +434,8 @@ fn relabel(cx: &Cx, mut record: Record) -> Result<Record> {
             continue;
         };
         let Some(origin) = m.origin.as_mut() else { continue };
-        let relabelled = origin.tool == crate::COPY_PASTE;
-        if relabelled {
-            origin.tool = crate::ID.into();
-        }
+        let mut dirty = origin.tool == crate::COPY_PASTE;
+        origin.tool = crate::ID.into();
         // "Converted from <file> by the Simplified Importer: <counts>." keeps its counts.
         let described: Option<String> = m.description.as_deref().and_then(|d| {
             let d = d.strip_prefix("Converted from ")?;
@@ -445,15 +444,30 @@ fn relabel(cx: &Cx, mut record: Record) -> Result<Record> {
                 .map_or(d, |(_, rest)| rest);
             Some(rest.trim_start_matches([':', '.']).trim().to_owned())
         });
-        let redescribed = described.is_some();
         if let Some(d) = described {
             m.description = (!d.is_empty()).then_some(d);
+            dirty = true;
         }
-        if !relabelled && !redescribed {
-            continue;
+        let category = match (dir.join(crate::track::TRACK).exists(), made.base) {
+            (true, _) => Some(Category::Tracks),
+            (false, true) => m
+                .description
+                .as_deref()
+                .and_then(crate::merge::category_described),
+            (false, false) => None,
+        };
+        if m.category != category {
+            m.category = category;
+            dirty = true;
         }
-        let json = serde_json::to_vec_pretty(&m).expect("serialisable");
-        std::fs::write(&path, json).map_err(io_err(&path))?;
+        if made.category != category {
+            made.category = category;
+            changed = true;
+        }
+        if dirty {
+            let json = serde_json::to_vec_pretty(&m).expect("serialisable");
+            std::fs::write(&path, json).map_err(io_err(&path))?;
+        }
     }
     if changed {
         record.save(cx.data_dir)?;
@@ -1656,7 +1670,11 @@ mod tests {
             let dir = &dirs[id];
             let manifest = json!({"schema_version": 1, "id": id, "name": id, "version": "1.0.0",
                 "author": "Team Simplified", "compat": {"game": swofty_addon::GAME_ID},
-                "description": format!("Converted from {id}.zip by the Simplified Importer: 3 car assets."),
+                "description": match id {
+                    "imported.plain" => format!("Converted from {id}.zip by the Simplified Importer: 3 car assets."),
+                    _ => "Replaces the Ferrari team. 3 car assets.".to_owned(),
+                },
+                "category": "liveries",
                 "origin": {"tool": if id == "imported.plain" { crate::COPY_PASTE } else { crate::ID }}});
             std::fs::write(dir.join(MANIFEST_FILE), manifest.to_string()).unwrap();
             std::fs::write(
@@ -1682,6 +1700,13 @@ mod tests {
             m.description
         };
         assert_eq!(description("imported.plain").as_deref(), Some("3 car assets."));
+        let category = |id: &str| {
+            let m: AddonManifest =
+                serde_json::from_slice(&std::fs::read(dirs[id].join(MANIFEST_FILE)).unwrap()).unwrap();
+            m.category
+        };
+        assert_eq!(category("imported.plain"), None);
+        assert_eq!(category("imported.shaded"), Some(Category::Cars));
         let base = |id: &str| {
             record
                 .mods

@@ -172,7 +172,7 @@ Parts of one import that write mostly the same things are variants. Two parts ar
 - Text is `lang.set`. Text a mod fills in with the game's own text is `lang.default`, which never undoes another addon's rename.
 - Team logo texture arrays from `ui_texture*` archives ship in `logos/ui_textures.erp` as the mod has them, with one `erp.merge-slices` each into `shader_package_2025/ui_texture.nefx2.sm51.erp` and `_amd.erp`; the launcher starts from the game's array in `ui_package` and writes only the slices that differ from it. Texture array views (`.texarray`) go in whole with `put-resource`.
 - `kind` lists `database`, `erp`, `text` and `files` as the addon has them.
-- `category` comes from what the mod changes. A track package or mostly track resources is Tracks. 1000 or more records with car resources or team and driver text is Seasons. Mostly car resources is Cars, or Liveries when they are all textures and materials and not tyres. Then Audio, Drivers & teams, Database, UI and Other. The name decides only between Database and Seasons (`season`, `calendar`) and towards Liveries (`livery`).
+- `category` comes from Team Simplified's shader package list (`merge::REPLACES`). A track package is Tracks. A mod whose shader packages replace three or more teams is Seasons; one or two teams (My Team counts), the car performance or the tyres is Cars; the sponsor boards is Tracks. Every other mod, the UI package alone and mods that use no shader package included, has no category, which the launcher shows as Uncategorised. At startup, earlier imports get their category the same way from their description's "Replaces …" sentence.
 
 The record is `addon-data/teamsimplified.mods/importer.json`:
 
@@ -182,7 +182,7 @@ The record is `addon-data/teamsimplified.mods/importer.json`:
     "rm-designs.scuderia-alphatauri-orlen": {
       "name": "Scuderia AlphaTauri ORLEN", "at": 1792000000,
       "made": { "id": "mod.rm-designs.scuderia-alphatauri-orlen", "name": "Scuderia AlphaTauri ORLEN",
-                "category": "liveries", "kinds": ["Database", "Archives"], "lines": ["…"] }
+                "category": "cars", "kinds": ["Database", "Archives"], "lines": ["…"] }
     }
   },
   "last": { "at": 1792000000, "files": ["AlphaTauri.zip"], "mods": ["rm-designs.scuderia-alphatauri-orlen"] }

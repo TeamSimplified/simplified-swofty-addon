@@ -1,3 +1,4 @@
+pub mod about;
 pub mod convert;
 pub mod diff;
 pub mod importer;
@@ -264,17 +265,18 @@ impl Addon for Simplified {
         Some(include_bytes!("../icon.svg"))
     }
 
-    // The Simplified Importer page and the mods command are declared once, in swofty.json,
+    // The Simplified Importer and About pages and the mods command are declared once, in swofty.json,
     // which the launcher also reads when it runs this addon as a helper program.
     fn sections(&self) -> Vec<SectionSpec> {
         self.launcher().sections.clone()
     }
 
     fn view(&self, cx: &Cx, section: &str) -> Result<View> {
-        if section != SECTION {
-            return Err(Error::NoSection(section.into()));
+        match section {
+            SECTION => page::view(cx),
+            about::SECTION => about::view(cx),
+            _ => Err(Error::NoSection(section.into())),
         }
-        page::view(cx)
     }
 
     fn event(&self, cx: &Cx, section: &str, event: Event) -> Result<Effect> {
@@ -541,10 +543,11 @@ impl Simplified {
         event: Event,
         conv: &dyn importer::Convert,
     ) -> Result<Effect> {
-        if section != SECTION {
-            return Err(Error::NoSection(section.into()));
+        match section {
+            SECTION => Ok(page::event(cx, event, conv)?.unwrap_or(Effect::None)),
+            about::SECTION => about::event(event),
+            _ => Err(Error::NoSection(section.into())),
         }
-        Ok(page::event(cx, event, conv)?.unwrap_or(Effect::None))
     }
 }
 
