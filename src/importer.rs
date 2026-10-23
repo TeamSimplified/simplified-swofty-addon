@@ -411,8 +411,9 @@ fn drop_converted(cx: &Cx, library: &Library, record: &Record) -> Result<()> {
 }
 
 // Mods converted before 0.10.0 were flagged for the base files only as Studio or My Team
-// mods, and all carried ID as their origin: each is flagged from its import report and
-// its manifest given the origin the launcher labels it by.
+// mods: each is flagged from its import report. 0.10.0 gave some addons another
+// origin.tool; each gets ID back, and loses the "Converted from …" prefix of earlier
+// descriptions.
 fn relabel(cx: &Cx, mut record: Record) -> Result<Record> {
     let Some(addons) = cx.addons() else {
         return Ok(record);
@@ -431,10 +432,11 @@ fn relabel(cx: &Cx, mut record: Record) -> Result<Record> {
         let Ok(mut m) = serde_json::from_slice::<AddonManifest>(&text) else {
             continue;
         };
-        let tool = if made.base { crate::ID } else { crate::COPY_PASTE };
         let Some(origin) = m.origin.as_mut() else { continue };
-        let relabelled = origin.tool != tool;
-        origin.tool = tool.into();
+        let relabelled = origin.tool == crate::COPY_PASTE;
+        if relabelled {
+            origin.tool = crate::ID.into();
+        }
         // "Converted from <file> by the Simplified Importer: <counts>." keeps its counts.
         let described: Option<String> = m.description.as_deref().and_then(|d| {
             let d = d.strip_prefix("Converted from ")?;
@@ -1629,7 +1631,7 @@ mod tests {
     }
 
     #[test]
-    fn earlier_imports_are_labelled_by_whether_they_load_from_a_shader_package() {
+    fn earlier_imports_are_flagged_from_their_report_and_tagged_simplified_again() {
         let host = Host::new("relabel", &["one"]);
         let conv = Fake::default();
         let addon = Simplified::new();
@@ -1655,7 +1657,7 @@ mod tests {
             let manifest = json!({"schema_version": 1, "id": id, "name": id, "version": "1.0.0",
                 "author": "Team Simplified", "compat": {"game": swofty_addon::GAME_ID},
                 "description": format!("Converted from {id}.zip by the Simplified Importer: 3 car assets."),
-                "origin": {"tool": crate::ID}});
+                "origin": {"tool": if id == "imported.plain" { crate::COPY_PASTE } else { crate::ID }}});
             std::fs::write(dir.join(MANIFEST_FILE), manifest.to_string()).unwrap();
             std::fs::write(
                 dir.join(crate::convert::REPORT),
@@ -1672,7 +1674,7 @@ mod tests {
                 serde_json::from_slice(&std::fs::read(dirs[id].join(MANIFEST_FILE)).unwrap()).unwrap();
             m.origin.unwrap().tool
         };
-        assert_eq!(tool("imported.plain"), crate::COPY_PASTE);
+        assert_eq!(tool("imported.plain"), crate::ID);
         assert_eq!(tool("imported.shaded"), crate::ID);
         let description = |id: &str| {
             let m: AddonManifest =

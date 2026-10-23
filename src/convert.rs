@@ -14,7 +14,7 @@ use crate::diff::Diff;
 use crate::library::{FILES, LIBRARY, Library, Package};
 use crate::log::Log;
 use crate::package::Class;
-use crate::{COPY_PASTE, ID, Result, err, io_err, merge, texarray, track};
+use crate::{ID, Result, err, io_err, merge, texarray, track};
 
 pub const NAMESPACE: &str = "mod";
 pub const LAUNCHER: &str = ">=1.3.0";
@@ -373,7 +373,7 @@ fn manifest(
         "operations": operations,
         "category": category,
         "origin": {
-            "tool": if w.base { ID } else { COPY_PASTE },
+            "tool": ID,
             "tool_version": env!("CARGO_PKG_VERSION"),
             "file": p.source,
             "sha256": p.sha256,

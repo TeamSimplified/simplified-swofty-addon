@@ -458,10 +458,7 @@ fn a_team_rename_becomes_database_and_text_ops() {
     assert_eq!(m.compat.game_builds[0].to_string(), ">=25251167");
     assert_eq!(m.compat.launcher.as_ref().unwrap().to_string(), ">=1.3.0");
     let origin = m.origin.as_ref().unwrap();
-    assert_eq!(
-        (origin.tool.as_str(), origin.file.as_deref()),
-        (crate::COPY_PASTE, Some("Mod"))
-    );
+    assert_eq!((origin.tool.as_str(), origin.file.as_deref()), (ID, Some("Mod")));
     assert_eq!(m.category, Some(Category::DriversTeams));
     assert!(reported(&c, "database: 3 changed, 1 added, 1 removed"));
     assert!(reported(&c, "text: 3 entr(ies) the mod fills in"));
