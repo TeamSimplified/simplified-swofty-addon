@@ -475,6 +475,40 @@ fn relabel(cx: &Cx, mut record: Record) -> Result<Record> {
     Ok(record)
 }
 
+// Turns the whole archives of addons made while the game lacked them into overlays
+// (convert::rediff). An addon that fails keeps its archive and says why once.
+fn rediff(cx: &Cx, mut record: Record) -> Result<Record> {
+    let (Some(addons), Some(game)) = (cx.addons(), cx.game) else {
+        return Ok(record);
+    };
+    let dirs: BTreeMap<String, PathBuf> = addons.list()?.into_iter().map(|a| (a.id, a.dir)).collect();
+    let mut changed = false;
+    for made in record.mods.values_mut().filter_map(|e| e.made.as_mut()) {
+        let Some(dir) = dirs.get(&made.id) else { continue };
+        match crate::convert::rediff(dir, game) {
+            Ok(lines) if lines.is_empty() => {}
+            Ok(lines) => {
+                if let Ok(m) = AddonManifest::load(dir) {
+                    made.kinds = m.kind.iter().map(|k| kind(*k).to_owned()).collect();
+                }
+                made.lines.extend(lines);
+                changed = true;
+            }
+            Err(e) => {
+                let warning = format!("its whole archives stay in the addon: {e}");
+                if !made.warnings.contains(&warning) {
+                    made.warnings.push(warning);
+                    changed = true;
+                }
+            }
+        }
+    }
+    if changed {
+        record.save(cx.data_dir)?;
+    }
+    Ok(record)
+}
+
 // The startup event: converts what is pending within the budget, and says so.
 pub fn startup(
     cx: &Cx,
@@ -485,7 +519,7 @@ pub fn startup(
     if cx.addons().is_none() {
         return Ok(None);
     }
-    let record = relabel(cx, Record::load(cx.data_dir)?)?;
+    let record = rediff(cx, relabel(cx, Record::load(cx.data_dir)?)?)?;
     drop_converted(cx, &Library::new(cx.data_dir), &record)?;
     if !pending(cx, &record)?.any() {
         return Ok(None);

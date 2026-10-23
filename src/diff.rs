@@ -223,7 +223,12 @@ fn same(stock: &ErpFile, s: &Resource, ours: &ErpFile, r: &Resource) -> swofty_f
 // A stock resource the mod's archive lacks is removed when the mod was made for this
 // game version, as the archive replaces the game's whole. Shader archives are merged
 // into the game's instead, so they remove nothing.
-fn archive(rel: &str, path: &Path, game: &dyn GameFiles, removals: bool) -> Result<(Archive, usize)> {
+pub(crate) fn archive(
+    rel: &str,
+    path: &Path,
+    game: &dyn GameFiles,
+    removals: bool,
+) -> Result<(Archive, usize)> {
     let fail = |e: swofty_formats::Error| err(format!("{rel}: {e}"));
     let stock = ErpFile::open(&game.original(rel)?).map_err(&fail)?;
     let ours = ErpFile::open(path).map_err(&fail)?;

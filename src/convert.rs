@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::{Value, json};
-use swofty_addon::asset::{AssetOp, FileOp, LangOp, Op, Origin, Root, Source, TrackOp};
+use swofty_addon::asset::{AssetOp, FileKind, FileOp, LangOp, Op, Origin, Root, Source, TrackOp};
 use swofty_addon::launcher::GameFiles;
 use swofty_addon::manifest::{AddonManifest, Category, Kind, MANIFEST_FILE};
 use swofty_addon::ops::{DbOp, ErpOp};
@@ -1100,6 +1100,150 @@ fn write_overlay(resources: &[(PathBuf, String)], to: &Path) -> Result<usize> {
     drop(out);
     std::fs::rename(&tmp, to).map_err(io_err(to))?;
     Ok(erp.resources.len())
+}
+
+// A mod converted while the game lacked one of its stock archives carries that archive
+// whole, as a file.put that replaces every other addon's resources in it. Once the game
+// has the archive, the resources the mod changes or adds go in as an overlay on it, as a
+// conversion with the archive in place makes them, and the whole copy goes. A game
+// archive that is the mod's own copy is left alone. Returns a line per archive turned.
+pub fn rediff(dir: &Path, game: &dyn GameFiles) -> Result<Vec<String>> {
+    let files = read_ops(dir, FILE_OPS, FileKind::Assets)?;
+    let mut erp: Vec<ErpOp> = read_ops(dir, ERP_OPS, FileKind::Erp)?
+        .into_iter()
+        .filter_map(|op| match op {
+            AssetOp::Erp(op) => Some(op),
+            _ => None,
+        })
+        .collect();
+    let (mut kept, mut wholes, mut lines) = (Vec::new(), Vec::new(), Vec::new());
+    for op in files {
+        let AssetOp::File(FileOp::Put { source, target }) = &op else {
+            kept.push(op);
+            continue;
+        };
+        let whole = dir.join(&source.path);
+        let archive = source.root == Root::Addon
+            && target.to_ascii_lowercase().ends_with(".erp")
+            && !merge::carrier(target)
+            && !texarray::carrier(target)
+            && game.is_stock(target);
+        let stock = archive.then(|| game.original(target).ok()).flatten();
+        if stock.is_none_or(|s| same_bytes(&s, &whole)) {
+            kept.push(op);
+            continue;
+        }
+        let (a, _) = crate::diff::archive(target, &whole, game, false)?;
+        let resources: Vec<(PathBuf, String)> = a
+            .changed
+            .iter()
+            .chain(&a.added)
+            .filter(|uri| merge::loaded(&a, uri))
+            .map(|uri| (whole.clone(), uri.clone()))
+            .collect();
+        if !resources.is_empty() {
+            let name = (0..)
+                .map(overlay_name)
+                .find(|n| !dir.join(n).exists())
+                .expect("a free overlay name");
+            write_overlay(&resources, &dir.join(&name))?;
+            erp.push(ErpOp::Overlay {
+                erps: vec![target.clone()],
+                source: Source::addon(name),
+            });
+        }
+        lines.push(format!(
+            "{target}: the game has it again, so the {} resource(s) the mod changes or adds go in as an overlay instead of the whole archive",
+            resources.len()
+        ));
+        wholes.push(whole);
+    }
+    if lines.is_empty() {
+        return Ok(lines);
+    }
+    let path = dir.join(MANIFEST_FILE);
+    let mut m = AddonManifest::load(dir).map_err(|e| err(format!("{}: {e}", path.display())))?;
+    let w = Writer {
+        dir: dir.to_path_buf(),
+        ..Writer::default()
+    };
+    if !erp.is_empty() {
+        w.write(ERP_OPS, &erp)?;
+        if !m.operations.erp.iter().any(|f| f == ERP_OPS) {
+            m.operations.erp.push(ERP_OPS.into());
+        }
+    }
+    if kept.is_empty() {
+        let files = dir.join(FILE_OPS);
+        std::fs::remove_file(&files).map_err(io_err(&files))?;
+        m.operations.assets.retain(|f| f != FILE_OPS);
+    } else {
+        w.write(FILE_OPS, &kept)?;
+    }
+    let puts = kept
+        .iter()
+        .any(|op| matches!(op, AssetOp::File(FileOp::Put { .. })));
+    m.kind.retain(|k| *k != Kind::Files || puts);
+    if !erp.is_empty() && !m.kind.contains(&Kind::Erp) {
+        m.kind.push(Kind::Erp);
+    }
+    m.validate()?;
+    std::fs::write(&path, serde_json::to_vec_pretty(&m).expect("serialisable")).map_err(io_err(&path))?;
+    for whole in wholes {
+        std::fs::remove_file(&whole).map_err(io_err(&whole))?;
+    }
+    let report = dir.join(REPORT);
+    let mut text = std::fs::read_to_string(&report).unwrap_or_default();
+    text.extend(lines.iter().map(|l| format!("{l}\n")));
+    std::fs::write(&report, text).map_err(io_err(&report))?;
+    Ok(lines)
+}
+
+fn read_ops(dir: &Path, rel: &str, kind: FileKind) -> Result<Vec<AssetOp>> {
+    let path = dir.join(rel);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(io_err(&path)(e)),
+    };
+    let fail = |e: &dyn std::fmt::Display| err(format!("{}: {e}", path.display()));
+    let doc = serde_json::from_slice(&bytes).map_err(|e| fail(&e))?;
+    Ok(swofty_addon::asset::OpFile::from_value(doc, kind)
+        .map_err(|e| fail(&e))?
+        .ops)
+}
+
+fn same_bytes(a: &Path, b: &Path) -> bool {
+    let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).ok();
+    if len(a).is_none() || len(a) != len(b) {
+        return false;
+    }
+    let (Ok(fa), Ok(fb)) = (std::fs::File::open(a), std::fs::File::open(b)) else {
+        return false;
+    };
+    let fill = |f: &mut std::fs::File, buf: &mut [u8]| -> std::io::Result<usize> {
+        let mut n = 0;
+        while n < buf.len() {
+            match f.read(&mut buf[n..])? {
+                0 => break,
+                got => n += got,
+            }
+        }
+        Ok(n)
+    };
+    let (mut fa, mut fb) = (fa, fb);
+    let (mut ba, mut bb) = (vec![0u8; 1 << 20], vec![0u8; 1 << 20]);
+    loop {
+        let (Ok(na), Ok(nb)) = (fill(&mut fa, &mut ba), fill(&mut fb, &mut bb)) else {
+            return false;
+        };
+        if na != nb || ba[..na] != bb[..nb] {
+            return false;
+        }
+        if na == 0 {
+            return true;
+        }
+    }
 }
 
 fn copy_file(from: &Path, to: &Path) -> Result<()> {

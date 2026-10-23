@@ -1148,3 +1148,76 @@ fn a_simplified_mod_says_what_it_replaces_and_a_copy_and_paste_one_what_it_chang
     );
     assert_eq!(and_list(&["a", "b", "c"]), "a, b and c");
 }
+
+const COMMON: &str = "2025_asset_groups/f1_2025_vehicle_package/teams/common.erp";
+
+fn plain(name: &str, byte: u8) -> Resource {
+    Resource {
+        hash: [0; 16],
+        ..texture(name, &[byte; 4])
+    }
+}
+
+#[test]
+fn a_whole_archive_from_a_game_without_it_becomes_an_overlay_once_the_game_has_it() {
+    let case = Case::new("rediff");
+    let shipped = archive(vec![
+        plain("eaid://teams/a", 1),
+        plain("eaid://teams/b", 2),
+        plain("eaid://teams/c", 3),
+    ]);
+    let p = case.import(&[(COMMON, shipped.clone())], &serps("Cars", "1.0.140.0000"));
+    let game: &dyn GameFiles = &case.game;
+    let (_, out) = case.convert(&p, Some(game));
+    let (m, ops) = addon_ops(&out);
+    assert_eq!(m.kind, [Kind::Files]);
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, AssetOp::File(FileOp::Put { target, .. }) if target == COMMON))
+    );
+    assert!(rediff(&out, game).unwrap().is_empty());
+
+    let stock = archive(vec![plain("eaid://teams/a", 9), plain("eaid://teams/b", 2)]);
+    case.stock(COMMON, &stock);
+    let lines = rediff(&out, game).unwrap();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with(&format!("{COMMON}: the game has it again")));
+    let applied = |case: &Case, out: &Path| {
+        let (m, ops) = addon_ops(out);
+        let game: &dyn GameFiles = &case.game;
+        (m, apply(&ops, None, game, &|s| case.resolve(s, out)))
+    };
+    let fresh = Case::new("rediff-fresh");
+    fresh.stock(COMMON, &stock);
+    let fresh_p = fresh.import(&[(COMMON, shipped)], &serps("Cars", "1.0.140.0000"));
+    let (_, fresh_out) = fresh.convert(&fresh_p, Some(&fresh.game as &dyn GameFiles));
+    let (m, got) = applied(&case, &out);
+    assert_eq!(got, applied(&fresh, &fresh_out).1);
+    assert_eq!(m.kind, [Kind::Erp]);
+    assert_eq!(m.operations.erp, [ERP_OPS]);
+    assert!(m.operations.assets.is_empty());
+    assert!(got.files.is_empty());
+    let uris: Vec<&str> = got.resources.keys().map(|(_, uri)| uri.as_str()).collect();
+    assert_eq!(uris, ["eaid://teams/a", "eaid://teams/c"]);
+    assert!(!out.join(FILES_DIR).join(COMMON).exists());
+    assert!(!out.join(FILE_OPS).exists());
+    assert!(
+        std::fs::read_to_string(out.join(REPORT))
+            .unwrap()
+            .contains("go in as an overlay instead of the whole archive")
+    );
+    assert!(rediff(&out, game).unwrap().is_empty());
+}
+
+#[test]
+fn a_game_archive_that_is_the_mod_s_own_copy_keeps_the_whole_archive() {
+    let case = Case::new("rediff-own");
+    let shipped = archive(vec![plain("eaid://teams/a", 1)]);
+    let p = case.import(&[(COMMON, shipped.clone())], &serps("Cars", "1.0.140.0000"));
+    let game: &dyn GameFiles = &case.game;
+    let (_, out) = case.convert(&p, Some(game));
+    case.stock(COMMON, &shipped);
+    let before = tree(&out);
+    assert!(rediff(&out, game).unwrap().is_empty());
+    assert_eq!(tree(&out), before);
+}
