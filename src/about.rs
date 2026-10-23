@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use swofty_addon::launcher::Cx;
-use swofty_addon::view::{Art, Block, Body, Button, Card, Effect, Event, Hero, Tone, View};
+use swofty_addon::view::{Art, Block, Body, Button, Card, Effect, Event, Fact, Hero, Tone, View};
 
 use crate::page::FOOTER;
 use crate::{Result, err};
@@ -46,13 +46,18 @@ fn art(cx: &Cx) -> Art {
     }
 }
 
+// The addon's version, as swofty.json gives it.
+fn facts() -> Vec<Fact> {
+    vec![Fact::new("Version", env!("CARGO_PKG_VERSION"))]
+}
+
 fn hero(cx: &Cx) -> Block {
     Block::Hero(Hero {
         title: "Simplified for Swofty".into(),
         subtitle: Some("By Team Simplified.".into()),
         art: art(cx),
         pills: Vec::new(),
-        facts: Vec::new(),
+        facts: facts(),
         buttons: Vec::new(),
     })
 }
@@ -139,5 +144,14 @@ mod tests {
             panic!("links last")
         };
         assert_eq!(links.len(), 2);
+    }
+
+    #[test]
+    fn the_header_shows_the_addon_version() {
+        let manifest: serde_json::Value = serde_json::from_str(crate::MANIFEST).unwrap();
+        assert_eq!(
+            facts(),
+            [Fact::new("Version", manifest["version"].as_str().unwrap())]
+        );
     }
 }

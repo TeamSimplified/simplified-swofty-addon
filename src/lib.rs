@@ -32,7 +32,7 @@ pub const ID: &str = "teamsimplified.mods";
 // these back.
 pub const COPY_PASTE: &str = "teamsimplified.mods/copy-paste";
 pub const SECTION: &str = "mods";
-const MANIFEST: &str = include_str!("../swofty.json");
+pub(crate) const MANIFEST: &str = include_str!("../swofty.json");
 // Team Simplified's SERPs Base Files for F1 25 v4.1, shipped with the addon: each
 // archive in place of the game's, as the Simplified Launcher installs them.
 const BASE_FILES: [(&str, &str); 3] = [
