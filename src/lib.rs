@@ -26,8 +26,9 @@ use crate::importer::{Converter, Record};
 use crate::library::{Library, Package};
 
 pub const ID: &str = "teamsimplified.mods";
-// origin.tool of an addon made from a mod that leaves the shader packages alone, which
-// the launcher labels Copy & Paste; the rest carry ID and are labelled Simplified.
+// The origin.tool 0.10.0 gave an addon made from a mod that leaves the shader packages
+// alone. Every addon carries ID, which the launcher tags Simplified; startup switches
+// these back.
 pub const COPY_PASTE: &str = "teamsimplified.mods/copy-paste";
 pub const SECTION: &str = "mods";
 const MANIFEST: &str = include_str!("../swofty.json");

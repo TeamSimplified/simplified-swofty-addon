@@ -7,8 +7,8 @@
 - The addon holds what the mod changes from the game's own files: database records, text, archive resources, files and tracks.
 - After an import the addon is on in the active profile, and the launcher switches to **Addons** with the addon highlighted.
 - A mod whose parts are alternatives, such as tyre sets for different seasons, installs every part as an addon with one on. Pick another on **Addons**.
-- Mods that use the game's shader packages, such as those made with Simplified Studio and My Team packages, load with Team Simplified's SERPs Base Files, which come with the addon. The launcher tags them Simplified, and every other mod Copy & Paste.
-- A converted mod's description lists what it changes. A Simplified mod also says what its shader packages replace, such as the Ferrari team, and whether Simplified Studio made it.
+- Mods that use the game's shader packages, such as those made with Simplified Studio and My Team packages, load with Team Simplified's SERPs Base Files, which come with the addon.
+- A converted mod's description lists what it changes. A mod that uses the shader packages also says what they replace, such as the Ferrari team, and whether Simplified Studio made it.
 - Nothing is kept besides the addon: the mod is unpacked only while it converts. To make an addon again, import the mod again; it keeps the same id.
 
 How it works is in [docs/design.md](docs/design.md).
