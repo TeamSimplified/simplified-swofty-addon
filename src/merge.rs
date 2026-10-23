@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use swofty_addon::asset::{AssetOp, FileOp, LangOp, Root, Source};
+use swofty_addon::manifest::Category;
 use swofty_addon::ops::{DbOp, ErpOp};
 use swofty_formats::gvdb::Gvdb;
 
@@ -55,37 +56,98 @@ fn shader_packages(diff: &Diff) -> Vec<&str> {
 }
 
 // What each shader package a Simplified Studio mod builds replaces in the game, by the
-// start of its file name (Team Simplified's shader package list).
-const REPLACES: [(&str, &str); 17] = [
-    ("object_alpha.nefx2.sm51", "the Alpine team"),
-    ("object_auto_illuminate.nefx2.sm51", "the Aston Martin team"),
-    ("object_car_monitor.nefx2.sm51", "the Audi team"),
-    ("object_driver_name_shader.nefx2.sm51", "the Cadillac team"),
-    ("object_flag.nefx2.sm51", "the Ferrari team"),
-    ("object_glass.nefx2.sm51", "the Haas team"),
-    ("object_jumbotron.nefx2.sm51", "the McLaren team"),
-    ("object_mask.nefx2.sm51", "the Mercedes team"),
-    ("object_my_team.nefx2.sm51", "My Team"),
-    ("effects_myteam.nefx2.sm51", "My Team"),
-    ("object_opaque.nefx2.sm51", "the Racing Bulls team"),
-    ("object_overlay.nefx2.sm51", "the Red Bull team"),
-    ("object_roof.nefx2.sm51", "the Williams team"),
-    ("object_skinned.nefx2.sm51", "the car performance"),
-    ("object_steering_screen.nefx2.sm51", "the tyres"),
-    ("object_sponsor.nefx2.sm51", "the sponsor boards"),
-    ("ui_texture.nefx2.sm51", "the UI"),
+// start of its file name (Team Simplified's shader package list), and what kind of
+// change that is.
+const REPLACES: [(&str, &str, Kind); 17] = [
+    ("object_alpha.nefx2.sm51", "the Alpine team", Kind::Team),
+    (
+        "object_auto_illuminate.nefx2.sm51",
+        "the Aston Martin team",
+        Kind::Team,
+    ),
+    ("object_car_monitor.nefx2.sm51", "the Audi team", Kind::Team),
+    (
+        "object_driver_name_shader.nefx2.sm51",
+        "the Cadillac team",
+        Kind::Team,
+    ),
+    ("object_flag.nefx2.sm51", "the Ferrari team", Kind::Team),
+    ("object_glass.nefx2.sm51", "the Haas team", Kind::Team),
+    ("object_jumbotron.nefx2.sm51", "the McLaren team", Kind::Team),
+    ("object_mask.nefx2.sm51", "the Mercedes team", Kind::Team),
+    ("object_my_team.nefx2.sm51", "My Team", Kind::Team),
+    ("effects_myteam.nefx2.sm51", "My Team", Kind::Team),
+    ("object_opaque.nefx2.sm51", "the Racing Bulls team", Kind::Team),
+    ("object_overlay.nefx2.sm51", "the Red Bull team", Kind::Team),
+    ("object_roof.nefx2.sm51", "the Williams team", Kind::Team),
+    ("object_skinned.nefx2.sm51", "the car performance", Kind::Car),
+    ("object_steering_screen.nefx2.sm51", "the tyres", Kind::Car),
+    ("object_sponsor.nefx2.sm51", "the sponsor boards", Kind::Track),
+    ("ui_texture.nefx2.sm51", "the UI", Kind::Ui),
 ];
 
-// What a mod's shader packages replace, each once, in the order of REPLACES.
-pub fn replaces(diff: &Diff) -> Vec<&'static str> {
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Team,
+    Car,
+    Track,
+    Ui,
+}
+
+// A season replaces this many teams.
+const SEASON_TEAMS: usize = 3;
+
+// The rows of REPLACES a mod's shader packages match.
+fn matched(diff: &Diff) -> Vec<(&'static str, Kind)> {
     let packages = shader_packages(diff);
-    let mut out: Vec<&'static str> = REPLACES
+    let mut out: Vec<(&'static str, Kind)> = REPLACES
         .iter()
-        .filter(|(prefix, _)| packages.iter().any(|p| p.starts_with(prefix)))
-        .map(|(_, what)| *what)
+        .filter(|(prefix, ..)| packages.iter().any(|p| p.starts_with(prefix)))
+        .map(|(_, what, kind)| (*what, *kind))
         .collect();
     out.dedup();
     out
+}
+
+// What a mod's shader packages replace, each once, in the order of REPLACES.
+pub fn replaces(diff: &Diff) -> Vec<&'static str> {
+    matched(diff).into_iter().map(|(what, _)| what).collect()
+}
+
+// The category from what a mod's shader packages replace: Seasons for several teams,
+// Cars for a team, the car performance or the tyres, Tracks for the sponsor boards.
+// Anything else, the UI alone included, has none.
+pub fn category(diff: &Diff) -> Option<Category> {
+    category_of(
+        &matched(diff)
+            .into_iter()
+            .map(|(_, kind)| kind)
+            .collect::<Vec<_>>(),
+    )
+}
+
+// The same from a description's "Replaces …" sentence, for mods converted before.
+pub fn category_described(description: &str) -> Option<Category> {
+    let mut found: Vec<(&str, Kind)> = Vec::new();
+    for (_, what, kind) in REPLACES {
+        if description.contains(what) && !found.iter().any(|(w, _)| *w == what) {
+            found.push((what, kind));
+        }
+    }
+    category_of(&found.into_iter().map(|(_, kind)| kind).collect::<Vec<_>>())
+}
+
+fn category_of(kinds: &[Kind]) -> Option<Category> {
+    let teams = kinds.iter().filter(|k| **k == Kind::Team).count();
+    if teams >= SEASON_TEAMS {
+        Some(Category::Seasons)
+    } else if teams > 0 || kinds.contains(&Kind::Car) {
+        Some(Category::Cars)
+    } else if kinds.contains(&Kind::Track) {
+        Some(Category::Tracks)
+    } else {
+        None
+    }
 }
 // Simplified Studio adds this vehicle shadow material to every shader package it
 // builds, beside the marker (SerpsOverlay.cs in the Simplified Suite). Loaded at boot
@@ -258,6 +320,52 @@ pub fn clashes(diffs: &[Option<&Diff>]) -> Vec<Clash> {
 mod tests {
     use super::*;
     use crate::diff::{Archive, Records};
+
+    #[test]
+    fn a_mod_is_categorised_by_what_its_shader_packages_replace() {
+        let diff = |names: &[&str]| Diff {
+            archives: names
+                .iter()
+                .map(|name| Archive {
+                    path: format!("shader_package_2025/{name}.nefx2.sm51.erp"),
+                    changed: Vec::new(),
+                    added: vec!["eaid://f1_2026_vehicle_package/teams/a.material".into()],
+                    removed: Vec::new(),
+                })
+                .collect(),
+            ..Diff::default()
+        };
+        assert_eq!(category(&diff(&["object_flag"])), Some(Category::Cars));
+        assert_eq!(
+            category(&diff(&["object_my_team", "effects_myteam"])),
+            Some(Category::Cars)
+        );
+        assert_eq!(category(&diff(&["object_steering_screen"])), Some(Category::Cars));
+        assert_eq!(category(&diff(&["object_skinned"])), Some(Category::Cars));
+        assert_eq!(category(&diff(&["object_sponsor"])), Some(Category::Tracks));
+        assert_eq!(category(&diff(&["ui_texture"])), None);
+        assert_eq!(category(&diff(&["bloom"])), None);
+        assert_eq!(category(&diff(&[])), None);
+        assert_eq!(
+            category(&diff(&[
+                "object_flag",
+                "object_mask",
+                "object_roof",
+                "ui_texture"
+            ])),
+            Some(Category::Seasons)
+        );
+        assert_eq!(
+            category_described("Replaces the Cadillac team and the UI. 3 car assets."),
+            Some(Category::Cars)
+        );
+        assert_eq!(
+            category_described("Replaces the Alpine team, the Haas team and My Team."),
+            Some(Category::Seasons)
+        );
+        assert_eq!(category_described("Replaces the UI."), None);
+        assert_eq!(category_described("3 car assets."), None);
+    }
 
     #[test]
     fn a_mod_replaces_what_its_shader_packages_stand_for() {

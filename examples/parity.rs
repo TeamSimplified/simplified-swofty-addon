@@ -780,7 +780,7 @@ fn check_package(library: &Library, p: &Package, game: &Stock, scratch: &Path) -
     f.note(format!(
         "converted into {} ({}), {}",
         c.id,
-        c.category.label(),
+        c.category.map_or("Uncategorised", |c| c.label()),
         c.summary
     ));
     for line in c

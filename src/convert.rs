@@ -31,13 +31,13 @@ pub const FILES_DIR: &str = "files";
 pub const LOGOS: &str = "logos/ui_textures.erp";
 const MIPMAPS: &str = ".mipmaps";
 const MAX_ID: usize = 64;
-const SEASON_RECORDS: usize = 1000;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Converted {
     pub id: String,
     pub name: String,
-    pub category: Category,
+    // None leaves it Uncategorised in the launcher.
+    pub category: Option<Category>,
     pub kinds: Vec<Kind>,
     pub summary: String,
     pub report: Vec<String>,
@@ -102,12 +102,12 @@ struct Writer {
     files: Vec<AssetOp>,
     track: Vec<AssetOp>,
     report: Vec<String>,
-    contents: Contents,
     written: BTreeSet<(String, String)>,
     mips: usize,
     log: Log,
     base: bool,
     replaces: Vec<&'static str>,
+    category: Option<Category>,
 }
 
 #[derive(Serialize)]
@@ -125,17 +125,6 @@ struct Tally {
     mips: usize,
     logos: usize,
     views: usize,
-}
-
-#[derive(Default)]
-struct Contents {
-    records: usize,
-    text: usize,
-    team_text: usize,
-    areas: BTreeMap<Area, usize>,
-    vehicle_art: usize,
-    tyres: usize,
-    track: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -181,7 +170,7 @@ pub fn convert_to(
         Ok(c) => {
             log.line(format!("addon: {}", c.id));
             log.line(format!("name: {}", c.name));
-            log.line(format!("category: {}", c.category.label()));
+            log.line(format!("category: {}", category_label(c.category)));
             let kinds: Vec<String> = c.kinds.iter().map(|k| format!("{k:?}").to_lowercase()).collect();
             log.line(format!("kinds: {}", kinds.join(", ")));
             log.line(format!("summary: {}", c.summary));
@@ -309,7 +298,7 @@ fn write_addon(
         }
         w.log_ops();
         let kinds = w.kinds();
-        let category = w.contents.category(&p.name);
+        let category = w.category;
         if w.db.is_empty()
             && w.erp.is_empty()
             && w.text.is_empty()
@@ -327,7 +316,12 @@ fn write_addon(
         std::fs::write(&path, json).map_err(io_err(&path))?;
         w.report.insert(
             0,
-            format!("{} → {id} ({}), category {}", p.source, p.name, category.label()),
+            format!(
+                "{} → {id} ({}), category {}",
+                p.source,
+                p.name,
+                category_label(category)
+            ),
         );
         let path = out.join(REPORT);
         std::fs::write(&path, w.report.join("\n") + "\n").map_err(io_err(&path))?;
@@ -351,7 +345,7 @@ fn manifest(
     game: Option<&dyn GameFiles>,
     id: &str,
     kinds: &[Kind],
-    category: Category,
+    category: Option<Category>,
     operations: Value,
     w: &Writer,
 ) -> Result<AddonManifest> {
@@ -451,7 +445,7 @@ impl Writer {
         self.track.push(AssetOp::Track(TrackOp::Add {
             source: Source::addon(track::TRACK),
         }));
-        self.contents.track = true;
+        self.category = Some(Category::Tracks);
         self.report.push(format!(
             "track {code}: the track package ({n} file(s)) → track.add from track/"
         ));
@@ -592,9 +586,9 @@ impl Writer {
         (tally.logos, tally.views) = self.logos(library, p, &diff)?;
         self.log.time("logo arrays");
         self.mips = tally.mips;
-        self.contents.read(&diff);
         self.base = merge::needs_base(&diff);
         self.replaces = merge::replaces(&diff);
+        self.category = merge::category(&diff);
         if self.base {
             self.report.push(
                 "needs: Team Simplified's SERPs Base Files, which Simplified for Swofty loads with it".into(),
@@ -988,85 +982,6 @@ impl Writer {
     }
 }
 
-impl Contents {
-    fn read(&mut self, diff: &Diff) {
-        self.records = diff.records.len();
-        for t in &diff.text {
-            self.text += t.len();
-            self.team_text += t
-                .entries()
-                .filter(|(k, _)| ["team", "driver"].iter().any(|w| k.contains(w)))
-                .count();
-        }
-        for a in &diff.archives {
-            for uri in a.changed.iter().chain(&a.added).chain(&a.removed) {
-                if uri.starts_with(merge::MARKER) || merge::studio_only(uri) {
-                    continue;
-                }
-                self.count(uri);
-            }
-        }
-        for f in &diff.files {
-            self.count(&f.path);
-        }
-    }
-
-    fn count(&mut self, path: &str) {
-        let lower = path.to_ascii_lowercase();
-        let area = area(&lower);
-        if area == Area::Vehicle && art(&lower) {
-            self.vehicle_art += 1;
-        }
-        if area == Area::Vehicle && ["tyre", "tire", "/wheel"].iter().any(|w| lower.contains(w)) {
-            self.tyres += 1;
-        }
-        *self.areas.entry(area).or_default() += 1;
-    }
-
-    // What the mod changes decides; its name only settles between two categories
-    // its contents fit equally.
-    fn category(&self, name: &str) -> Category {
-        let n = |a| self.areas.get(&a).copied().unwrap_or(0);
-        let (track, vehicle, ui, audio, other) = (
-            n(Area::Track),
-            n(Area::Vehicle),
-            n(Area::Ui),
-            n(Area::Audio),
-            n(Area::Other),
-        );
-        let name = name.to_lowercase();
-        let named = |words: &[&str]| words.iter().any(|w| name.contains(w));
-        if self.track || track > 0 && track >= vehicle + ui {
-            Category::Tracks
-        } else if self.records >= SEASON_RECORDS && (vehicle > 0 || self.team_text > 0) {
-            Category::Seasons
-        } else if vehicle > 0 && vehicle >= ui.max(audio).max(other) {
-            let liveries = self.vehicle_art == vehicle
-                || named(&["livery", "liveries"]) && self.vehicle_art * 2 >= vehicle;
-            match self.tyres * 2 < vehicle && liveries {
-                true => Category::Liveries,
-                false => Category::Cars,
-            }
-        } else if audio > 0 && audio >= ui + other {
-            Category::Audio
-        } else if self.records > 0 && self.team_text > 0 {
-            Category::DriversTeams
-        } else if self.records > 0 && named(&["season", "calendar"]) {
-            Category::Seasons
-        } else if self.records > 0 {
-            Category::Database
-        } else if self.text > 0 || ui > 0 {
-            Category::Ui
-        } else if vehicle > 0 {
-            Category::Cars
-        } else if audio > 0 {
-            Category::Audio
-        } else {
-            Category::Other
-        }
-    }
-}
-
 impl Area {
     fn assets(self) -> (&'static str, &'static str) {
         match self {
@@ -1092,23 +1007,6 @@ fn area(lower: &str) -> Area {
     } else {
         Area::Other
     }
-}
-
-fn art(lower: &str) -> bool {
-    [
-        ".image",
-        ".tif",
-        ".dds",
-        ".png",
-        ".material",
-        ".texarray",
-        MIPMAPS,
-    ]
-    .iter()
-    .any(|e| lower.ends_with(e))
-        || ["livery", "/textures/", "decal"]
-            .iter()
-            .any(|w| lower.contains(w))
 }
 
 fn fill_in(op: AssetOp) -> AssetOp {
@@ -1220,6 +1118,10 @@ fn copy_tree(from: &Path, to: &Path) -> Result<usize> {
         n += 1;
     }
     Ok(n)
+}
+
+fn category_label(category: Option<Category>) -> &'static str {
+    category.map_or("Uncategorised", Category::label)
 }
 
 // "a", "a and b", "a, b and c".

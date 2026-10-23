@@ -443,7 +443,7 @@ fn a_team_rename_becomes_database_and_text_ops() {
     let (c, out) = case.convert(&p, Some(game));
     assert!(!c.base, "a team rename needs no SERPs Base Files");
     assert_eq!(c.id, "mod.venturi.cupra-racing-bulls");
-    assert_eq!(c.category, Category::DriversTeams);
+    assert_eq!(c.category, None);
     assert_eq!(c.kinds, [Kind::Database, Kind::Text]);
     let stock = Gvdb::parse(&stock_db).unwrap();
     let (m, got) = check(&case, &p, &out, Some(&stock));
@@ -459,7 +459,7 @@ fn a_team_rename_becomes_database_and_text_ops() {
     assert_eq!(m.compat.launcher.as_ref().unwrap().to_string(), ">=1.3.0");
     let origin = m.origin.as_ref().unwrap();
     assert_eq!((origin.tool.as_str(), origin.file.as_deref()), (ID, Some("Mod")));
-    assert_eq!(m.category, Some(Category::DriversTeams));
+    assert_eq!(m.category, None);
     assert!(reported(&c, "database: 3 changed, 1 added, 1 removed"));
     assert!(reported(&c, "text: 3 entr(ies) the mod fills in"));
     assert!(!c.report.iter().any(|l| l.starts_with("warning:")));
@@ -644,7 +644,7 @@ fn archive_changes_become_one_overlay_and_remove_resource_ops() {
     );
     let game: &dyn GameFiles = &case.game;
     let (c, out) = case.convert(&p, Some(game));
-    assert_eq!(c.category, Category::Liveries);
+    assert_eq!(c.category, Some(Category::Cars));
     assert_eq!(c.kinds, [Kind::Erp]);
     let (m, got) = check(&case, &p, &out, None);
     assert_eq!(m.version.to_string(), "2.1.0");
@@ -783,7 +783,7 @@ fn team_logo_arrays_ship_merged_with_the_game_s_arrays() {
     );
     let game: &dyn GameFiles = &case.game;
     let (c, out) = case.convert(&p, Some(game));
-    assert_eq!(c.category, Category::Ui);
+    assert_eq!(c.category, None);
     let (_, got) = check(&case, &p, &out, None);
     let merged = got.resources[&(merge::BOOT_ERP.to_owned(), image.clone())]
         .as_ref()
@@ -852,7 +852,7 @@ fn loose_files_become_file_puts_and_programs_are_never_copied() {
     );
     let game: &dyn GameFiles = &case.game;
     let (c, out) = case.convert(&p, Some(game));
-    assert_eq!(c.category, Category::Audio);
+    assert_eq!(c.category, None);
     assert_eq!(c.kinds, [Kind::Erp, Kind::Files]);
     let (m, got) = check(&case, &p, &out, None);
     assert_eq!(m.version.to_string(), "1.0.141+7865");
@@ -894,7 +894,7 @@ fn a_track_package_becomes_track_add_with_the_package_inside() {
         (c.id.as_str(), c.category, c.kinds.as_slice()),
         (
             "mod.test_ring",
-            Category::Tracks,
+            Some(Category::Tracks),
             &[Kind::Database, Kind::Erp][..]
         )
     );
@@ -965,42 +965,6 @@ fn versions_become_semver_and_ids_get_a_namespace() {
 }
 
 #[test]
-fn categories_come_from_contents_and_names_only_settle_ties() {
-    let contents = |uris: &[&str]| {
-        let mut c = Contents::default();
-        for uri in uris {
-            c.count(uri);
-        }
-        c
-    };
-    let tyres = contents(&[
-        "eaid://f1_2026_vehicle_package/shared/tyres/textures/slick_diffuse.tif.image",
-        "eaid://f1_2026_vehicle_package/shared/tyres/idf/tyres.idf?lod=all&ib=0",
-        "eaid://f1_2026_vehicle_package/teams/fom_car/handling/fom_car.vtf",
-    ]);
-    let pirelli = "Pirelli Season 2011 · Default Weather Grip Track — Pirelli Tyres Collection";
-    assert_eq!(tyres.category(pirelli), Category::Cars);
-    let livery = contents(&["eaid://f1_2026_vehicle_package/teams/mclaren/paint.tif.image"]);
-    assert_eq!(livery.category("Season 2026 McLaren"), Category::Liveries);
-    let rules = Contents {
-        records: 40,
-        ..Contents::default()
-    };
-    assert_eq!(rules.category("2026 Season calendar"), Category::Seasons);
-    assert_eq!(rules.category("Faster pit stops"), Category::Database);
-    let season = Contents {
-        records: 5000,
-        team_text: 12,
-        ..Contents::default()
-    };
-    assert_eq!(season.category("Grid"), Category::Seasons);
-    let sounds = contents(&["audio/2025/bundles/ferrari_2025.bdl"]);
-    assert_eq!(sounds.category("Track day sounds"), Category::Audio);
-    let ring = contents(&["eaid://environment_package/tracks/ring/a.tif.image"]);
-    assert_eq!(ring.category("Ring"), Category::Tracks);
-}
-
-#[test]
 fn a_track_zip_keeps_its_sha256() {
     let case = Case::new("track-zip");
     let zip = case.root.join("Test Ring.zip");
@@ -1054,7 +1018,7 @@ fn a_real_database_round_trips_through_the_addon() {
     let p = case.import(&[(DATABASE, ours.to_bytes())], &serps("Real Database", "1.2"));
     let game: &dyn GameFiles = &case.game;
     let (c, out) = case.convert(&p, Some(game));
-    assert_eq!(c.category, Category::Database);
+    assert_eq!(c.category, None);
     let (_, got) = check(&case, &p, &out, Some(&stock));
     assert_eq!(sorted(got.db.as_deref().unwrap()), sorted(&ours.to_bytes()));
     let (_, ops) = addon_ops(&out);
