@@ -11,6 +11,7 @@
 - A mod that uses the shader packages gets its category from what they replace: Cars for a team, the car performance or the tyres, Seasons for three or more teams, Tracks for the sponsor boards. Every other mod is Uncategorised.
 - A converted mod's description lists what it changes. A mod that uses the shader packages also says what they replace, such as the Ferrari team, and whether Simplified Studio made it.
 - Nothing is kept besides the addon: the mod is unpacked only while it converts. To make an addon again, import the mod again; it keeps the same id.
+- A mod imported while the game folder lacked one of its archives carries that archive whole. Once the game has the archive again, the next launcher start turns it into the resources the mod changes, as an import with the archive in place does.
 
 How it works is in [docs/design.md](docs/design.md).
 

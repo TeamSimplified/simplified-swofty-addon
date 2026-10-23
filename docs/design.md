@@ -41,6 +41,8 @@ Any mod works, as copying it into the game folder would.
 | `.exe`, `.dll`, `.asi`, files whose names start with `EAAntiCheat` other than `EAAntiCheat.splash.png`, `EAJavelin` or `preloader_` | Skipped and named in the report |
 | With game folders loose at the content root: a file at the top that the game does not ship, or in a folder that is not a game folder, such as a read-me | Skipped and named in the report |
 
+A `.erp` the game folder lacks when a mod converts is an Addition, and the addon carries it whole as a `file.put`. At startup, once the game has that archive again, `convert::rediff` diffs the addon's copy with it, writes the resources the mod changes or adds as an `erp.overlay` the way an Archive converts, and drops the `file.put` and the copy. The report and the import record get a line for it. A game archive byte-identical to the addon's copy, a shader archive and a `ui_texture` archive keep the whole copy.
+
 4. The id is `<author>.<name>`, lowercased to `[a-z0-9-]`, or the file name when both are missing. Importing an id that exists replaces it: the new copy is staged, the old one moves aside, the new one moves in and the old one is deleted. Profiles keep the id's place and switch.
 5. The importer diffs the package ([section 4.5](#45-diff)) and writes `package.json`.
 
