@@ -21,7 +21,7 @@ How it works is in [docs/design.md](docs/design.md).
 
 ## The About page
 
-- Team Simplified's logo and a short about Team Simplified and Simplified for Swofty, with links to their GitHub and the Simplified Suite.
+- Team Simplified's logo, the addon's version and a short about Team Simplified and Simplified for Swofty, with links to their GitHub and the Simplified Suite.
 
 ## Mods imported before 0.7.0
 
