@@ -192,7 +192,10 @@ pub fn ops(id: &str, diff: &Diff, records: &Gvdb) -> Merged {
         }));
     }
     for k in &diff.records.removed {
-        ops.push(AssetOp::Db(DbOp::RemoveRecord { key: key(*k) }));
+        ops.push(AssetOp::Db(DbOp::RemoveRecord {
+            key: key(*k),
+            allow_stock_removal: false,
+        }));
     }
     let mut resources = 0;
     let mut carried = 0;

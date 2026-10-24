@@ -64,7 +64,7 @@ fn without_repeats(ops: Vec<Op>) -> Vec<Op> {
                 AssetOp::Db(DbOp::PutRecord { key, tag, value }) => {
                     (('d', key.clone(), String::new()), Some((*tag, value.clone())))
                 }
-                AssetOp::Db(DbOp::RemoveRecord { key }) => (('d', key.clone(), String::new()), None),
+                AssetOp::Db(DbOp::RemoveRecord { key, .. }) => (('d', key.clone(), String::new()), None),
                 AssetOp::Lang(LangOp::Set { language, key, value }) => {
                     (('l', language.clone(), key.clone()), Some((0, value.clone())))
                 }
@@ -543,6 +543,11 @@ impl Simplified {
         event: Event,
         conv: &dyn importer::Convert,
     ) -> Result<Effect> {
+        // The launcher sends startup to the first section, About; the importer runs it.
+        let section = match event {
+            Event::Startup {} => SECTION,
+            _ => section,
+        };
         match section {
             SECTION => Ok(page::event(cx, event, conv)?.unwrap_or(Effect::None)),
             about::SECTION => about::event(event),
@@ -685,7 +690,15 @@ mod merge_tests {
                 }),
             )
         };
-        let drop_record = |item: &str| op(item, AssetOp::Db(DbOp::RemoveRecord { key: "0x1".into() }));
+        let drop_record = |item: &str| {
+            op(
+                item,
+                AssetOp::Db(DbOp::RemoveRecord {
+                    key: "0x1".into(),
+                    allow_stock_removal: false,
+                }),
+            )
+        };
         let ops = vec![
             remove("a"),
             remove("b"),
