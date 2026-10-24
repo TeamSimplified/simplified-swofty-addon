@@ -9,7 +9,7 @@
   "homepage": "https://github.com/TeamSimplified/simplified-suite",
   "compat": {
     "game": "f1_25",
-    "launcher": ">=1.3.0"
+    "launcher": ">=1.5.0"
   },
   "icon": "icon.svg",
   "launcher": {
