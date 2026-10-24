@@ -21,7 +21,11 @@ pub const NO_GAME: &str = "Mods turn into addons once Swofty Launcher finds F1 2
 pub struct Made {
     pub id: String,
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "Category::read",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub category: Option<Category>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kinds: Vec<String>,
@@ -1325,6 +1329,26 @@ mod tests {
             "a converted mod leaves the library; one that failed stays to load through the build hook"
         );
         std::fs::remove_dir_all(&host.root).ok();
+    }
+
+    #[test]
+    fn a_record_from_an_earlier_importer_reads_retired_categories_as_none() {
+        for retired in Category::RETIRED {
+            let made: Made = serde_json::from_value(json!({
+                "id": "mod.old",
+                "name": "Old",
+                "category": retired,
+            }))
+            .unwrap();
+            assert_eq!(made.category, None, "{retired}");
+        }
+        let made: Made = serde_json::from_value(json!({
+            "id": "mod.cars",
+            "name": "Cars",
+            "category": "liveries",
+        }))
+        .unwrap();
+        assert_eq!(made.category, Some(Category::Cars));
     }
 
     #[test]
