@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "swofty-addon-simplified"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
  "chrono",
  "rars",
