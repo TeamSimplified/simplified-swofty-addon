@@ -381,16 +381,10 @@ fn manifest(
 
 impl Writer {
     fn kinds(&self) -> Vec<Kind> {
-        let track = !self.track.is_empty();
-        [
-            (Kind::Database, track || !self.db.is_empty()),
-            (Kind::Erp, track || !self.erp.is_empty()),
-            (Kind::Text, !self.text.is_empty()),
-            (Kind::Files, !self.files.is_empty()),
-        ]
-        .into_iter()
-        .filter_map(|(k, on)| on.then_some(k))
-        .collect()
+        if !self.track.is_empty() {
+            return vec![Kind::Database, Kind::Erp];
+        }
+        package_kinds(!self.db.is_empty(), !self.text.is_empty(), self.base)
     }
 
     // A Simplified mod says what it replaces and that Simplified Studio made it; every
@@ -1180,13 +1174,6 @@ pub fn rediff(dir: &Path, game: &dyn GameFiles) -> Result<Vec<String>> {
     } else {
         w.write(FILE_OPS, &kept)?;
     }
-    let puts = kept
-        .iter()
-        .any(|op| matches!(op, AssetOp::File(FileOp::Put { .. })));
-    m.kind.retain(|k| *k != Kind::Files || puts);
-    if !erp.is_empty() && !m.kind.contains(&Kind::Erp) {
-        m.kind.push(Kind::Erp);
-    }
     m.validate()?;
     std::fs::write(&path, serde_json::to_vec_pretty(&m).expect("serialisable")).map_err(io_err(&path))?;
     for whole in wholes {
@@ -1262,6 +1249,17 @@ fn copy_tree(from: &Path, to: &Path) -> Result<usize> {
         n += 1;
     }
     Ok(n)
+}
+
+// The types of an addon made from a mod package: Simplified for one that loads
+// resources from the shader packages, as Simplified Studio mods do, and Files for a
+// copy and paste one, beside Database and Text for what either changes.
+pub fn package_kinds(db: bool, text: bool, simplified: bool) -> Vec<Kind> {
+    let made = if simplified { Kind::Simplified } else { Kind::Files };
+    [(Kind::Database, db), (Kind::Text, text), (made, true)]
+        .into_iter()
+        .filter_map(|(k, on)| on.then_some(k))
+        .collect()
 }
 
 fn category_label(category: Option<Category>) -> &'static str {

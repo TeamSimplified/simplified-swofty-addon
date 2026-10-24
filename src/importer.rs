@@ -92,6 +92,7 @@ fn kind(k: Kind) -> &'static str {
         Kind::Ui => "UI",
         Kind::Files => "Files",
         Kind::Native => "Code",
+        Kind::Simplified => "Simplified",
     }
 }
 
@@ -414,7 +415,8 @@ fn drop_converted(cx: &Cx, library: &Library, record: &Record) -> Result<()> {
 // mods: each is flagged from its import report. 0.10.0 gave some addons another
 // origin.tool; each gets ID back, and loses the "Converted from …" prefix of earlier
 // descriptions. Each gets its category from what its description says it replaces, as
-// convert does from its shader packages: none for a mod that uses none.
+// convert does from its shader packages: none for a mod that uses none. Each mod
+// package's addon gets the types convert gives it now (convert::package_kinds).
 fn relabel(cx: &Cx, mut record: Record) -> Result<Record> {
     let Some(addons) = cx.addons() else {
         return Ok(record);
@@ -448,7 +450,24 @@ fn relabel(cx: &Cx, mut record: Record) -> Result<Record> {
             m.description = (!d.is_empty()).then_some(d);
             dirty = true;
         }
-        let category = match (dir.join(crate::track::TRACK).exists(), made.base) {
+        let track = dir.join(crate::track::TRACK).exists();
+        if !track {
+            let kinds = crate::convert::package_kinds(
+                m.kind.contains(&Kind::Database),
+                m.kind.contains(&Kind::Text),
+                made.base,
+            );
+            if m.kind != kinds {
+                m.kind = kinds;
+                dirty = true;
+            }
+            let labels: Vec<String> = m.kind.iter().map(|k| kind(*k).into()).collect();
+            if made.kinds != labels {
+                made.kinds = labels;
+                changed = true;
+            }
+        }
+        let category = match (track, made.base) {
             (true, _) => Some(Category::Tracks),
             (false, true) => m
                 .description
@@ -1035,7 +1054,7 @@ mod tests {
             Ok(Made {
                 id,
                 name: p.name.clone(),
-                category: Some(Category::Liveries),
+                category: Some(Category::Cars),
                 kinds: vec!["archives".into()],
                 summary: "1 archive resource".into(),
                 lines: vec![format!("2025_asset_groups/{}.erp: 1 resource", p.id)],
@@ -1389,9 +1408,12 @@ mod tests {
             ..Fake::default()
         };
         let addon = Simplified::new();
+        // The launcher sends startup to the addon's first section.
+        let manifest = AddonManifest::parse(crate::MANIFEST).unwrap();
+        let first = manifest.launcher.unwrap().sections[0].id.clone();
         let startup = || {
             with(&host, "one", |cx| {
-                addon.event_with(cx, SECTION, Event::Startup {}, &conv)
+                addon.event_with(cx, &first, Event::Startup {}, &conv)
             })
             .unwrap()
         };
@@ -1490,7 +1512,7 @@ mod tests {
         start(Duration::ZERO);
         let item = |id: &str, state, note: Option<&str>| (id.to_owned(), state, note.map(str::to_owned));
         let next = Some("converts on next start");
-        let liveries = Some("Liveries");
+        let cars = Some("Cars");
         assert_eq!(
             snapshots(&shown),
             [
@@ -1505,12 +1527,12 @@ mod tests {
                     item("c", Waiting, None)
                 ],
                 vec![
-                    item("a", Done, liveries),
+                    item("a", Done, cars),
                     item("b", Waiting, None),
                     item("c", Waiting, None)
                 ],
                 vec![
-                    item("a", Done, liveries),
+                    item("a", Done, cars),
                     item("b", Waiting, next),
                     item("c", Waiting, next)
                 ],
@@ -1525,7 +1547,7 @@ mod tests {
                 vec![item("b", Running, None), item("c", Waiting, None)],
                 vec![item("b", Failed, refused), item("c", Waiting, None)],
                 vec![item("b", Failed, refused), item("c", Running, None)],
-                vec![item("b", Failed, refused), item("c", Done, liveries)],
+                vec![item("b", Failed, refused), item("c", Done, cars)],
             ]
         );
         start(BUDGET);
@@ -1679,7 +1701,7 @@ mod tests {
     }
 
     #[test]
-    fn earlier_imports_are_flagged_from_their_report_and_tagged_simplified_again() {
+    fn earlier_imports_are_flagged_from_their_report_and_typed_and_tagged_again() {
         let host = Host::new("relabel", &["one"]);
         let conv = Fake::default();
         let addon = Simplified::new();
@@ -1709,6 +1731,10 @@ mod tests {
                     _ => "Replaces the Ferrari team. 3 car assets.".to_owned(),
                 },
                 "category": "liveries",
+                "kind": match id {
+                    "imported.plain" => json!(["database", "erp", "files"]),
+                    _ => json!(["erp"]),
+                },
                 "origin": {"tool": if id == "imported.plain" { crate::COPY_PASTE } else { crate::ID }}});
             std::fs::write(dir.join(MANIFEST_FILE), manifest.to_string()).unwrap();
             std::fs::write(
@@ -1750,6 +1776,27 @@ mod tests {
         };
         assert!(!base("imported.plain"));
         assert!(base("imported.shaded"));
+        let kinds = |id: &str| {
+            let m: AddonManifest =
+                serde_json::from_slice(&std::fs::read(dirs[id].join(MANIFEST_FILE)).unwrap()).unwrap();
+            let made = record
+                .mods
+                .values()
+                .filter_map(|e| e.made.as_ref())
+                .find(|m| m.id == id);
+            (m.kind, made.unwrap().kinds.clone())
+        };
+        assert_eq!(
+            kinds("imported.plain"),
+            (
+                vec![Kind::Database, Kind::Files],
+                vec!["Database".into(), "Files".into()]
+            )
+        );
+        assert_eq!(
+            kinds("imported.shaded"),
+            (vec![Kind::Simplified], vec!["Simplified".into()])
+        );
         assert_eq!(Record::load(&host.data).unwrap(), record);
     }
 

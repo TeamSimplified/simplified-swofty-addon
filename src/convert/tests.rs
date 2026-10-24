@@ -358,6 +358,7 @@ fn apply(
             schema_version: 1,
             fields: BTreeMap::new(),
             strict: false,
+            side_data: Default::default(),
             ops: db_ops,
         };
         apply_db_ops(&mut db, &ops, &BTreeMap::<String, Vec<String>>::new()).unwrap();
@@ -444,7 +445,7 @@ fn a_team_rename_becomes_database_and_text_ops() {
     assert!(!c.base, "a team rename needs no SERPs Base Files");
     assert_eq!(c.id, "mod.venturi.cupra-racing-bulls");
     assert_eq!(c.category, None);
-    assert_eq!(c.kinds, [Kind::Database, Kind::Text]);
+    assert_eq!(c.kinds, [Kind::Database, Kind::Text, Kind::Files]);
     let stock = Gvdb::parse(&stock_db).unwrap();
     let (m, got) = check(&case, &p, &out, Some(&stock));
     assert_eq!(sorted(got.db.as_deref().unwrap()), sorted(&mod_db));
@@ -645,7 +646,7 @@ fn archive_changes_become_one_overlay_and_remove_resource_ops() {
     let game: &dyn GameFiles = &case.game;
     let (c, out) = case.convert(&p, Some(game));
     assert_eq!(c.category, Some(Category::Cars));
-    assert_eq!(c.kinds, [Kind::Erp]);
+    assert_eq!(c.kinds, [Kind::Simplified]);
     let (m, got) = check(&case, &p, &out, None);
     assert_eq!(m.version.to_string(), "2.1.0");
     let key = |erp: &str, uri: &str| (erp.to_owned(), uri.to_owned());
@@ -853,7 +854,7 @@ fn loose_files_become_file_puts_and_programs_are_never_copied() {
     let game: &dyn GameFiles = &case.game;
     let (c, out) = case.convert(&p, Some(game));
     assert_eq!(c.category, None);
-    assert_eq!(c.kinds, [Kind::Erp, Kind::Files]);
+    assert_eq!(c.kinds, [Kind::Files]);
     let (m, got) = check(&case, &p, &out, None);
     assert_eq!(m.version.to_string(), "1.0.141+7865");
     assert_eq!(
@@ -1025,7 +1026,7 @@ fn a_real_database_round_trips_through_the_addon() {
     let remove = format!("0x{removed:016x}");
     assert!(
         ops.iter()
-            .any(|op| matches!(op, AssetOp::Db(DbOp::RemoveRecord { key }) if *key == remove))
+            .any(|op| matches!(op, AssetOp::Db(DbOp::RemoveRecord { key, .. }) if *key == remove))
     );
     assert!(reported(
         &c,
@@ -1193,7 +1194,7 @@ fn a_whole_archive_from_a_game_without_it_becomes_an_overlay_once_the_game_has_i
     let (_, fresh_out) = fresh.convert(&fresh_p, Some(&fresh.game as &dyn GameFiles));
     let (m, got) = applied(&case, &out);
     assert_eq!(got, applied(&fresh, &fresh_out).1);
-    assert_eq!(m.kind, [Kind::Erp]);
+    assert_eq!(m.kind, [Kind::Files]);
     assert_eq!(m.operations.erp, [ERP_OPS]);
     assert!(m.operations.assets.is_empty());
     assert!(got.files.is_empty());

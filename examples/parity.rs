@@ -446,6 +446,7 @@ fn got<'a>(addon: &Path, game: &Stock, original: &'a dyn Fn(&str) -> PathBuf) ->
             schema_version: 1,
             fields: BTreeMap::new(),
             strict: false,
+            side_data: Default::default(),
             ops: db_ops,
         };
         apply_db_ops(&mut db, &ops, &BTreeMap::<String, Vec<String>>::new()).map_err(|e| e.to_string())?;
