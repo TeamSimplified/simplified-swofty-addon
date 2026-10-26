@@ -13,6 +13,9 @@ use crate::library::{Library, Package};
 use crate::{Loaded, Result, Slot, State, err, io_err, package};
 
 pub const RECORD: &str = "importer.json";
+// The record's fields that belong to this machine, beside the record. Hidden, so the
+// launcher's multiplayer fingerprint leaves it out.
+pub const LOCAL: &str = ".importer-local.json";
 const STAGING: &str = ".convert";
 pub const UPDATE: &str = "Update Swofty Launcher to 1.3.0 or later to turn mods into addons.";
 pub const NO_GAME: &str = "Mods turn into addons once Swofty Launcher finds F1 25.";
@@ -105,11 +108,13 @@ fn kind(k: Kind) -> &'static str {
 // load from the mod's own boot overlay again.
 pub const CONVERTER: u32 = 3;
 
+// `last`, and each entry's `at` and `error`, are written to `LOCAL`; an older record
+// holds them itself.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     #[serde(default)]
     pub mods: BTreeMap<String, Entry>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub last: Option<Last>,
 }
 
@@ -118,13 +123,30 @@ pub struct Record {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
     pub name: String,
+    #[serde(default, skip_serializing)]
     pub at: u64,
     #[serde(default)]
     pub converter: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub made: Option<Made>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct Local {
+    #[serde(default)]
+    mods: BTreeMap<String, LocalEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last: Option<Last>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct LocalEntry {
+    #[serde(default)]
+    at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -165,27 +187,65 @@ impl Variants {
 }
 
 impl Record {
+    // A record that holds this machine's fields itself was written by an older version,
+    // after `LOCAL` if there is one, so `LOCAL` is then left unread.
     pub fn load(data: &Path) -> Result<Self> {
         let path = data.join(RECORD);
-        match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| err(format!("{}: {e}", path.display()))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(io_err(&path)(e)),
+        let mut record: Self = match std::fs::read(&path) {
+            Ok(bytes) => {
+                serde_json::from_slice(&bytes).map_err(|e| err(format!("{}: {e}", path.display())))?
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) => return Err(io_err(&path)(e)),
+        };
+        let older = record.last.is_some() || record.mods.values().any(|e| e.at != 0 || e.error.is_some());
+        let local = std::fs::read(data.join(LOCAL))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Local>(&bytes).ok());
+        if let Some(local) = local.filter(|_| !older) {
+            for (id, l) in local.mods {
+                if let Some(e) = record.mods.get_mut(&id) {
+                    e.at = l.at;
+                    e.error = l.error;
+                }
+            }
+            record.last = local.last;
         }
+        Ok(record)
     }
 
+    // `LOCAL` first: a record left half saved still holds the fields `LOCAL` lacks.
     pub fn save(&self, data: &Path) -> Result<()> {
         std::fs::create_dir_all(data).map_err(io_err(data))?;
-        let path = data.join(RECORD);
-        let tmp = data.join(format!("{RECORD}.tmp"));
-        let text = serde_json::to_vec_pretty(self).map_err(|e| err(format!("{}: {e}", path.display())))?;
-        std::fs::write(&tmp, text).map_err(io_err(&tmp))?;
-        std::fs::rename(&tmp, &path).map_err(io_err(&path))
+        let local = Local {
+            mods: self
+                .mods
+                .iter()
+                .map(|(id, e)| {
+                    let l = LocalEntry {
+                        at: e.at,
+                        error: e.error.clone(),
+                    };
+                    (id.clone(), l)
+                })
+                .collect(),
+            last: self.last.clone(),
+        };
+        write_json(data, LOCAL, &local)?;
+        write_json(data, RECORD, self)
     }
 
     pub fn addon(&self, id: &str) -> Option<&Made> {
         self.mods.get(id).and_then(|e| e.made.as_ref())
     }
+}
+
+fn write_json(data: &Path, name: &str, value: &impl Serialize) -> Result<()> {
+    let path = data.join(name);
+    let tmp = data.join(format!("{name}.tmp"));
+    let text = serde_json::to_vec_pretty(value).map_err(|e| err(format!("{}: {e}", path.display())))?;
+    std::fs::write(&tmp, text).map_err(io_err(&tmp))?;
+    std::fs::rename(&tmp, &path).map_err(io_err(&path))
 }
 
 pub fn now() -> u64 {
@@ -2071,5 +2131,87 @@ mod tests {
             "a mod converted before keeps its addon's id"
         );
         std::fs::remove_dir_all(&host.root).ok();
+    }
+
+    fn record_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("swofty-importer-record-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_older_record_moves_this_machines_fields_beside_it_on_the_next_save() {
+        let dir = record_dir("older");
+        let older = serde_json::json!({
+            "mods": {
+                "one": { "name": "One", "at": 1792000000, "converter": 3,
+                         "made": { "id": "mod.one", "name": "One", "kinds": ["Database"] } },
+                "two": { "name": "Two", "at": 1792000500, "converter": 3, "error": "C:\\Mods\\two.zip: damaged" },
+            },
+            "last": { "at": 1792000600, "files": ["C:\\Mods\\one.zip"], "mods": ["one"] },
+        });
+        std::fs::write(dir.join(RECORD), older.to_string()).unwrap();
+        let read = Record::load(&dir).unwrap();
+        assert_eq!(read.mods["one"].at, 1792000000);
+        assert_eq!(read.addon("one").unwrap().id, "mod.one");
+        assert_eq!(
+            read.mods["two"].error.as_deref(),
+            Some("C:\\Mods\\two.zip: damaged")
+        );
+        assert_eq!(read.last.as_ref().unwrap().at, 1792000600);
+
+        read.save(&dir).unwrap();
+        let text = std::fs::read_to_string(dir.join(RECORD)).unwrap();
+        for field in ["\"at\"", "\"error\"", "\"last\"", "Mods"] {
+            assert!(!text.contains(field), "{field} in {text}");
+        }
+        assert!(dir.join(LOCAL).is_file());
+        assert_eq!(Record::load(&dir).unwrap(), read);
+
+        let mut rewritten = older.clone();
+        rewritten["mods"]["one"]["at"] = serde_json::json!(1793000000);
+        std::fs::write(dir.join(RECORD), rewritten.to_string()).unwrap();
+        assert_eq!(Record::load(&dir).unwrap().mods["one"].at, 1793000000);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn records_that_differ_only_in_when_and_where_they_ran_save_the_same_record() {
+        let record = |at: u64, path: &str| {
+            let entry = |name: &str| Entry {
+                name: name.into(),
+                at,
+                converter: CONVERTER,
+                made: Some(Made {
+                    id: format!("mod.{name}"),
+                    name: name.into(),
+                    ..Made::default()
+                }),
+                error: None,
+            };
+            let mut failed = entry("two");
+            failed.made = None;
+            failed.error = Some(format!("{path}: damaged"));
+            Record {
+                mods: BTreeMap::from([("one".into(), entry("one")), ("two".into(), failed)]),
+                last: Some(Last {
+                    at,
+                    files: vec![path.into()],
+                    mods: vec!["one".into()],
+                    ..Last::default()
+                }),
+            }
+        };
+        let (a, b) = (record_dir("a"), record_dir("b"));
+        record(1792000000, "C:\\Mods\\two.zip").save(&a).unwrap();
+        record(1795000000, "/home/b/two.zip").save(&b).unwrap();
+        let read = |dir: &Path, name: &str| std::fs::read(dir.join(name)).unwrap();
+        assert_eq!(read(&a, RECORD), read(&b, RECORD));
+        assert_ne!(read(&a, LOCAL), read(&b, LOCAL));
+        assert_eq!(Record::load(&b).unwrap(), record(1795000000, "/home/b/two.zip"));
+        for dir in [a, b] {
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 }

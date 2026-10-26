@@ -182,14 +182,24 @@ The record is `addon-data/teamsimplified.mods/importer.json`:
 {
   "mods": {
     "rm-designs.scuderia-alphatauri-orlen": {
-      "name": "Scuderia AlphaTauri ORLEN", "at": 1792000000,
+      "name": "Scuderia AlphaTauri ORLEN", "converter": 3,
       "made": { "id": "mod.rm-designs.scuderia-alphatauri-orlen", "name": "Scuderia AlphaTauri ORLEN",
                 "category": "cars", "kinds": ["Database", "Archives"], "lines": ["…"] }
     }
-  },
+  }
+}
+```
+
+The fields that belong to the machine go in `.importer-local.json` beside it: each mod's `at` and `error`, and `last`, the last import with its files:
+
+```json
+{
+  "mods": { "rm-designs.scuderia-alphatauri-orlen": { "at": 1792000000 } },
   "last": { "at": 1792000000, "files": ["AlphaTauri.zip"], "mods": ["rm-designs.scuderia-alphatauri-orlen"] }
 }
 ```
+
+Two machines that imported the same mods have the same `importer.json`. An `importer.json` from an earlier version holds `at`, `error` and `last` itself; it reads as before, `.importer-local.json` is then left unread, and the next save moves those fields into `.importer-local.json`. `.importer-local.json` is written first, then `importer.json`.
 
 - `made` is the addon made from the mod. `error` is why the last conversion failed. A failed conversion of a mod converted before keeps the old `made`.
 - Each profile's state lists the mods it has handed over in `addons`. The build hook leaves out a mod that has `made` and is handed over.
