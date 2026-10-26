@@ -198,7 +198,7 @@ impl Record {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
             Err(e) => return Err(io_err(&path)(e)),
         };
-        let older = record.last.is_some() || record.mods.values().any(|e| e.at != 0 || e.error.is_some());
+        let older = record.holds_local();
         let local = std::fs::read(data.join(LOCAL))
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Local>(&bytes).ok());
@@ -212,6 +212,26 @@ impl Record {
             record.last = local.last;
         }
         Ok(record)
+    }
+
+    fn holds_local(&self) -> bool {
+        self.last.is_some() || self.mods.values().any(|e| e.at != 0 || e.error.is_some())
+    }
+
+    // Saving a record an older version wrote moves this machine's fields into `LOCAL`.
+    pub fn split_older(data: &Path) -> Result<()> {
+        let path = data.join(RECORD);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(io_err(&path)(e)),
+        };
+        let on_disk: Self =
+            serde_json::from_slice(&bytes).map_err(|e| err(format!("{}: {e}", path.display())))?;
+        if on_disk.holds_local() {
+            Self::load(data)?.save(data)?;
+        }
+        Ok(())
     }
 
     // `LOCAL` first: a record left half saved still holds the fields `LOCAL` lacks.
@@ -599,6 +619,7 @@ pub fn startup(
     progress: &dyn Progress,
     budget: Duration,
 ) -> Result<Option<String>> {
+    Record::split_older(cx.data_dir)?;
     if cx.addons().is_none() {
         return Ok(None);
     }
@@ -2173,6 +2194,32 @@ mod tests {
         rewritten["mods"]["one"]["at"] = serde_json::json!(1793000000);
         std::fs::write(dir.join(RECORD), rewritten.to_string()).unwrap();
         assert_eq!(Record::load(&dir).unwrap().mods["one"].at, 1793000000);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn startup_splits_an_older_record_without_waiting_for_a_save() {
+        let dir = record_dir("split");
+        Record::split_older(&dir).unwrap();
+        assert!(!dir.join(RECORD).exists());
+
+        let older = serde_json::json!({
+            "mods": { "one": { "name": "One", "at": 1792000000, "converter": 3, "error": "damaged" } },
+            "last": { "at": 1792000600, "files": ["C:\\Mods\\one.zip"], "mods": ["one"] },
+        });
+        std::fs::write(dir.join(RECORD), older.to_string()).unwrap();
+        let before = Record::load(&dir).unwrap();
+        Record::split_older(&dir).unwrap();
+        let text = std::fs::read_to_string(dir.join(RECORD)).unwrap();
+        for field in ["\"at\"", "\"error\"", "\"last\"", "Mods"] {
+            assert!(!text.contains(field), "{field} in {text}");
+        }
+        assert_eq!(Record::load(&dir).unwrap(), before);
+
+        let local = std::fs::read(dir.join(LOCAL)).unwrap();
+        Record::split_older(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(RECORD)).unwrap(), text);
+        assert_eq!(std::fs::read(dir.join(LOCAL)).unwrap(), local);
         std::fs::remove_dir_all(&dir).ok();
     }
 
