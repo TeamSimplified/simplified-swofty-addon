@@ -640,7 +640,7 @@ pub fn startup(
     }
     if m.left > 0 {
         parts.push(format!(
-            "{} more convert at the next start, or with Convert now on the Simplified Importer",
+            "{} more convert at the next start, or with Convert now on the Mod Importer",
             m.left
         ));
     }
@@ -764,7 +764,7 @@ fn migrated(
     }
     if !m.failed.is_empty() {
         m.lines.push(format!(
-            "{} still {} through the Simplified Importer's build step",
+            "{} still {} through the Mod Importer's build step",
             crate::plural(m.failed.len(), "mod", "mods"),
             if m.failed.len() == 1 { "loads" } else { "load" }
         ));
@@ -1669,7 +1669,7 @@ mod tests {
         assert_eq!(
             start().as_deref(),
             Some(
-                "Converted 1 mod into an addon; 1 more convert at the next start, or with Convert now on the Simplified Importer"
+                "Converted 1 mod into an addon; 1 more convert at the next start, or with Convert now on the Mod Importer"
             )
         );
         assert_eq!(start().as_deref(), Some("Converted 1 mod into an addon"));

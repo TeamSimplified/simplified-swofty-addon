@@ -1,6 +1,7 @@
 pub mod about;
 pub mod convert;
 pub mod diff;
+pub mod grid;
 pub mod importer;
 pub mod library;
 pub mod log;
@@ -147,6 +148,7 @@ pub struct Slot {
 
 pub struct Simplified {
     manifest: AddonManifest,
+    grid: grid::Grid,
 }
 
 impl Default for Simplified {
@@ -159,6 +161,7 @@ impl Simplified {
     pub fn new() -> Self {
         Self {
             manifest: AddonManifest::parse(MANIFEST).expect("the built-in manifest is valid"),
+            grid: grid::Grid::default(),
         }
     }
 
@@ -275,8 +278,13 @@ impl Addon for Simplified {
         match section {
             SECTION => page::view(cx),
             about::SECTION => about::view(cx),
+            grid::SECTION => self.grid.view(cx),
             _ => Err(Error::NoSection(section.into())),
         }
+    }
+
+    fn tick(&self, cx: &Cx, section: &str) -> Result<bool> {
+        Ok(section == grid::SECTION && self.grid.tick(cx))
     }
 
     fn event(&self, cx: &Cx, section: &str, event: Event) -> Result<Effect> {
@@ -287,8 +295,8 @@ impl Addon for Simplified {
         Some(self)
     }
 
-    fn build(&self, cx: &BuildCx) -> Result<AssetBatch> {
-        let cx = &cx.cx;
+    fn build(&self, bcx: &BuildCx) -> Result<AssetBatch> {
+        let cx = &bcx.cx;
         let mut batch = AssetBatch::default();
         let Some(game) = cx.game.filter(|_| !cx.profile.vanilla) else {
             return Ok(batch);
@@ -398,6 +406,8 @@ impl Addon for Simplified {
                 },
             }));
         }
+        // The Grid Editor's edits last, over the mods above.
+        self.grid.build(bcx, &mut batch)?;
         Ok(batch)
     }
 
@@ -497,17 +507,28 @@ impl Addon for Simplified {
         if cx.profile.vanilla {
             return None;
         }
-        let loaded = Loaded::read(cx).ok()?;
-        let addons = importer::handed_over(cx).ok()?;
-        let items: Vec<String> = loaded
-            .enabled()
-            .filter(|p| !addons.contains(&p.id))
-            .map(|p| p.name.clone())
-            .collect();
-        (!items.is_empty()).then(|| Summary {
-            label: "MODS".into(),
-            items,
-        })
+        let mods = Loaded::read(cx)
+            .ok()
+            .zip(importer::handed_over(cx).ok())
+            .and_then(|(loaded, addons)| {
+                let items: Vec<String> = loaded
+                    .enabled()
+                    .filter(|p| !addons.contains(&p.id))
+                    .map(|p| p.name.clone())
+                    .collect();
+                (!items.is_empty()).then(|| Summary {
+                    label: "MODS".into(),
+                    items,
+                })
+            });
+        // One summary per addon: with both, the mods and the grid edits under one name.
+        match (mods, self.grid.summary(cx)) {
+            (Some(m), Some(g)) => Some(Summary {
+                label: "SIMPLIFIED".into(),
+                items: m.items.into_iter().chain(g.items).collect(),
+            }),
+            (m, g) => m.or(g),
+        }
     }
 
     fn migrate(&self, data: &Path, version: u32) -> Result<Vec<String>> {
@@ -551,6 +572,7 @@ impl Simplified {
         match section {
             SECTION => Ok(page::event(cx, event, conv)?.unwrap_or(Effect::None)),
             about::SECTION => about::event(event),
+            grid::SECTION => self.grid.event(cx, event),
             _ => Err(Error::NoSection(section.into())),
         }
     }
