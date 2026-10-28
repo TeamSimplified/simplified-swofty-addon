@@ -1,8 +1,8 @@
 # Simplified for Swofty
 
-**Simplified for Swofty** is Team Simplified's addon for [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). Its **Simplified Importer** turns any F1 25 mod into a standalone Swofty addon. The importer shows as **Simplified Importer** under **Simplified for Swofty** in the launcher's sidebar, below an **About** page, and as `swofty mods` on the command line.
+**Simplified for Swofty** is Team Simplified's addon for [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). Its **Mod Importer** turns any F1 25 mod into a standalone Swofty addon, and its **Grid Editor** edits the grids. Both show under **Simplified for Swofty** in the launcher's sidebar, below an **About** page: **Mod Importer**, then **Grid Editor**. The importer is also `swofty mods` on the command line.
 
-- Works with any mod: drop its zip, 7z, rar or folder on the launcher, or choose it on the Simplified Importer page. The game folders can sit at the top or up to three folders down, or in a folder named like `F1 25`. Mods made with Simplified Studio (`.serps`) and community track zips import too.
+- Works with any mod: drop its zip, 7z, rar or folder on the launcher, or choose it on the Mod Importer page. The game folders can sit at the top or up to three folders down, or in a folder named like `F1 25`. Mods made with Simplified Studio (`.serps`) and community track zips import too.
 - Each mod becomes a Swofty data addon on the **Addons** page, with its own switch, place in the load order and conflicts. Lower in the list wins.
 - The addon holds what the mod changes from the game's own files: database records, text, archive resources, files and tracks.
 - After an import the addon is on in the active profile, and the launcher switches to **Addons** with the addon highlighted.
@@ -15,10 +15,23 @@
 
 How it works is in [docs/design.md](docs/design.md).
 
-## The Simplified Importer page
+## The Mod Importer page
 
 - **Choose a mod…** picks zips, 7z and rar archives and folders, several at once. A drop anywhere on the window does the same.
 - After an import, the launcher shows the new addon on **Addons**, or a notice with what went wrong. A mod that can't be made into an addon isn't kept.
+
+## The Grid Editor page
+
+- The profile's grids down the left: the game's F1 and F2 grids, then the grids addons add, such as the Classic Seasons years, then Presets, Driver Profiles and My Team Emblem.
+- Each grid's teams in a table. Clicking a team opens a panel to edit its name, car numbers, team principal and colours in place, save it as a preset, export it as an addon or import a preset onto it. **Replace logos** opens a page with the team's logos, place by place.
+- Driver Profiles edits a driver's names, initials and nationality on every grid, and his car number and helmet season by season.
+- It reads the profile's other addons as they are and applies its edits on Play, after the mods the importer loads itself. The edits load where Simplified for Swofty is in the load order, so put it below addons that change the same teams for the edits to win.
+
+More in [docs/grid-editor.md](docs/grid-editor.md).
+
+### Coming from the Simplified Grid Editor addon
+
+The Grid Editor was its own addon, `teamsimplified.grid-editor`. The first time the page opens, its edits, logos and presets are copied here. While that addon is still on, the Grid Editor page says so and leaves its edits out of the build, so they don't apply twice: turn it off or remove it on the Addons page.
 
 ## The About page
 
@@ -43,7 +56,7 @@ Its id is `teamsimplified.mods`, the same id the launcher's built-in copy used, 
 
 The helper speaks the launcher's helper protocol through `swofty_addon::helper::run_helper`. Version 0.7.0 needs Swofty Launcher 1.3.0 or later: it installs, turns on and orders addons with the addon host calls (`install_addon`, `set_addon_enabled`, `addons`, `move_addon`) and asks the launcher to show an addon with the `show_addon` effect. The helper decides which dropped files and folders it imports, checking them by their contents.
 
-`sections/mods.svg` gives the Simplified Importer page its sidebar icon, Team Simplified's mark.
+`sections/mods.svg` gives the Mod Importer page its sidebar icon, Team Simplified's mark, and `sections/grids.svg` gives the Grid Editor page its own.
 
 The one-time move of tracks from the launcher's old `maps/` folder only runs in the built-in copy.
 
