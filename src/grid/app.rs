@@ -42,6 +42,9 @@ pub struct App {
     pub id: String,
     pub data_dir: PathBuf,
     pub cache_dir: PathBuf,
+    /// The folder the ops' "cache" sources are read from: the addon's cache folder,
+    /// which holds cache_dir.
+    pub cache_root: PathBuf,
     pub data_root: PathBuf,
     pub profile: String,
     pub vanilla: bool,
@@ -93,6 +96,10 @@ impl App {
                 .unwrap_or_default(),
         };
         let data_dir = path("data_dir");
+        let cache_root = match params["cache_root"].as_str() {
+            Some(root) => PathBuf::from(root),
+            None => cache_dir.clone(),
+        };
         App {
             id: params["addon"]
                 .as_str()
@@ -101,6 +108,7 @@ impl App {
             edits: Edits::load(&data_dir),
             data_dir,
             cache_dir,
+            cache_root,
             data_root,
             profile: params["profile"]["name"].as_str().unwrap_or("default").to_owned(),
             vanilla: params["profile"]["vanilla"].as_bool().unwrap_or(false),

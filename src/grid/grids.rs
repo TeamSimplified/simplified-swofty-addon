@@ -73,6 +73,10 @@ pub struct Team {
     /// The list of an optional team the game adds to a grid on request, such as
     /// Konnersport on F1 2025.
     pub optional: Option<String>,
+    /// The addon whose registry defines the team, such as the F1 2012 season's: the
+    /// game makes it at startup, after the database edits, so its own fields can't be
+    /// edited from here.
+    pub registry: Option<String>,
 }
 
 impl Team {
@@ -544,6 +548,7 @@ pub fn catalog(world: &World) -> Catalog {
                 seats: vec![seat],
                 boss: db.field(trow, "team_boss"),
                 optional,
+                registry: world.registry_teams.get(&team_label).map(|r| r.addon.clone()),
             });
         }
         for t in &mut teams {

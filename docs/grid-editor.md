@@ -11,7 +11,10 @@ driver**, and clicking the principal **Replace team principal**; the long lists 
 load then. It edits:
 
 - **Grids:** F1 2026, F1 2025, F2 2026, F2 2025 and F2 2024, plus a tab for every grid an
-  enabled addon adds, such as the Classic Seasons years. F1 2025 includes the optional
+  enabled addon adds, such as the Classic Seasons years. A season that defines its teams
+  in the launcher's registry, such as the F1 2012 season, shows its teams as the game
+  makes them at startup; their names, colours, logos and principal are that addon's, and
+  their line-ups and drivers can be edited. F1 2025 includes the optional
   Konnersport and APXGP teams; renaming them renames their menu entries too.
 - **Team names:** full, short and super short. Names are text
   in the game's language files. A name key that other teams or names share gets a key of
