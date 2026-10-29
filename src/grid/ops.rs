@@ -35,6 +35,10 @@ pub struct Out {
 }
 
 fn team_ops(team: &Team, edits: &Edits, catalog: &Catalog, out: &mut Out) {
+    // A registry team's row doesn't exist yet when the database edits apply.
+    if team.registry.is_some() {
+        return;
+    }
     let Some(edit) = edits.teams.get(&team.label) else {
         return;
     };
@@ -218,7 +222,7 @@ pub fn placements(catalog: &Catalog, edits: &Edits, lib: &Library, data_dir: &Pa
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     for grid in &catalog.grids {
-        for team in &grid.teams {
+        for team in grid.teams.iter().filter(|t| t.registry.is_none()) {
             let Some(edit) = edits.teams.get(&team.label) else {
                 continue;
             };

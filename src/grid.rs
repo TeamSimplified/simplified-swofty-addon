@@ -94,6 +94,7 @@ impl Grid {
                 "addon": ID,
                 "data_dir": data_dir,
                 "cache_dir": cx.cache_dir.join(FOLDER),
+                "cache_root": cx.cache_dir,
                 "data_root": root,
                 "profile": { "name": cx.profile.name, "vanilla": cx.profile.vanilla, "enabled": cx.profile.enabled },
                 "host_calls": Host::calls(cx),

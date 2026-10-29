@@ -186,6 +186,22 @@ fn placed_logo(app: &App, file: &str, w: u32, h: u32, size: u32) -> Option<PathB
 }
 
 /// The logo a team's card shows: the little timing tower one, else any.
+/// A registry team's logo: its picture from the addon's registry, fitted and kept in
+/// the cache, where the launcher shows pictures from.
+fn registry_logo(app: &App, l: &Loaded, team: &Team) -> Option<PathBuf> {
+    let src = l.world.registry_teams.get(&team.label)?.logo.as_ref()?;
+    let len = src.metadata().ok()?.len();
+    let path = app
+        .cache_dir
+        .join("registry")
+        .join(format!("{}-{len:x}.png", team.label));
+    if !path.is_file() {
+        let img = image::load_picture(src, 256).ok()?;
+        image::save_png(&img, &path).ok()?;
+    }
+    Some(path)
+}
+
 fn card_logo(app: &App, lib: &Library, grid: &Grid, team: &Team) -> Option<PathBuf> {
     ["standings", "team_select", "starting_grid", logos::SHOWROOM]
         .iter()
@@ -581,8 +597,19 @@ fn row_detail(app: &App, l: &Loaded, grid: &Grid, team: &Team, presets: &[(Strin
     if let Some((_, which)) = app.team_form.as_ref().filter(|(t, _)| *t == team.label) {
         blocks.extend(team_form(app, team, which, presets));
     }
+    // A registry team: its picture, and what can be edited.
+    if let Some(addon) = &team.registry {
+        if let Some(p) = registry_logo(app, l, team) {
+            blocks.push(json!({ "image": { "path": path_str(&p), "width": 148, "height": 148, "fit": "contain", "transparent": true } }));
+        }
+        blocks.push(text(
+            &format!("{addon} makes this team when the game starts, so its name, colours, logo and principal are that addon's. Its drivers and car numbers can be edited here."),
+            "muted",
+        ));
+    }
     // The team selection logo, at most the panel's width, and the way to the logos page.
-    if let Some(lib) = l.lib.as_ref()
+    if team.registry.is_none()
+        && let Some(lib) = l.lib.as_ref()
         && let Some((path, _)) = logo_for(app, lib, grid, team, "team_select")
         && let Some((sw, sh)) = slot_size(lib, grid, team, "team_select")
     {
@@ -592,8 +619,10 @@ fn row_detail(app: &App, l: &Loaded, grid: &Grid, team: &Team, presets: &[(Strin
             "height": (sh as f32 * scale).round() as u32, "fit": "contain", "transparent": true } }),
         );
     }
-    blocks.push(json!({ "buttons": [
-        { "id": format!("edit-team:{}", team.label), "label": "Replace logos", "icon": "pencil", "style": "primary" } ] }));
+    if team.registry.is_none() {
+        blocks.push(json!({ "buttons": [
+            { "id": format!("edit-team:{}", team.label), "label": "Replace logos", "icon": "pencil", "style": "primary" } ] }));
+    }
 
     // The names, race numbers and colours, saved as they're changed like on the team's page.
     blocks.push(json!({ "label": "TEAM NAME" }));
@@ -609,7 +638,10 @@ fn row_detail(app: &App, l: &Loaded, grid: &Grid, team: &Team, presets: &[(Strin
             json!({ "text": field })
         })
         .collect();
-    blocks.push(json!({ "form": { "id": format!("names:{}", team.label), "live": true, "fields": names } }));
+    blocks.push(
+        json!({ "form": { "id": format!("names:{}", team.label), "live": true, "fields": names,
+        "disabled": team.registry.is_some() } }),
+    );
 
     if !team.seats.is_empty() {
         blocks.push(json!({ "label": "DRIVERS" }));
@@ -690,7 +722,9 @@ fn row_detail(app: &App, l: &Loaded, grid: &Grid, team: &Team, presets: &[(Strin
         } }));
     }
 
-    blocks.extend(principal_blocks(app, cat, team));
+    if team.registry.is_none() {
+        blocks.extend(principal_blocks(app, cat, team));
+    }
 
     // Colour cells draw their own dot and open a picker, lighter than colour fields.
     blocks.push(json!({ "label": "COLOURS" }));
@@ -698,7 +732,16 @@ fn row_detail(app: &App, l: &Loaded, grid: &Grid, team: &Team, presets: &[(Strin
         .iter()
         .map(|(field, title)| {
             let hex = colour_of(&app.edits, team, field).unwrap_or_default();
-            let c = json!({ "text": hex, "edit": { "colour": { "value": hex } } });
+            let c = match team.registry {
+                Some(_) => {
+                    let mut c = json!({ "text": hex });
+                    if let Some(p) = dot(app, &hex, 32) {
+                        c["image"] = json!({ "path": p, "width": 14, "height": 14, "fit": "contain", "transparent": true });
+                    }
+                    c
+                }
+                None => json!({ "text": hex, "edit": { "colour": { "value": hex } } }),
+            };
             let c = toned(
                 c,
                 mine(&app.edits, team, field),
@@ -824,6 +867,11 @@ fn team_form(app: &App, team: &Team, which: &str, presets: &[(String, Preset)]) 
 fn team_addons(l: &Loaded, grid: &Grid, team: &Team) -> Vec<String> {
     let w = &l.world;
     let mut out = w.writers(&team.label);
+    if let Some(a) = &team.registry
+        && !out.contains(a)
+    {
+        out.push(a.clone());
+    }
     let mut add = |a: &str| {
         if !out.iter().any(|x| x == a) {
             out.push(a.to_owned());
@@ -892,7 +940,11 @@ fn grid_page(app: &App, l: &Loaded, grid: &Grid, presets: &[(String, Preset)]) -
                 json!({ "path": p, "width": 18, "height": 18, "fit": "contain", "transparent": true });
         }
         let mut logo_cell = json!({ "text": "" });
-        if let Some(p) = lib.and_then(|lib| card_logo(app, lib, grid, team)) {
+        let logo = match team.registry {
+            Some(_) => registry_logo(app, l, team),
+            None => lib.and_then(|lib| card_logo(app, lib, grid, team)),
+        };
+        if let Some(p) = logo {
             logo_cell["image"] = json!({ "path": path_str(&p), "width": 28, "height": 28, "fit": "contain", "transparent": true });
         }
         let team_cell = toned(
@@ -2501,15 +2553,21 @@ pub fn build(app: &mut App, host: &mut Host, params: &Value) -> Value {
             app.error.clone().unwrap_or_default())] });
     };
     let (live, _) = app.edits.live(&l.catalog);
-    let root = app.cache_dir.clone();
-    let _ = std::fs::remove_dir_all(root.join("build"));
+    // The files go in the editor's cache folder, named from the launcher's cache root,
+    // where the ops' sources are read from.
+    let root = app.cache_root.clone();
+    let base = match app.cache_dir.strip_prefix(&root) {
+        Ok(dir) if !dir.as_os_str().is_empty() => format!("{}/", dir.to_string_lossy().replace('\\', "/")),
+        _ => String::new(),
+    };
+    let _ = std::fs::remove_dir_all(root.join(format!("{base}build")));
     let mut out = ops::all(
         &l.catalog,
         &live,
         l.lib.as_ref(),
         &app.data_dir,
         &root,
-        "build",
+        &format!("{base}build"),
         true,
         true,
     );
@@ -2520,7 +2578,7 @@ pub fn build(app: &mut App, host: &mut Host, params: &Value) -> Value {
             game,
             &app.data_dir,
             &root,
-            "build/emblems",
+            &format!("{base}build/emblems"),
             true,
         );
         for op in &ops {

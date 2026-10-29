@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use swofty_addon::asset::{AssetOp, FileOp, LangOp, OpFile, Root, Source};
 use swofty_addon::manifest::AddonManifest;
-use swofty_addon::ops::{DbOps, DbReport, ErpOp, apply_db_ops_lenient};
+use swofty_addon::ops::{DbOp, DbOps, DbReport, ErpOp, apply_db_ops_lenient};
 use swofty_core::profile::Profile;
 use swofty_core::rowkeys::{Names, RowKeys};
 use swofty_core::settings::render_ops;
@@ -112,6 +112,134 @@ fn roster(addon: &AddonRef, data_root: &Path) -> Option<Roster> {
     })
 }
 
+/// A team an addon defines in the launcher's registry (team.identity in its
+/// registry/*.json) rather than with database ops, such as the F1 2012 season's: the
+/// game makes it at startup from a stock team, after the launcher's database edits.
+/// The editor makes it the same way to show it, and leaves its own fields alone.
+pub struct RegistryTeam {
+    pub addon: String,
+    /// Its logo picture from the registry (team.logo), for the menus.
+    pub logo: Option<PathBuf>,
+}
+
+/// The registry's records of one kind across an addon's registry files, by key.
+fn registry_records(addon: &AddonRef, kind: &str) -> BTreeMap<String, Value> {
+    let mut out = BTreeMap::new();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(addon.dir.join("registry"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    files.sort();
+    for f in files {
+        if let Some(records) = read_json(&f).get(kind).and_then(Value::as_object) {
+            out.extend(records.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+    }
+    out
+}
+
+/// The registry's team colours are #AARRGGBB; the database's are signed ARGB.
+fn registry_colour(text: &str) -> Option<String> {
+    let h = text.trim().trim_start_matches('#');
+    let rgb = h.get(h.len().checked_sub(6)?..)?;
+    crate::grid::grids::encode_colour(rgb)
+}
+
+/// Adds an addon's registry teams to the database as rows copied from their donors,
+/// with their names and colours. Returns them by label.
+fn add_registry_teams(
+    addon: &AddonRef,
+    db: &mut Db,
+    names: &Names,
+    notes: &mut Vec<String>,
+) -> HashMap<String, RegistryTeam> {
+    let logos = registry_records(addon, "team.logo");
+    let mut ops = Vec::new();
+    let mut out = HashMap::new();
+    for (label, rec) in registry_records(addon, "team.identity") {
+        if db.find("entrants.teams", "team", &label).is_some() {
+            continue;
+        }
+        let Some(donor) = rec["donor"]
+            .as_str()
+            .map(|d| d.strip_prefix("game/").unwrap_or(d))
+        else {
+            continue;
+        };
+        let mut set = BTreeMap::from([("_metadata_".to_owned(), label.clone())]);
+        for (part, field) in [
+            ("title", "display_name"),
+            ("short_name", "display_name_short"),
+            ("super_short", "display_name_super_short"),
+            ("code", "display_name_code"),
+        ] {
+            if let Some(v) = rec["names"][part].as_str() {
+                set.insert(field.to_owned(), v.to_owned());
+            }
+        }
+        for (part, field) in [
+            ("menu", "ui_team_colour"),
+            ("primary", "primary_colour"),
+            ("secondary", "secondary_colour"),
+            ("tertiary", "tertiary_colour"),
+        ] {
+            if let Some(v) = rec["colours"][part].as_str().and_then(registry_colour) {
+                set.insert(field.to_owned(), v);
+            }
+        }
+        ops.push(DbOp::AddRow {
+            table: "entrants.teams".into(),
+            from: format!("entrants.teams.team[_metadata_={donor}]"),
+            set,
+            copy: None,
+            stat_id: None,
+        });
+        // "logo": "<addon>/<key>" names a team.logo record; its menu picture shows here.
+        let logo = rec["logo"]
+            .as_str()
+            .map(|l| l.rsplit('/').next().unwrap_or(l))
+            .and_then(|key| logos.get(key))
+            .and_then(|l| {
+                let images = &l["images"];
+                ["team_select", "driver_select", "hub"]
+                    .iter()
+                    .find_map(|k| images[*k].as_str())
+            })
+            .map(|rel| addon.dir.join(rel))
+            .filter(|p| p.is_file());
+        out.insert(
+            label,
+            RegistryTeam {
+                addon: addon.name.clone(),
+                logo,
+            },
+        );
+    }
+    if ops.is_empty() {
+        return out;
+    }
+    let ops = DbOps {
+        schema_version: 1,
+        fields: BTreeMap::new(),
+        strict: false,
+        side_data: Default::default(),
+        ops,
+    };
+    let (_, failed) = apply_db_ops_lenient(&mut db.gvdb, &ops, names, &mut DbReport::default());
+    if let Some((_, why)) = failed.first() {
+        notes.push(format!(
+            "{}: {} registry team(s) don't read here, such as: {why}",
+            addon.name,
+            failed.len()
+        ));
+    }
+    db.reindex();
+    out
+}
+
 /// One ERP op of another addon, with what it needs to read its source.
 #[derive(Debug, Clone)]
 pub struct ErpChange {
@@ -148,6 +276,8 @@ pub struct World {
     pub build_drivers: HashSet<String>,
     /// More Driver Models' drivers, when the profile has it on.
     pub roster: Option<Roster>,
+    /// The teams addons define in the launcher's registry, by label.
+    pub registry_teams: HashMap<String, RegistryTeam>,
     pub built: Option<PathBuf>,
     pub notes: Vec<String>,
 }
@@ -408,10 +538,22 @@ const BUILD_DRIVER_FIELDS: [&str; 5] = [
 
 /// Driver rows the last build gave other names or a head: an addon such as More
 /// Driver Models does that from its build step, for the drivers it has on. The
-/// editor's own names, under its lng_sge_ keys, are left out. Returns the labels.
-fn drivers_from_build(db: &mut Db, edits: &BuildEdits) -> HashSet<String> {
+/// editor's own names, under its lng_sge_ keys, are left out. The writes name rows by
+/// place, so only the game's own rows, which keep theirs, take them, and a row an addon
+/// adds only when the build had that same driver there: one turned on since the build,
+/// such as the F1 2012 season, would otherwise take another driver's name. Returns the
+/// labels.
+fn drivers_from_build(db: &mut Db, edits: &BuildEdits, stock: usize) -> HashSet<String> {
     let mut out = HashSet::new();
-    for r in db.rows("entrants.drivers", "driver") {
+    for (i, r) in db.rows("entrants.drivers", "driver").into_iter().enumerate() {
+        let label = db.field(&r, "_metadata_");
+        let same = i < stock
+            || edits
+                .get(&fnv1a64(format!("{r}._metadata_")))
+                .is_some_and(|(_, v)| *v == label.as_bytes());
+        if !same {
+            continue;
+        }
         for f in BUILD_DRIVER_FIELDS {
             let key = fnv1a64(format!("{r}.{f}"));
             let Some((tag, value)) = edits.get(&key) else {
@@ -422,44 +564,75 @@ fn drivers_from_build(db: &mut Db, edits: &BuildEdits) -> HashSet<String> {
                 continue;
             }
             db.put_key(key, *tag, value.clone());
-            out.insert(db.field(&r, "_metadata_"));
+            out.insert(label.clone());
         }
     }
     out
 }
 
-// Rows past the live row count that the last build has: the rows addons add from
-// their build step. Their keys come from the launcher's key catalogue.
-fn grow_from_build(db: &mut Db, edits: &BuildEdits, notes: &mut Vec<String>) -> usize {
+// The rows addons add from their build step, which only the last build has, such as
+// More Driver Models' drivers. The build names rows by place, and places move when an
+// addon is turned on or off since, so a row is matched by its label: one the build
+// has that isn't here yet is added at the end, its keys from the launcher's key
+// catalogue. A driver comes back only while his head is still in the profile: one an
+// addon turned off since added doesn't.
+fn grow_from_build(
+    db: &mut Db,
+    edits: &BuildEdits,
+    heads: &HashSet<String>,
+    notes: &mut Vec<String>,
+) -> usize {
     let keys = RowKeys::builtin();
     let mut added = 0;
     for (container, row, shape) in GROWN_TABLES {
         let count_path = format!("{container}._{row}_instancecount_");
-        let live = db.count(container, row);
         let Some(built_count) = edits
             .get(&fnv1a64(&count_path))
             .and_then(|(_, v)| String::from_utf8_lossy(v).trim().parse::<usize>().ok())
         else {
             continue;
         };
-        if built_count <= live {
-            continue;
-        }
         let Some(fields) = keys.get(shape) else {
             notes.push(format!("the key catalogue has no {shape}"));
             continue;
         };
-        for i in live..built_count {
+        let mut here: HashSet<String> = db
+            .rows(container, row)
+            .iter()
+            .map(|r| db.field(r, "_metadata_"))
+            .collect();
+        let mut live = db.count(container, row);
+        let before = live;
+        for i in 0..built_count {
+            let Some((_, label)) = edits.get(&fnv1a64(format!("{container}.{row}_{i}._metadata_"))) else {
+                continue;
+            };
+            let label = String::from_utf8_lossy(label).into_owned();
+            let head = edits
+                .get(&fnv1a64(format!("{container}.{row}_{i}.head")))
+                .map(|(_, h)| String::from_utf8_lossy(h).to_lowercase());
+            if row == "driver" && head.is_some_and(|h| !heads.contains(&h)) {
+                continue;
+            }
+            if label.is_empty() || !here.insert(label) {
+                continue;
+            }
             for f in fields {
-                let path = format!("{container}.{row}_{i}.{f}");
-                if let Some((tag, value)) = edits.get(&fnv1a64(&path)) {
-                    db.put_key(fnv1a64(&path), *tag, value.clone());
+                if let Some((tag, value)) = edits.get(&fnv1a64(format!("{container}.{row}_{i}.{f}"))) {
+                    db.put_key(
+                        fnv1a64(format!("{container}.{row}_{live}.{f}")),
+                        *tag,
+                        value.clone(),
+                    );
                 }
             }
-            added += 1;
+            live += 1;
         }
-        let tag = db.gvdb.get(&count_path).map_or(0, |r| r.tag);
-        db.put_key(fnv1a64(&count_path), tag, built_count.to_string().into_bytes());
+        if live > before {
+            added += live - before;
+            let tag = db.gvdb.get(&count_path).map_or(0, |r| r.tag);
+            db.put_key(fnv1a64(&count_path), tag, live.to_string().into_bytes());
+        }
     }
     added
 }
@@ -580,6 +753,7 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
     let mut erp = Vec::new();
     let mut defaults: Vec<(String, String)> = Vec::new();
     let mut sets: Vec<(String, String)> = Vec::new();
+    let mut registry_teams = HashMap::new();
     for addon in &inputs.addons {
         if addon.id == inputs.me {
             continue;
@@ -640,6 +814,12 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
                 driver_origin.insert(d.clone(), addon.name.clone());
             }
             drivers_before = now;
+        }
+        let added = add_registry_teams(addon, &mut db, &names, &mut notes);
+        if !added.is_empty() {
+            // Later addons changing them count as changes.
+            teams_before = team_values(&db);
+            registry_teams.extend(added);
         }
         for r in db.rows("entrants.entrant_lists", "entrant_list") {
             let label = db.field(&r, "_metadata_");
@@ -732,12 +912,12 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
     if let Some(dir) = &built {
         let edits = build_edits(dir);
         let before = driver_labels(&db);
-        let n = grow_from_build(&mut db, &edits, &mut notes);
+        let n = grow_from_build(&mut db, &edits, &heads, &mut notes);
         if n > 0 {
             db.reindex();
         }
         build_drivers = driver_labels(&db).difference(&before).cloned().collect();
-        build_drivers.extend(drivers_from_build(&mut db, &edits));
+        build_drivers.extend(drivers_from_build(&mut db, &edits, stock_drivers.len()));
     }
     Ok(World {
         db,
@@ -753,6 +933,7 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
         head_origin,
         stock_drivers,
         build_drivers,
+        registry_teams,
         roster: inputs
             .addons
             .iter()
