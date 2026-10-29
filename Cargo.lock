@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "swofty-addon-simplified"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "chrono",
  "jpeg-decoder",
