@@ -29,10 +29,6 @@ How it works is in [docs/design.md](docs/design.md).
 
 More in [docs/grid-editor.md](docs/grid-editor.md).
 
-### Coming from the Simplified Grid Editor addon
-
-The Grid Editor was its own addon, `teamsimplified.grid-editor`. The first time the page opens, its edits, logos and presets are copied here. While that addon is still on, the Grid Editor page says so and leaves its edits out of the build, so they don't apply twice: turn it off or remove it on the Addons page.
-
 ## The About page
 
 - Team Simplified's logo, the addon's version and a short about Team Simplified and Simplified for Swofty, with links to their GitHub and the Simplified Suite.
