@@ -1,4 +1,4 @@
 build/
-simplified.dll
-simplified.lib
-simplified.pdb
+*.dll
+*.lib
+*.pdb
