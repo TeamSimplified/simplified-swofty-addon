@@ -25,3 +25,11 @@ attribution requirement applies to this work and to every work based on it:
 >
 > **Based on Simplified Suite by Team Simplified - https://github.com/TeamSimplified/simplified-suite**
 ```
+
+## Swofty SDK
+
+The native DLL (`native/simplified.dll`, from `native/src/progressive.cpp`) is built against the headers of the Swofty SDK, kept in `native/include` as launcher 1.6.12 ships them. They are licensed under the MIT License, whose text is in `native/include/LICENSE`:
+
+```
+Copyright (c) 2026 Jacob Nardella (Swofty)
+```

@@ -12,7 +12,7 @@ use crate::grid::host::Host;
 use crate::grid::image;
 use crate::grid::logos::{self, Library};
 use crate::grid::ops;
-use crate::grid::world::World;
+use crate::grid::world::{self, World};
 
 pub const SECTION: &str = "grids";
 const PRESETS_TAB: &str = "presets";
@@ -1554,6 +1554,13 @@ pub fn view(app: &mut App, host: &mut Host, section: &str) -> Value {
         }
         return v;
     }
+    if matches!(app.page, Page::Grid | Page::Team(_))
+        && let Some(p) = &l.world.progressive
+        && let Some(year) = world::progressive_year(&app.grid)
+    {
+        notices.push(json!({ "text": format!("{} plays its {year} season with these teams, so their names, logos and drivers edited here show there too: in a new career, and in a running one from the next season it starts. Its car numbers stay its own.", p.name),
+            "tone": "muted" }));
+    }
     let content = match &app.page {
         Page::Presets => {
             vec![json!({ "card": { "title": "Presets", "blocks": presets_page(app, l, &presets) } })]
@@ -2571,6 +2578,7 @@ pub fn build(app: &mut App, host: &mut Host, params: &Value) -> Value {
         true,
         true,
     );
+    ops::newer_heads(&l.catalog, &l.world, &mut out);
     if let Some(game) = app.game_dir.as_deref() {
         let (ops, warnings) = emblems::ops(
             &live,
@@ -2591,6 +2599,24 @@ pub fn build(app: &mut App, host: &mut Host, params: &Value) -> Value {
         }
         out.ops.extend(ops);
         out.warnings.extend(warnings);
+    }
+    // Progressive Career's seats, where Simplified's DLL reads them in the game. Written
+    // every time, so a seat put back on a grid leaves its season too.
+    let seats = match &l.world.progressive {
+        Some(p) => ops::progressive_seats(&l.catalog, &live, &l.world, p, &mut out),
+        None => json!({ "seats": {} }),
+    };
+    let rel = format!("{base}build/progressive.json");
+    let written = std::fs::create_dir_all(root.join(format!("{base}build")))
+        .and_then(|_| std::fs::write(root.join(&rel), seats.to_string()));
+    match written {
+        Ok(()) => out.ops.push(
+            json!({ "op": "file.put", "source": { "root": "cache", "path": rel },
+            "target": format!("swofty/addons/{}/{}", app.id, world::PROGRESSIVE_SEATS) }),
+        ),
+        Err(e) => out
+            .warnings
+            .push(format!("Progressive Career's seats can't be written: {e}")),
     }
     app.note_applied(&out.lang_keys);
     ops::reply(out, &params["features"])

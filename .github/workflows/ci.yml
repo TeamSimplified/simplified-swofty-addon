@@ -30,3 +30,17 @@ jobs:
 
       - name: Test
         run: cargo test
+
+  native:
+    name: Native DLL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The Zig Swofty builds its native code with.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build and test
+        run: native/build.sh test

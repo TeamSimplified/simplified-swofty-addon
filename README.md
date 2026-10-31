@@ -25,7 +25,8 @@ How it works is in [docs/design.md](docs/design.md).
 - The profile's grids down the left: the game's F1 and F2 grids, then the grids addons add, such as the Classic Seasons years, then Presets, Driver Profiles and My Team Emblem.
 - Each grid's teams in a table. Clicking a team opens a panel to edit its name, car numbers, team principal and colours in place, save it as a preset, export it as an addon or import a preset onto it. **Replace logos** opens a page with the team's logos, place by place.
 - Driver Profiles edits a driver's names, initials and nationality on every grid, and his car number and helmet season by season.
-- It reads the profile's other addons as they are and applies its edits on Play, after the mods the importer loads itself. The edits load where Simplified for Swofty is in the load order, so put it below addons that change the same teams for the edits to win.
+- It reads the profile's other addons as they are and applies its edits on Play, after the mods the importer loads itself. Simplified for Swofty builds after Classic Seasons, Progressive Career and the mods the importer made into addons, wherever they are in the list, so the edits win over theirs. Addons that need it, such as More Driver Models, build after it.
+- With Progressive Career on, the Classic Seasons, F1 2025 and F1 2026 grids are its seasons too: their team names, logos and drivers reach its careers. With More Driver Models on, drivers another addon gives older heads, such as Classic Seasons', take More Driver Models' heads.
 
 More in [docs/grid-editor.md](docs/grid-editor.md).
 
@@ -35,7 +36,7 @@ More in [docs/grid-editor.md](docs/grid-editor.md).
 
 ## Mods imported before 0.7.0
 
-The library converts into addons once, when the launcher starts, on the first import or on **Convert now** on the page, when the launcher has found the game. Each profile then turns the addons on in its own mod order, on where the mod was on, and puts them where the Simplified Importer loaded its mods in the load order. A profile that hasn't been handed over yet loads its mods through the build step, as before. Each mod's library copy is deleted once it is an addon. Mods that fail to convert stay in the library and keep loading through the build step. Track packages convert into track addons; the Tracks page is gone.
+The library converts into addons once, when the launcher starts, on the first import or on **Convert now** on the page, when the launcher has found the game. Each profile then turns the addons on in its own mod order, on where the mod was on, and puts them where the Simplified Importer loaded its mods in the load order. A profile that hasn't been handed over yet loads its mods through the build step, which builds after Classic Seasons, Progressive Career and the converted mods since 0.13.0. Each mod's library copy is deleted once it is an addon. Mods that fail to convert stay in the library and keep loading through the build step. Track packages convert into track addons; the Tracks page is gone.
 
 ## Using it in Swofty Launcher
 
