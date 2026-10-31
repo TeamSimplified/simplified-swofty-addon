@@ -173,8 +173,14 @@ impl Grid {
         Ok(())
     }
 
+    /// The summary of the profile the editor has open. The launcher asks every profile
+    /// for one after each reload, so another profile's gets none rather than replacing
+    /// the open one, which would send the page back to its first grid.
     pub fn summary(&self, cx: &Cx) -> Option<Summary> {
-        let v = self.with(cx, |app, _| pages::summary(app));
-        serde_json::from_value(v).ok()
+        let slot = self.app.lock().unwrap_or_else(|e| e.into_inner());
+        let app = slot
+            .as_ref()
+            .filter(|a| a.profile == cx.profile.name && a.data_dir == cx.data_dir.join(FOLDER))?;
+        serde_json::from_value(pages::summary(app)).ok()
     }
 }
