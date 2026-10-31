@@ -16,6 +16,17 @@ load then. It edits:
   makes them at startup; their names, colours, logos and principal are that addon's, and
   their line-ups and drivers can be edited. F1 2025 includes the optional
   Konnersport and APXGP teams; renaming them renames their menu entries too.
+  Progressive Career's seasons get no tabs of their own: it plays the Classic Seasons
+  years and the game's 2025 and 2026 with those grids' teams, so they're edited on those
+  tabs. Team names and logos reach it as they reach the grid. Drivers reach it through
+  Simplified's DLL (`native/src/progressive.cpp`): the build puts the seats edited on
+  those grids in `profile/progressive.json`, in Simplified's folder in the game, by year
+  and career slot, finding each seat by the driver Progressive has where the grid had
+  him; the DLL layers them on Progressive's `career.season` records for the profile that
+  played. A new career races them from its first season, a running one from the next
+  season it starts. Car numbers stay Progressive's. A driver Progressive has no look for
+  in that year wears its default look for him, which takes the suit and gloves the
+  seat's own driver wears that year and the helmet of his own nearest year.
 - **Team names:** full, short and super short. Names are text
   in the game's language files. A name key that other teams or names share gets a key of
   its own, so an edit changes only that team.
@@ -34,8 +45,12 @@ load then. It edits:
   already race. A driver races in one seat of a grid: the list starts with the drivers
   on it, by team, and picking one swaps the two seats. Presets and restores follow the
   same rule. More Driver Models' drivers follow its page as it is: the ones switched
-  off there leave the lists, without waiting for a Play. Last season's champion shows as #1, the number the
-  game gives him.
+  off there leave the lists, without waiting for a Play. A driver another addon gives an
+  older head of its own, such as Classic Seasons' `cs_jolyon_palmer`, takes More Driver
+  Models' head when he's switched on there, wherever he races: his row is pointed at the
+  head its file updates, and where its build makes no head row of his label, one is
+  copied from the older row with the model path its roster lists. Last season's champion
+  shows as #1, the number the game gives him.
 - **Drivers:** on the Driver Profiles page, or **Edit driver** in a team's panel. First
   and last name, initials and nationality go with the driver to every grid. Car number
   and helmet are per season, on a tab for each grid he races on, which says the team he
@@ -70,8 +85,10 @@ the addon behind each change.
 
 Edits are stored in the addon's data folder and shared by every profile. When the
 profile builds, on **Play**, the addon's build hook returns them as `db.set`, `lang.set`
-and `erp.merge-slices` operations. The addon loads after every other addon, so its edits
-win. An array that an earlier addon grew, as Classic Seasons does, gets the whole grown
+and `erp.merge-slices` operations. The addon builds after Classic Seasons, Progressive
+Career and the mods the importer made into addons (`load_after` in `swofty.json`), so
+its edits win over theirs. Not after every addon: More Driver Models requires Simplified
+and so builds after it, and `*` would make a cycle the launcher refuses to launch. An array that an earlier addon grew, as Classic Seasons does, gets the whole grown
 array with the edited slices in it, since a slice merge would fall back to the game's
 shorter array.
 

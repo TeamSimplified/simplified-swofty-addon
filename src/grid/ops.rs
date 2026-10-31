@@ -1,14 +1,18 @@
 // The edits as asset operations: what the build hook returns on Play, and what an
 // exported addon carries.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use crate::grid::db::Db;
 use crate::grid::edits::{Edits, logos_dir};
 use crate::grid::grids::{Catalog, Team, encode_colour};
 use crate::grid::logos::{self, Library, Placement};
+use crate::grid::world::{Progressive, World, progressive_year};
+
+const HEAD_ROWS: &str = "entrants.animation.driver_heads";
 
 pub fn team_select(label: &str) -> String {
     format!("entrants.teams.team[_metadata_={label}]")
@@ -313,6 +317,176 @@ pub fn reply(mut out: Out, features: &Value) -> Value {
     json!({ "ops": out.ops, "lines": out.lines, "warnings": out.warnings })
 }
 
+/// More Driver Models' heads for the drivers another addon gives an older head of
+/// its own, such as Classic Seasons' cs_jolyon_palmer: with the driver switched on
+/// in More Driver Models, his row takes the head its file updates, under his own
+/// label, wherever he races. Where More Driver Models' build makes no head row of
+/// that label, as for a driver another addon already brings, the older row is
+/// copied under it with the model path More Driver Models lists for him.
+pub fn newer_heads(catalog: &Catalog, world: &World, out: &mut Out) {
+    let Some(roster) = &world.roster else {
+        return;
+    };
+    let mut moved = Vec::new();
+    for d in catalog.drivers.values() {
+        let older = world.head_origin.get(&d.head).is_some_and(|a| *a != roster.addon);
+        let Some(mdm) = roster.drivers.get(&d.label).filter(|r| r.on) else {
+            continue;
+        };
+        if d.head == d.label || !older || world.head_origin.get(&d.label) != Some(&roster.addon) {
+            continue;
+        }
+        if world.db.find(HEAD_ROWS, "driver_head", &d.label).is_none() {
+            let (Some(model), Some(_)) = (&mdm.model, world.db.find(HEAD_ROWS, "driver_head", &d.head))
+            else {
+                continue;
+            };
+            out.ops.push(json!({ "op": "db.add-row", "table": HEAD_ROWS,
+                "from": format!("{HEAD_ROWS}.driver_head[_metadata_={}]", d.head),
+                "set": { "_metadata_": d.label, "model_path": model } }));
+        }
+        let select = format!("entrants.drivers.driver[_metadata_={}]", d.label);
+        out.ops.push(set(&select, "head", d.label.clone()));
+        moved.push(d.label.clone());
+    }
+    if !moved.is_empty() {
+        moved.sort();
+        out.lines.push(format!(
+            "{} driver(s) take {}'s head: {}",
+            moved.len(),
+            roster.addon,
+            moved.join(", ")
+        ));
+    }
+}
+
+/// The seats edited on the grids Progressive Career plays, as seats of its seasons:
+/// `{ "seats": { "2016": { "10": ["", "game/stoffel_vandoorne"] } } }`, by year and
+/// career slot, "" keeping Progressive's driver. A seat is found by the driver the
+/// grid had in it, where Progressive seats him that year. Simplified's DLL layers
+/// these on Progressive's seasons when the game starts.
+pub fn progressive_seats(
+    catalog: &Catalog,
+    edits: &Edits,
+    world: &World,
+    progressive: &Progressive,
+    out: &mut Out,
+) -> Value {
+    let mut seasons: BTreeMap<String, BTreeMap<String, [String; 2]>> = BTreeMap::new();
+    let mut moved = 0;
+    let mut dressed = HashSet::new();
+    for grid in &catalog.grids {
+        let Some(year) = progressive_year(&grid.label) else {
+            continue;
+        };
+        let Some(lineup) = progressive.seats.get(year) else {
+            continue;
+        };
+        for seat in grid.teams.iter().flat_map(|t| &t.seats) {
+            let Some(new) = edits.seats.get(&seat.key).and_then(|e| e.driver.as_ref()) else {
+                continue;
+            };
+            if *new == seat.driver || !catalog.drivers.contains_key(new) {
+                continue;
+            }
+            match lineup.get(&seat.driver) {
+                Some((slot, place)) => {
+                    seasons
+                        .entry(year.to_owned())
+                        .or_default()
+                        .entry(slot.to_string())
+                        .or_default()[*place] = identity(new, &world.stock_drivers);
+                    dress(world, progressive, year, &seat.driver, new, &mut dressed, out);
+                    moved += 1;
+                }
+                None => out.warnings.push(format!(
+                    "{}: {} isn't in its {year} line-up, so {new} takes no seat there",
+                    progressive.name, seat.driver
+                )),
+            }
+        }
+    }
+    if moved > 0 {
+        out.lines.push(format!(
+            "{moved} seat(s) in {} {} season(s)",
+            seasons.len(),
+            progressive.name
+        ));
+    }
+    json!({ "seats": seasons })
+}
+
+/// A driver Progressive has no look for in a year he takes a seat in wears his
+/// default look there, which it makes from a 2025 McLaren look. That look takes the
+/// suit and gloves the seat's own driver wears that year, and the helmet of his own
+/// nearest year. He has one default look, so the first such seat dresses it.
+fn dress(
+    world: &World,
+    progressive: &Progressive,
+    year: &str,
+    was: &str,
+    new: &str,
+    dressed: &mut HashSet<String>,
+    out: &mut Out,
+) {
+    let Ok(y) = year.parse::<i64>() else {
+        return;
+    };
+    let Some(mine) = progressive.looks.get(new) else {
+        return;
+    };
+    if mine.years.contains_key(&y) {
+        return;
+    }
+    let (Some((select, _)), Some((_, seat_look))) = (
+        mine.own_default.as_deref().and_then(|l| look_row(&world.db, l)),
+        progressive
+            .looks
+            .get(was)
+            .and_then(|l| l.years.get(&y))
+            .and_then(|l| look_row(&world.db, l)),
+    ) else {
+        return;
+    };
+    if !dressed.insert(new.to_owned()) {
+        out.warnings.push(format!(
+            "{}: {new} has one look for the years he didn't race, so he wears his first new seat's in {year} too",
+            progressive.name
+        ));
+        return;
+    }
+    for field in ["suit", "gloves"] {
+        out.ops
+            .push(set(&select, field, world.db.field(&seat_look, field)));
+    }
+    let nearest = mine.years.iter().min_by_key(|(at, _)| (*at - y).abs());
+    if let Some((_, own)) = nearest.and_then(|(_, l)| look_row(&world.db, l)) {
+        out.ops
+            .push(set(&select, "helmet", world.db.field(&own, "helmet")));
+    }
+}
+
+/// A looks preset by label, in whichever folder holds it: its selector and its row.
+fn look_row(db: &Db, label: &str) -> Option<(String, String)> {
+    db.rows("entrants.driver_customisations", "folder").into_iter().find_map(|folder| {
+        let row = db.find(&folder, "preloaded_driver_customisation_properties", label)?;
+        let select = format!(
+            "entrants.driver_customisations.folder[_metadata_={}].preloaded_driver_customisation_properties[_metadata_={label}]",
+            db.field(&folder, "_metadata_")
+        );
+        Some((select, row))
+    })
+}
+
+/// A driver as the registry names him, as Progressive does: the game's own as
+/// `game/<label>`, another addon's as the person he is, with his row to fall back on.
+fn identity(label: &str, stock: &HashSet<String>) -> String {
+    match stock.contains(label) {
+        true => format!("game/{label}"),
+        false => format!("person/{label}|game/{label}"),
+    }
+}
+
 /// The in-game addons page puts "by <author>, v<version>" and the description in
 /// one menu string, which holds at most 255 bytes; a launch fails on a longer one.
 pub const DESCRIPTION_MAX: usize = 180;
@@ -377,6 +551,39 @@ pub fn export(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drivers_are_named_as_progressive_names_them() {
+        let stock = HashSet::from(["fernando_alonso".to_owned()]);
+        assert_eq!(identity("fernando_alonso", &stock), "game/fernando_alonso");
+        assert_eq!(
+            identity("stoffel_vandoorne", &stock),
+            "person/stoffel_vandoorne|game/stoffel_vandoorne"
+        );
+    }
+
+    /// Addons that require Simplified, such as More Driver Models, build after it, so
+    /// a pattern matching them, `*` above all, is a load order cycle that stops Play.
+    #[test]
+    fn load_after_leaves_out_the_addons_that_need_simplified() {
+        let m: Value = serde_json::from_str(include_str!("../../swofty.json")).unwrap();
+        let after: Vec<&str> = m["load_after"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(after.contains(&"swofty.classic-seasons*") && after.contains(&"swofty.progressive"));
+        for needs_us in ["mildtdesign.more-driver-models", "swofty.driver-manager"] {
+            assert!(
+                !after.iter().any(|p| match p.strip_suffix('*') {
+                    Some(prefix) => needs_us.starts_with(prefix),
+                    None => *p == needs_us,
+                }),
+                "{needs_us} builds after Simplified"
+            );
+        }
+    }
 
     #[test]
     fn descriptions_fit_the_in_game_addons_page() {

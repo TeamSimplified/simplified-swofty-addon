@@ -53,6 +53,92 @@ pub const MORE_DRIVER_MODELS: &str = "mildtdesign.more-driver-models";
 /// Its files the editor reads, in its data folder, whose changes it watches.
 pub const MORE_DRIVER_MODELS_FILES: [&str; 3] = ["switches.json", "numbers.json", "edits.json"];
 
+/// Progressive Career: a career through the Classic Seasons years. Its entrant lists
+/// are that career's seasons on the 2026 teams, not grids of their own, so they're
+/// left out; the Classic Seasons grids they take their teams from are edited instead.
+pub const PROGRESSIVE: &str = "swofty.progressive";
+/// Where the build puts the seats edited for Progressive's seasons, in Simplified's
+/// folder in the game, and its DLL reads them (native/src/progressive.cpp).
+pub const PROGRESSIVE_SEATS: &str = "profile/progressive.json";
+
+/// Progressive Career, when the profile has it on.
+pub struct Progressive {
+    pub name: String,
+    /// Each year's seats as Progressive fills them, by year and driver label: the
+    /// career slot and the seat in it.
+    pub seats: HashMap<String, HashMap<String, (i64, usize)>>,
+    /// The looks it dresses each driver in, by driver label.
+    pub looks: HashMap<String, PoolLooks>,
+}
+
+/// A driver's looks in Progressive's pool: one per year he raced, and the one he wears
+/// in a year with none.
+#[derive(Default)]
+pub struct PoolLooks {
+    pub years: BTreeMap<i64, String>,
+    /// His default look, when it's a row of Progressive's own (pg-<driver>) rather than
+    /// a look another driver or the game shares.
+    pub own_default: Option<String>,
+}
+
+impl Progressive {
+    fn read(addon: &AddonRef) -> Progressive {
+        let years = read_json(&addon.dir.join("data/years.json"));
+        let mut looks = HashMap::new();
+        for p in years["pool"].as_array().into_iter().flatten() {
+            let Some(driver) = p["driver"].as_str() else {
+                continue;
+            };
+            let d = &p["default_look"];
+            looks.insert(
+                driver.to_owned(),
+                PoolLooks {
+                    years: p["looks"]
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|(y, l)| Some((y.parse().ok()?, l["label"].as_str()?.to_owned())))
+                        .collect(),
+                    own_default: (d["own_row"].as_bool() == Some(true))
+                        .then(|| d["label"].as_str().map(str::to_owned))
+                        .flatten(),
+                },
+            );
+        }
+        let mut seats: HashMap<String, HashMap<String, (i64, usize)>> = HashMap::new();
+        for (year, season) in years["seasons"].as_object().into_iter().flatten() {
+            for team in season["teams"].as_array().into_iter().flatten() {
+                let Some(slot) = team["slot"].as_i64() else {
+                    continue;
+                };
+                for d in team["drivers"].as_array().into_iter().flatten() {
+                    if let (Some(driver), Some(seat @ 0..=1)) = (d["driver"].as_str(), d["position"].as_u64())
+                    {
+                        seats
+                            .entry(year.clone())
+                            .or_default()
+                            .insert(driver.to_owned(), (slot, seat as usize));
+                    }
+                }
+            }
+        }
+        Progressive {
+            name: addon.name.clone(),
+            seats,
+            looks,
+        }
+    }
+}
+
+/// The Progressive Career year whose teams a grid holds: the Classic Seasons years,
+/// then the game's 2025 and 2026.
+pub fn progressive_year(grid: &str) -> Option<&str> {
+    let year = grid
+        .strip_prefix("cs_f1_")
+        .or_else(|| grid.strip_prefix("f1_").filter(|y| matches!(*y, "2025" | "2026")))?;
+    (year.len() == 4 && ("2016"..="2026").contains(&year)).then_some(year)
+}
+
 /// More Driver Models' drivers, by driver label: the ones it brings into the game,
 /// not the game's own it only offers on the driver market.
 pub struct Roster {
@@ -65,6 +151,8 @@ pub struct RosterDriver {
     /// Switched on on its page, by himself and by his category.
     pub on: bool,
     pub number: Option<i64>,
+    /// The model path of his head.
+    pub model: Option<String>,
 }
 
 fn read_json(path: &Path) -> Value {
@@ -102,6 +190,7 @@ fn roster(addon: &AddonRef, data_root: &Path) -> Option<Roster> {
                     name: d["name"].as_str().unwrap_or(label).to_owned(),
                     on: !listed("off", label) && !listed("off_categories", category),
                     number: number(&edits[label]["number"]).or_else(|| number(&numbers[label])),
+                    model: d["model"].as_str().map(str::to_owned),
                 },
             );
         }
@@ -278,6 +367,8 @@ pub struct World {
     pub roster: Option<Roster>,
     /// The teams addons define in the launcher's registry, by label.
     pub registry_teams: HashMap<String, RegistryTeam>,
+    /// Progressive Career, when the profile has it on.
+    pub progressive: Option<Progressive>,
     pub built: Option<PathBuf>,
     pub notes: Vec<String>,
 }
@@ -823,7 +914,7 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
         }
         for r in db.rows("entrants.entrant_lists", "entrant_list") {
             let label = db.field(&r, "_metadata_");
-            if !before.contains(&label) {
+            if !before.contains(&label) && addon.id != PROGRESSIVE {
                 list_origin.insert(label, addon.name.clone());
             }
         }
@@ -934,6 +1025,11 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
         stock_drivers,
         build_drivers,
         registry_teams,
+        progressive: inputs
+            .addons
+            .iter()
+            .find(|a| a.id == PROGRESSIVE)
+            .map(Progressive::read),
         roster: inputs
             .addons
             .iter()
@@ -951,5 +1047,37 @@ mod tests {
     #[test]
     fn markup_comes_out_of_names() {
         assert_eq!(clean("{o:caps}McLaren{/o}  F1 <b>Team</b>"), "McLaren F1 Team");
+    }
+
+    #[test]
+    fn progressive_plays_the_classic_seasons_and_the_games_own_years() {
+        assert_eq!(progressive_year("cs_f1_2016"), Some("2016"));
+        assert_eq!(progressive_year("cs_f1_2024"), Some("2024"));
+        assert_eq!(progressive_year("f1_2025"), Some("2025"));
+        assert_eq!(progressive_year("f1_2026"), Some("2026"));
+        assert_eq!(progressive_year("f1_2024"), None);
+        assert_eq!(progressive_year("f2_2025"), None);
+        assert_eq!(progressive_year("cs_f1_2012"), None);
+        assert_eq!(progressive_year("bdx_s5_2012"), None);
+    }
+
+    #[test]
+    fn progressive_seats_come_from_its_years() {
+        let dir = std::env::temp_dir().join(format!("simplified-progressive-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::write(
+            dir.join("data/years.json"),
+            r#"{ "seasons": { "2016": { "teams": [ { "slot": 4, "drivers": [
+                { "driver": "fernando_alonso", "position": 0 }, { "driver": "jenson_button", "position": 1 } ] } ] } } }"#,
+        )
+        .unwrap();
+        let p = Progressive::read(&AddonRef {
+            id: PROGRESSIVE.into(),
+            name: "Progressive Career".into(),
+            dir: dir.clone(),
+        });
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(p.seats["2016"]["jenson_button"], (4, 1));
+        assert_eq!(p.seats["2016"]["fernando_alonso"], (4, 0));
     }
 }
