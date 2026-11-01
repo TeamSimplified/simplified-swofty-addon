@@ -36,7 +36,7 @@ More in [docs/grid-editor.md](docs/grid-editor.md).
 
 ## Mods imported before 0.7.0
 
-The library converts into addons once, when the launcher starts, on the first import or on **Convert now** on the page, when the launcher has found the game. Each profile then turns the addons on in its own mod order, on where the mod was on, and puts them where the Simplified Importer loaded its mods in the load order. A profile that hasn't been handed over yet loads its mods through the build step. Each mod's library copy is deleted once it is an addon. Mods that fail to convert stay in the library and keep loading through the build step. Track packages convert into track addons; the Tracks page is gone.
+The library converts into addons once, when the launcher starts, on the first import or on **Convert now** on the page, when the launcher has found the game. Each profile then turns the addons on in its own mod order, on where the mod was on, and puts them where the Simplified Importer loaded its mods in the load order. A profile that hasn't been handed over yet loads its mods through the build step, which builds after Classic Seasons, Progressive Career and the converted mods since 0.13.2. Each mod's library copy is deleted once it is an addon. Mods that fail to convert stay in the library and keep loading through the build step. Track packages convert into track addons; the Tracks page is gone.
 
 ## Using it in Swofty Launcher
 

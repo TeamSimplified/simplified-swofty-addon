@@ -85,8 +85,10 @@ the addon behind each change.
 
 Edits are stored in the addon's data folder and shared by every profile. When the
 profile builds, on **Play**, the addon's build hook returns them as `db.set`, `lang.set`
-and `erp.merge-slices` operations. They build in the addon's place in the load order,
-and an addon below it that changes the same row wins. An array that an earlier addon grew, as Classic Seasons does, gets the whole grown
+and `erp.merge-slices` operations. The addon builds after Classic Seasons, Progressive
+Career and the mods the importer made into addons (`load_after` in `swofty.json`), so
+its edits win over theirs. Not after every addon: More Driver Models requires Simplified
+and so builds after it, and `*` would make a cycle the launcher refuses to launch. An array that an earlier addon grew, as Classic Seasons does, gets the whole grown
 array with the edited slices in it, since a slice merge would fall back to the game's
 shorter array.
 
