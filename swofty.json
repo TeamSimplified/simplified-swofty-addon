@@ -2,9 +2,9 @@
   "schema_version": 1,
   "id": "teamsimplified.mods",
   "name": "Simplified for Swofty",
-  "version": "0.13.3",
+  "version": "0.13.4",
   "author": "Team Simplified",
-  "description": "The Mod Importer turns any F1 25 mod, from a zip, 7z, rar or folder, into a Swofty addon. The Grid Editor edits the grids: team names, logos, colours, line-ups and drivers",
+  "description": "Adds support for mods and a grid editor",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://github.com/TeamSimplified/simplified-suite",
   "compat": {
