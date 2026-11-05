@@ -25,7 +25,8 @@ How it works is in [docs/design.md](docs/design.md).
 - The profile's grids down the left: the game's F1 and F2 grids, then the grids addons add, such as the Classic Seasons years, then Presets, Driver Profiles and My Team Emblem.
 - Each grid's teams in a table. Clicking a team opens a panel to edit its name, car numbers, team principal and colours in place, save it as a preset, export it as an addon or import a preset onto it. **Replace logos** opens a page with the team's logos, place by place.
 - Driver Profiles edits a driver's names, initials and nationality on every grid, and his car number and helmet season by season.
-- It reads the profile's other addons as they are and applies its edits on Play, after the mods the importer loads itself. Simplified for Swofty builds after Classic Seasons, Progressive Career and the mods the importer made into addons, wherever they are in the list, so the edits win over theirs. Addons that need it, such as More Driver Models, build after it.
+- Each team's engine and tyre supplier, with More Engine Suppliers' engines and More Tyre Suppliers' brands when they're on.
+- It reads the profile's other addons as they are and applies its edits on Play, after the mods the importer loads itself. Simplified for Swofty builds after Classic Seasons, Progressive Career, the F1 2014 and F1 2012 seasons and the mods the importer made into addons, wherever they are in the list, so the edits win over theirs. Addons that need it, such as More Driver Models, build after it.
 - With Progressive Career on, the Classic Seasons, F1 2025 and F1 2026 grids are its seasons too: their team names, logos and drivers reach its careers. With More Driver Models on, drivers another addon gives older heads, such as Classic Seasons', take More Driver Models' heads.
 
 More in [docs/grid-editor.md](docs/grid-editor.md).

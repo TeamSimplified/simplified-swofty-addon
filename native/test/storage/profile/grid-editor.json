@@ -1,0 +1,19 @@
+{
+  "seats": {
+    "2016": { "4": ["", "person/stoffel_vandoorne|game/stoffel_vandoorne"] },
+    "2017": {}
+  },
+  "packages": {
+    "swofty.classic-seasons-2022/f1_2022": {
+      "williams": {
+        "1": {
+          "driver": "swofty.classic-seasons/pascal_wehrlein",
+          "label": "pascal_wehrlein",
+          "look": "2016-cs_manor_pascal_wehrlein",
+          "number": 94
+        }
+      },
+      "ferrari": { "0": { "number": 7 } }
+    }
+  }
+}

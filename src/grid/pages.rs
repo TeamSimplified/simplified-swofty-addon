@@ -7,7 +7,7 @@ use swofty_formats::hash::fnv1a64;
 use crate::grid::app::{App, Loaded, Page};
 use crate::grid::edits::{self, Edits, Preset, TeamPreset, logos_dir};
 use crate::grid::emblems;
-use crate::grid::grids::{COLOUR_FIELDS, Catalog, Driver, Grid, Team, encode_colour};
+use crate::grid::grids::{self, COLOUR_FIELDS, Catalog, Driver, Engine, Grid, Team, encode_colour};
 use crate::grid::host::Host;
 use crate::grid::image;
 use crate::grid::logos::{self, Library};
@@ -756,8 +756,163 @@ fn row_detail(app: &App, l: &Loaded, grid: &Grid, team: &Team, presets: &[(Strin
         "rows": rows,
         "compact": true
     } }));
+    blocks.extend(supplier_blocks(app, l, grid, team));
 
     blocks
+}
+
+/// The year a grid races, which the tyre brands carry: "cs_f1_2016" -> "2016".
+fn grid_year(grid: &Grid) -> Option<&str> {
+    let y = grid.label.rsplit('_').next()?;
+    (y.len() == 4 && y.bytes().all(|b| b.is_ascii_digit())).then_some(y)
+}
+
+/// The engine a team's cars take: the player's, else its first car's.
+fn engine_of(edits: &Edits, team: &Team) -> Option<String> {
+    edits
+        .teams
+        .get(&team.label)
+        .and_then(|t| t.engine.clone())
+        .or_else(|| {
+            team.cars
+                .first()
+                .map(|c| grids::engine_alias(&c.engine).to_owned())
+        })
+}
+
+/// The tyre brand a team's cars run, by id: the player's, else the one More Tyre
+/// Suppliers' own season tab gives its first car, else Pirelli.
+fn tyres_of(edits: &Edits, w: &World, grid: &Grid, team: &Team) -> String {
+    edits
+        .teams
+        .get(&team.label)
+        .and_then(|t| t.tyres.clone())
+        .or_else(|| own_tyres(w, grid, team))
+        .unwrap_or_else(|| "pirelli".into())
+}
+
+/// The brand More Tyre Suppliers' own season tab gives a team's first car.
+fn own_tyres(w: &World, grid: &Grid, team: &Team) -> Option<String> {
+    let car = team.cars.first()?;
+    let own = w
+        .tyre_suppliers
+        .as_ref()?
+        .own_choice(&car.archive, grid.origin.as_deref());
+    own.map(str::to_owned)
+}
+
+/// The engine and tyre supplier of a team's cars. The engines are the game's of the
+/// cars' era and More Engine Suppliers'; the tyres Pirelli and More Tyre Suppliers'
+/// brands, each with the grid's year. A grid whose cars the game makes when it starts
+/// keeps their engine.
+fn supplier_blocks(app: &App, l: &Loaded, grid: &Grid, team: &Team) -> Vec<Value> {
+    let Some(car) = team.cars.first() else {
+        return Vec::new();
+    };
+    let (cat, w) = (&l.catalog, &l.world);
+    let current = engine_of(&app.edits, team).unwrap_or_default();
+    let own = grids::engine_alias(&car.engine);
+    let era = own.ends_with("_2026");
+    let choice = |e: &Engine| {
+        // The car's own engine under the name the car gives it, such as Mercedes-AMG.
+        let name = match (&car.engine_name, e.label == own) {
+            (Some(n), true) => grids::engine_name(&e.label, n),
+            _ => e.name.clone(),
+        };
+        json!({ "value": e.label, "label": name })
+    };
+    // The era's engines, and any other this grid's cars already run, such as a V8.
+    let on_grid: Vec<&str> = grid
+        .teams
+        .iter()
+        .flat_map(|t| &t.cars)
+        .map(|c| grids::engine_alias(&c.engine))
+        .collect();
+    let fits = |e: &&Engine| e.for_2026() == era && (e.current() || on_grid.contains(&e.label.as_str()));
+    let mut engines: Vec<Value> = cat
+        .engines
+        .iter()
+        .filter(fits)
+        .filter(|e| e.addon.is_none())
+        .map(choice)
+        .collect();
+    let added: Vec<&Engine> = cat
+        .engines
+        .iter()
+        .filter(fits)
+        .filter(|e| e.addon.is_some())
+        .collect();
+    if let Some(e) = added.first() {
+        engines.push(json!({ "heading": e.addon }));
+        engines.extend(added.into_iter().map(choice));
+    }
+    // Copies of one engine, such as a season's for its second package, show once: the
+    // team's own where it's one of them.
+    let mine = engines
+        .iter()
+        .find(|o| o["value"] == current)
+        .map(|o| o["label"].clone());
+    let mut seen: Vec<Value> = Vec::new();
+    engines.retain(|o| {
+        if o.get("value").is_none() {
+            return true;
+        }
+        let name = &o["label"];
+        let keep = !seen.contains(name) && (Some(name) != mine.as_ref() || o["value"] == current);
+        seen.push(name.clone());
+        keep
+    });
+    if !current.is_empty() && !engines.iter().any(|o| o["value"] == current) {
+        engines.insert(0, json!({ "value": current, "label": current }));
+    }
+    let made_in_game = team.registry.is_some() || grid.package.is_some();
+    let mut engine = json!({ "id": "engine", "label": "Engine", "value": current, "options": engines,
+        "disabled": made_in_game });
+    if made_in_game {
+        engine["help"] = json!("The game makes these cars when it starts, so they keep their engine.");
+    } else if app
+        .edits
+        .teams
+        .get(&team.label)
+        .is_some_and(|t| t.engine.is_some())
+    {
+        let original = cat.engines.iter().find(|e| e.label == own).map(choice);
+        let name = original.as_ref().and_then(|o| o["label"].as_str()).unwrap_or(own);
+        engine["help"] = json!(format!("Original: {name}"));
+    }
+    let year = |name: &str| match grid_year(grid) {
+        Some(y) => format!("{name} {y}"),
+        None => name.to_owned(),
+    };
+    let mut tyres = json!({ "id": "tyres", "label": "Tyres" });
+    match &w.tyre_suppliers {
+        Some(mts) => {
+            let mut options = vec![json!({ "value": "pirelli", "label": year("Pirelli") })];
+            options.extend(
+                mts.brands
+                    .iter()
+                    .map(|(id, name)| json!({ "value": id, "label": year(name) })),
+            );
+            tyres["value"] = json!(tyres_of(&app.edits, w, grid, team));
+            tyres["search"] = json!(options.len() > 8);
+            tyres["options"] = json!(options);
+            if car.archive.is_empty() {
+                tyres["disabled"] = json!(true);
+                tyres["help"] = json!(format!("{} can't find this team's car.", mts.addon));
+            }
+        }
+        None => {
+            tyres["value"] = json!("pirelli");
+            tyres["options"] = json!([{ "value": "pirelli", "label": year("Pirelli") }]);
+            tyres["disabled"] = json!(true);
+            tyres["help"] = json!("Turn on More Tyre Suppliers for other brands.");
+        }
+    }
+    vec![
+        json!({ "label": "SUPPLIERS" }),
+        json!({ "form": { "id": format!("suppliers:{}", team.label), "live": true,
+            "fields": [ { "select": engine }, { "select": tyres } ] } }),
+    ]
 }
 
 /// The team principal and a way to change him; the list of characters only once asked
@@ -1516,7 +1671,7 @@ pub fn view(app: &mut App, host: &mut Host, section: &str) -> Value {
     }
     let Some(l) = app.loaded.as_ref() else {
         if let Some(e) = &app.error {
-            return json!({ "notices": notices, "body": { "empty": { "title": "The grids can't be read",
+            return json!({ "subtitle": "", "notices": notices, "body": { "empty": { "title": "The grids can't be read",
                 "text": e, "action": { "id": "retry", "label": "Try again" } } } });
         }
         return json!({ "subtitle": "Reading the game and your addons…", "tick": true, "notices": notices,
@@ -2198,6 +2353,27 @@ fn submit(app: &mut App, host: &mut Host, s: &Value) -> Result<Value, String> {
                 set_name(&mut app.edits, &t, c, &str_of(c));
             }
         }
+        "suppliers" => {
+            let t = team(cat, arg)?.clone();
+            let w = &app.loaded.as_ref().ok_or("the grids aren't read")?.world;
+            let g = grid_of(cat, &app.grid, arg).ok_or("no grid")?;
+            // A choice that's what the team has without one leaves no edit.
+            let own_tyres = own_tyres(w, g, &t).unwrap_or_else(|| "pirelli".into());
+            let own_engine = t
+                .cars
+                .first()
+                .map(|c| grids::engine_alias(&c.engine).to_owned())
+                .unwrap_or_default();
+            for c in &changed {
+                let v = str_of(c);
+                let edit = app.edits.team_mut(&t.label);
+                match c.as_str() {
+                    "engine" => edit.engine = (v != own_engine && !v.is_empty()).then_some(v),
+                    "tyres" => edit.tyres = (v != own_tyres && !v.is_empty()).then_some(v),
+                    _ => {}
+                }
+            }
+        }
         "seats" => {
             let label = arg.split(':').next().unwrap_or(arg);
             let t = team(cat, label)?.clone();
@@ -2524,6 +2700,7 @@ fn export(
         nations: Vec::new(),
         helmets: Vec::new(),
         principals: l.catalog.principals.clone(),
+        engines: l.catalog.engines.clone(),
     };
     let out_dir = app.cache_dir.join("export").join(&id);
     let (dir, n) = ops::export(
@@ -2600,23 +2777,30 @@ pub fn build(app: &mut App, host: &mut Host, params: &Value) -> Value {
         out.ops.extend(ops);
         out.warnings.extend(warnings);
     }
-    // Progressive Career's seats, where Simplified's DLL reads them in the game. Written
-    // every time, so a seat put back on a grid leaves its season too.
-    let seats = match &l.world.progressive {
+    // The seats the game makes from records, Progressive Career's and the grids of
+    // content.package records, where Simplified's DLL reads them in the game. Written
+    // every time, so a seat put back on a grid leaves the game too.
+    let mut seats = match &l.world.progressive {
         Some(p) => ops::progressive_seats(&l.catalog, &live, &l.world, p, &mut out),
         None => json!({ "seats": {} }),
     };
-    let rel = format!("{base}build/progressive.json");
+    seats["packages"] = ops::package_seats(&l.catalog, &live, &l.world, &mut out);
+    let rel = format!("{base}build/grid-editor.json");
     let written = std::fs::create_dir_all(root.join(format!("{base}build")))
         .and_then(|_| std::fs::write(root.join(&rel), seats.to_string()));
     match written {
         Ok(()) => out.ops.push(
             json!({ "op": "file.put", "source": { "root": "cache", "path": rel },
-            "target": format!("swofty/addons/{}/{}", app.id, world::PROGRESSIVE_SEATS) }),
+            "target": format!("swofty/addons/{}/{}", app.id, world::EDITS_FILE) }),
         ),
         Err(e) => out
             .warnings
-            .push(format!("Progressive Career's seats can't be written: {e}")),
+            .push(format!("the seats the game makes can't be written: {e}")),
+    }
+    if let Err(e) = ops::publish_tyres(&l.catalog, &live, &app.data_dir) {
+        out.warnings.push(format!(
+            "the tyre brands can't be written for More Tyre Suppliers: {e}"
+        ));
     }
     app.note_applied(&out.lang_keys);
     ops::reply(out, &params["features"])

@@ -113,7 +113,17 @@ impl Grid {
         {
             notices.insert(0, json!({ "text": "The Simplified Grid Editor addon is on too and applies the same edits again. Turn it off or remove it on the Addons page: its edits and presets are here now.", "tone": "warn" }));
         }
-        serde_json::from_value(v).map_err(other)
+        // The launcher takes no page without a subtitle, and a page it can't take shows
+        // only why, not the page's own message: so each page has one, and one that still
+        // doesn't fit says what's wrong with it.
+        if v.get("subtitle").is_none() {
+            v["subtitle"] = json!("");
+        }
+        serde_json::from_value(v).or_else(|e| {
+            let page = json!({ "subtitle": "", "body": { "empty": { "title": "The Grid Editor can't show this page",
+                "text": e.to_string() } } });
+            serde_json::from_value(page).map_err(other)
+        })
     }
 
     pub fn event(&self, cx: &Cx, event: Event) -> Result<Effect> {

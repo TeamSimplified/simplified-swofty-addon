@@ -141,7 +141,13 @@ impl App {
 
     pub fn save(&mut self) -> Result<(), String> {
         self.edits.tidy();
-        self.edits.save(&self.data_dir)
+        self.edits.save(&self.data_dir)?;
+        // More Tyre Suppliers builds from the choices as they're saved, whichever of
+        // the two addons builds first.
+        if let Some(l) = &self.loaded {
+            crate::grid::ops::publish_tyres(&l.catalog, &self.edits, &self.data_dir)?;
+        }
+        Ok(())
     }
 
     fn string(host: &mut Host, method: &str, params: Value) -> Option<String> {
@@ -208,12 +214,17 @@ impl App {
                 mtime(&a.dir.join("swofty.json")),
                 mtime(&a.dir)
             ));
-            // More Driver Models' switches and numbers change on its page, not in its folder.
-            if a.id == world::MORE_DRIVER_MODELS {
-                let data = self.data_root.join("addon-data").join(&a.id);
-                for f in world::MORE_DRIVER_MODELS_FILES {
-                    parts.push(mtime(&data.join(f)).to_string());
-                }
+            // What these addons' pages and builds change is in their data folders, not
+            // their own: More Driver Models' switches and numbers, the engines and brands.
+            let files: &[&str] = match a.id.as_str() {
+                world::MORE_DRIVER_MODELS => &world::MORE_DRIVER_MODELS_FILES,
+                world::ENGINE_SUPPLIERS => &["suppliers.json", "engines.json"],
+                world::TYRE_SUPPLIERS => &["brands.json", "tyres.json"],
+                _ => &[],
+            };
+            let data = self.data_root.join("addon-data").join(&a.id);
+            for f in files {
+                parts.push(mtime(&data.join(f)).to_string());
             }
         }
         let built = world::latest_build(&self.data_root, &self.profile);
@@ -311,8 +322,19 @@ impl App {
         let (tx, rx) = channel();
         let fingerprint = fp.clone();
         std::thread::spawn(move || {
-            tx.send(read_all(&inputs, &game_dir, &cache, &key, fingerprint))
-                .ok();
+            // A read that crashes says why on the page, not only in the helper's log.
+            let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                read_all(&inputs, &game_dir, &cache, &key, fingerprint)
+            }));
+            let read = read.unwrap_or_else(|p| {
+                let why = p
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| p.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                    .unwrap_or_default();
+                Err(format!("reading the grids stopped: {why}"))
+            });
+            tx.send(read).ok();
         });
         self.error = None;
         self.loading = Some((fp, rx));

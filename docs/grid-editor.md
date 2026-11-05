@@ -19,14 +19,37 @@ load then. It edits:
   Progressive Career's seasons get no tabs of their own: it plays the Classic Seasons
   years and the game's 2025 and 2026 with those grids' teams, so they're edited on those
   tabs. Team names and logos reach it as they reach the grid. Drivers reach it through
-  Simplified's DLL (`native/src/progressive.cpp`): the build puts the seats edited on
-  those grids in `profile/progressive.json`, in Simplified's folder in the game, by year
+  Simplified's DLL (`native/src/grid_editor.cpp`): the build puts the seats edited on
+  those grids in `profile/grid-editor.json`, in Simplified's folder in the game, by year
   and career slot, finding each seat by the driver Progressive has where the grid had
   him; the DLL layers them on Progressive's `career.season` records for the profile that
   played. A new career races them from its first season, a running one from the next
   season it starts. Car numbers stay Progressive's. A driver Progressive has no look for
   in that year wears its default look for him, which takes the suit and gloves the
   seat's own driver wears that year and the helmet of his own nearest year.
+  A grid an addon defines as a `content.package` record, as each Classic Seasons year
+  does since Classic Seasons 0.7, is made by the game when it starts, after the build's
+  database edits, so its drivers and car numbers can't be database edits. The build puts
+  them in the same file instead, by record, team key and seat, each seat found by the
+  driver the record gives it, and the DLL layers them on the record, one layer a seat. A
+  driver is named by a record that resolves: `game/<label>` for the game's own, the
+  record an addon registers him by (`swofty.classic-seasons/<label>`), else
+  `person/<label>|game/<label>`. A new driver brings his own entrant's look and number,
+  else wears the seat's look, which goes in the package's own looks rather than as a
+  reference. An exported addon leaves those seats out and says so.
+- **Suppliers:** each team's engine and tyre brand, in its panel, named with the year:
+  Mercedes-AMG 2026, Pirelli 2026. The engines are the game's of the cars' era (the 2026
+  ones for 2026 cars) and, with More Engine Suppliers on, those its last build added, from
+  its `suppliers.json`, under its names for the game's engines. The build sets each of the
+  team's cars' `engine`, and clears the `engine_name_override` the car gave its old engine,
+  so the new one shows its own name; it builds after More Engine Suppliers, whose engine
+  rows exist only once it builds. An exported addon leaves its engines out. A grid the game
+  makes when it starts keeps its cars' engines. The tyres are Pirelli and, with More Tyre
+  Suppliers on, its brands from its `brands.json`, showing the brand its own grid tabs give
+  a car until one is picked here. The picked brand of each of the team's cars goes in
+  `tyres.json` in the Grid Editor's data folder, by car archive, whenever the edits are
+  saved and at build: More Tyre Suppliers (0.5 on) builds the brand onto the car from there,
+  over its grid tabs.
 - **Team names:** full, short and super short. Names are text
   in the game's language files. A name key that other teams or names share gets a key of
   its own, so an edit changes only that team.
@@ -85,10 +108,14 @@ the addon behind each change.
 
 Edits are stored in the addon's data folder and shared by every profile. When the
 profile builds, on **Play**, the addon's build hook returns them as `db.set`, `lang.set`
-and `erp.merge-slices` operations. The addon builds after Classic Seasons, Progressive
-Career and the mods the importer made into addons (`load_after` in `swofty.json`), so
-its edits win over theirs. Not after every addon: More Driver Models requires Simplified
-and so builds after it, and `*` would make a cycle the launcher refuses to launch. An array that an earlier addon grew, as Classic Seasons does, gets the whole grown
+and `erp.merge-slices` operations. The addon builds after the season addons whose grids
+it edits, Classic Seasons (`swofty.classic-seasons*`), Progressive Career, the F1 2014
+(`msyeett.*`) and F1 2012 (`bydanix.*`) seasons, and the mods the importer made into
+addons (`load_after` in `swofty.json`), so its edits win over theirs. Not after every
+addon: More Driver Models requires Simplified and so builds after it, and `*` would make
+a cycle the launcher refuses to launch. A season addon from another author needs its id
+pattern added there. An array that an earlier addon grew, as Classic Seasons does, or
+appended to (`erp.append-slices`, as the F1 2014 season does), gets the whole grown
 array with the edited slices in it, since a slice merge would fall back to the game's
 shorter array.
 

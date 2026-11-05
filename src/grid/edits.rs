@@ -26,6 +26,12 @@ pub struct TeamEdit {
     /// The team principal, a character's label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boss: Option<String>,
+    /// The engine its cars take, an `entrants.engines` label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    /// The tyre brand its cars run, a More Tyre Suppliers brand's id; none for Pirelli.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tyres: Option<String>,
 }
 
 /// How much of its slot a picture fills until the player changes it.
@@ -38,6 +44,8 @@ impl TeamEdit {
             && self.logo.is_none()
             && self.logos.is_empty()
             && self.boss.is_none()
+            && self.engine.is_none()
+            && self.tyres.is_none()
     }
 
     pub fn picture(&self, kind: &str) -> Option<&str> {

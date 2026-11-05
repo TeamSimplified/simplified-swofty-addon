@@ -805,11 +805,12 @@ dependencies = [
 
 [[package]]
 name = "rars"
-version = "0.12.0"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbcc0f38a45a8eb1021f333c910caaccb22660685c324f9fe5d04b0398d98c4e"
+checksum = "f8cfe43d4831a02f45c89f11a84fb32b45e818e8914396038cf3494501041f95"
 dependencies = [
  "aho-corasick",
+ "crc32fast",
 ]
 
 [[package]]
@@ -831,6 +832,35 @@ dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
 ]
+
+[[package]]
+name = "regex"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-automata"
+version = "0.4.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-syntax"
+version = "0.8.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "resvg"
@@ -1102,8 +1132,8 @@ dependencies = [
 
 [[package]]
 name = "swofty-addon"
-version = "1.5.30"
-source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=135323facf068da52731a606dc3c063789a424a9#135323facf068da52731a606dc3c063789a424a9"
+version = "1.8.10"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=31978922867b8d71f0910c644e127198947ea6c6#31978922867b8d71f0910c644e127198947ea6c6"
 dependencies = [
  "semver",
  "serde",
@@ -1115,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "swofty-addon-simplified"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "chrono",
  "jpeg-decoder",
@@ -1135,14 +1165,15 @@ dependencies = [
 
 [[package]]
 name = "swofty-core"
-version = "1.5.30"
-source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=135323facf068da52731a606dc3c063789a424a9#135323facf068da52731a606dc3c063789a424a9"
+version = "1.8.10"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=31978922867b8d71f0910c644e127198947ea6c6#31978922867b8d71f0910c644e127198947ea6c6"
 dependencies = [
  "flate2",
  "libc",
  "md-5",
  "png 0.18.1",
- "rars 0.12.0",
+ "rars 0.12.3",
+ "regex",
  "ring",
  "rustls",
  "semver",
@@ -1153,6 +1184,7 @@ dependencies = [
  "swofty-addon",
  "swofty-formats",
  "swofty-sdk",
+ "swofty-shaders",
  "tar",
  "thiserror",
  "tungstenite",
@@ -1164,8 +1196,8 @@ dependencies = [
 
 [[package]]
 name = "swofty-formats"
-version = "1.5.30"
-source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=135323facf068da52731a606dc3c063789a424a9#135323facf068da52731a606dc3c063789a424a9"
+version = "1.8.10"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=31978922867b8d71f0910c644e127198947ea6c6#31978922867b8d71f0910c644e127198947ea6c6"
 dependencies = [
  "aes",
  "bcdec_rs",
@@ -1176,8 +1208,18 @@ dependencies = [
 
 [[package]]
 name = "swofty-sdk"
-version = "1.5.30"
-source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=135323facf068da52731a606dc3c063789a424a9#135323facf068da52731a606dc3c063789a424a9"
+version = "1.8.10"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=31978922867b8d71f0910c644e127198947ea6c6#31978922867b8d71f0910c644e127198947ea6c6"
+
+[[package]]
+name = "swofty-shaders"
+version = "1.8.10"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=31978922867b8d71f0910c644e127198947ea6c6#31978922867b8d71f0910c644e127198947ea6c6"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+]
 
 [[package]]
 name = "syn"
