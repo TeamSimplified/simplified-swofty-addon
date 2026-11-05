@@ -905,7 +905,8 @@ fn supplier_blocks(app: &App, l: &Loaded, grid: &Grid, team: &Team) -> Vec<Value
             tyres["value"] = json!("pirelli");
             tyres["options"] = json!([{ "value": "pirelli", "label": year("Pirelli") }]);
             tyres["disabled"] = json!(true);
-            tyres["help"] = json!("Turn on More Tyre Suppliers for other brands.");
+            tyres["help"] =
+                json!("The addon More Tyre Suppliers to allow for more brands will be available soon...");
         }
     }
     vec![
