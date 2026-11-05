@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "teamsimplified.mods",
   "name": "Simplified for Swofty",
-  "version": "0.13.4",
+  "version": "0.13.5",
   "author": "Team Simplified",
   "description": "Adds support for mods and a grid editor",
   "license": "AGPL-3.0-or-later",
@@ -15,6 +15,9 @@
   "load_after": [
     "swofty.classic-seasons*",
     "swofty.progressive",
+    "msyeett.*",
+    "bydanix.*",
+    "mildtdesign.more-engine-suppliers",
     "mod.*"
   ],
   "operations": {

@@ -1,14 +1,14 @@
 // The edits as asset operations: what the build hook returns on Play, and what an
 // exported addon carries.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use crate::grid::db::Db;
 use crate::grid::edits::{Edits, logos_dir};
-use crate::grid::grids::{Catalog, Team, encode_colour};
+use crate::grid::grids::{Catalog, Team, VEHICLES, encode_colour, engine_alias};
 use crate::grid::logos::{self, Library, Placement};
 use crate::grid::world::{Progressive, World, progressive_year};
 
@@ -115,6 +115,50 @@ fn team_ops(team: &Team, edits: &Edits, catalog: &Catalog, out: &mut Out) {
             None => out
                 .warnings
                 .push(format!("{}: {hex} isn't a #RRGGBB colour", team.label)),
+        }
+    }
+}
+
+/// The engine of a team's cars: each car's vehicle row takes it, without the name the
+/// car gave its old one, so the engine's own shows. More Engine Suppliers' engines exist
+/// only where it's on and builds first, so an exported addon leaves them out.
+fn engine_ops(
+    team: &Team,
+    edits: &Edits,
+    catalog: &Catalog,
+    cached: bool,
+    done: &mut BTreeSet<String>,
+    out: &mut Out,
+) {
+    let Some(engine) = edits.teams.get(&team.label).and_then(|t| t.engine.as_ref()) else {
+        return;
+    };
+    let from = catalog.engines.iter().find(|e| e.label == *engine);
+    match from.and_then(|e| e.addon.as_ref()) {
+        Some(addon) if !cached => {
+            out.warnings.push(format!(
+                "{}: its {engine} engine is left out, as it's {addon}'s",
+                team.label
+            ));
+            return;
+        }
+        None if from.is_none() => {
+            out.warnings.push(format!(
+                "{}: the {engine} engine isn't in the game with this profile's addons, so its cars keep theirs",
+                team.label
+            ));
+            return;
+        }
+        _ => {}
+    }
+    for car in team.cars.iter().filter(|c| engine_alias(&c.engine) != engine) {
+        if !done.insert(car.vehicle.clone()) {
+            continue;
+        }
+        let select = format!("{VEHICLES}.vehicle[_metadata_={}]", car.vehicle);
+        out.ops.push(set(&select, "engine", engine.clone()));
+        if car.engine_name.is_some() {
+            out.ops.push(set(&select, "engine_name_override", ""));
         }
     }
 }
@@ -265,10 +309,25 @@ pub fn all(
 ) -> Out {
     let mut out = Out::default();
     let mut done = BTreeSet::new();
+    let mut engined = BTreeSet::new();
     for grid in &catalog.grids {
         for team in &grid.teams {
             if done.insert(team.label.clone()) {
                 team_ops(team, edits, catalog, &mut out);
+            }
+            if grid.package.is_none() && team.registry.is_none() {
+                engine_ops(team, edits, catalog, cached, &mut engined, &mut out);
+            }
+            // A package's entrant list doesn't exist when database edits apply: the
+            // build layers its seats instead (package_seats), which an export can't.
+            if grid.package.is_some() {
+                if !cached && team.seats.iter().any(|s| edits.seats.contains_key(&s.key)) {
+                    out.warnings.push(format!(
+                        "{}: {}'s drivers and car numbers are left out, as the game makes that grid when it starts",
+                        grid.title, team.label
+                    ));
+                }
+                continue;
             }
             seat_ops(team, edits, catalog, &mut out);
         }
@@ -360,6 +419,30 @@ pub fn newer_heads(catalog: &Catalog, world: &World, out: &mut Out) {
     }
 }
 
+/// The tyre brand of each car a team the player gave one races, for More Tyre
+/// Suppliers to put on it at its build: `{ "schema_version": 1, "cars": { "<car
+/// archive>": "<brand id>" } }`, Pirelli as `pirelli`. A car with no archive is left out.
+pub fn tyre_choices(catalog: &Catalog, edits: &Edits) -> Value {
+    let mut cars = BTreeMap::new();
+    for team in catalog.grids.iter().flat_map(|g| &g.teams) {
+        let Some(brand) = edits.teams.get(&team.label).and_then(|t| t.tyres.as_ref()) else {
+            continue;
+        };
+        for car in team.cars.iter().filter(|c| !c.archive.is_empty()) {
+            cars.insert(car.archive.clone(), json!(brand));
+        }
+    }
+    json!({ "schema_version": 1, "cars": cars })
+}
+
+/// Writes the tyre choices into the Grid Editor's data folder, where More Tyre
+/// Suppliers reads them; a file with none when no team has one.
+pub fn publish_tyres(catalog: &Catalog, edits: &Edits, data_dir: &Path) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(&tyre_choices(catalog, edits)).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(data_dir).map_err(|e| e.to_string())?;
+    std::fs::write(data_dir.join(crate::grid::world::TYRES_FILE), text).map_err(|e| e.to_string())
+}
+
 /// The seats edited on the grids Progressive Career plays, as seats of its seasons:
 /// `{ "seats": { "2016": { "10": ["", "game/stoffel_vandoorne"] } } }`, by year and
 /// career slot, "" keeping Progressive's driver. A seat is found by the driver the
@@ -395,7 +478,7 @@ pub fn progressive_seats(
                         .entry(year.to_owned())
                         .or_default()
                         .entry(slot.to_string())
-                        .or_default()[*place] = identity(new, &world.stock_drivers);
+                        .or_default()[*place] = identity(new, &world.stock_drivers, &world.driver_ids);
                     dress(world, progressive, year, &seat.driver, new, &mut dressed, out);
                     moved += 1;
                 }
@@ -478,13 +561,100 @@ fn look_row(db: &Db, label: &str) -> Option<(String, String)> {
     })
 }
 
-/// A driver as the registry names him, as Progressive does: the game's own as
-/// `game/<label>`, another addon's as the person he is, with his row to fall back on.
-fn identity(label: &str, stock: &HashSet<String>) -> String {
-    match stock.contains(label) {
-        true => format!("game/{label}"),
-        false => format!("person/{label}|game/{label}"),
+/// A driver as the registry names him: the game's own as `game/<label>`, one an
+/// addon registers by that record (Classic Seasons' `swofty.classic-seasons/<label>`),
+/// any other as the person he is with his row to fall back on, as Progressive does.
+/// A layer whose reference doesn't resolve is dropped whole.
+fn identity(label: &str, stock: &HashSet<String>, ids: &HashMap<String, String>) -> String {
+    if stock.contains(label) {
+        return format!("game/{label}");
     }
+    match ids.get(label) {
+        Some(id) => id.clone(),
+        None => format!("person/{label}|game/{label}"),
+    }
+}
+
+/// The seats edited on grids the game makes from content.package records, as edits
+/// of those records for Simplified's DLL: `{ "<package>": { "<team key>": { "<seat>":
+/// { "driver", "label", "look", "number" } } } }`. A seat is found by the driver the
+/// record gives it. A new driver brings his own entrant's look and number, as he
+/// does on other grids, else keeps the seat's look; `label` and `look` go in the
+/// package's own looks, as a look reference must resolve and its rows aren't records.
+pub fn package_seats(catalog: &Catalog, edits: &Edits, world: &World, out: &mut Out) -> Value {
+    let mut packages: BTreeMap<String, BTreeMap<String, BTreeMap<String, Value>>> = BTreeMap::new();
+    let mut moved = 0;
+    for grid in &catalog.grids {
+        let Some(package) = world.packages.get(&grid.label) else {
+            continue;
+        };
+        for (team, seat) in grid
+            .teams
+            .iter()
+            .flat_map(|t| t.seats.iter().map(move |s| (t, s)))
+        {
+            let Some(edit) = edits.seats.get(&seat.key) else {
+                continue;
+            };
+            let Some((key, at)) = package.seat_of(&seat.driver) else {
+                out.warnings.push(format!(
+                    "{}: {} isn't in the grid the game makes, so the seat keeps its driver",
+                    grid.title, seat.driver
+                ));
+                continue;
+            };
+            let mut change = serde_json::Map::new();
+            let mut number = edit.number;
+            if let Some(new) = edit.driver.as_ref().filter(|d| **d != seat.driver) {
+                if !catalog.drivers.contains_key(new) {
+                    out.warnings.push(format!(
+                        "{}: {new} isn't in the game with this profile's addons, so the seat keeps its own driver",
+                        team.label
+                    ));
+                } else {
+                    let own = catalog.drivers[new]
+                        .pool
+                        .as_deref()
+                        .and_then(|p| world.db.find("entrants.entrant_lists.entrants", "entrant", p));
+                    let field = |f: &str| {
+                        own.as_ref()
+                            .map(|r| world.db.field(r, f))
+                            .filter(|v| !v.is_empty())
+                    };
+                    let look = field("driver_customisation").unwrap_or_else(|| seat.look.clone());
+                    number = number.or_else(|| field("car_number").and_then(|n| n.parse().ok()));
+                    change.insert(
+                        "driver".into(),
+                        json!(identity(new, &world.stock_drivers, &world.driver_ids)),
+                    );
+                    change.insert("label".into(), json!(new));
+                    if !look.is_empty() {
+                        change.insert("look".into(), json!(look));
+                    }
+                }
+            }
+            if let Some(n) = number.filter(|n| (1..=255).contains(n)) {
+                change.insert("number".into(), json!(n));
+            }
+            if change.is_empty() {
+                continue;
+            }
+            packages
+                .entry(package.id.clone())
+                .or_default()
+                .entry(key.to_owned())
+                .or_default()
+                .insert(at.to_string(), Value::Object(change));
+            moved += 1;
+        }
+    }
+    if moved > 0 {
+        out.lines.push(format!(
+            "{moved} seat(s) in {} grid(s) the game makes when it starts",
+            packages.len()
+        ));
+    }
+    json!(packages)
 }
 
 /// The in-game addons page puts "by <author>, v<version>" and the description in
@@ -553,12 +723,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn drivers_are_named_as_progressive_names_them() {
-        let stock = HashSet::from(["fernando_alonso".to_owned()]);
-        assert_eq!(identity("fernando_alonso", &stock), "game/fernando_alonso");
+    fn drivers_are_named_by_a_record_that_resolves() {
+        let stock = HashSet::from(["nicholas_latifi".to_owned()]);
+        let ids = HashMap::from([(
+            "pascal_wehrlein".to_owned(),
+            "swofty.classic-seasons/pascal_wehrlein".to_owned(),
+        )]);
+        assert_eq!(identity("nicholas_latifi", &stock, &ids), "game/nicholas_latifi");
         assert_eq!(
-            identity("stoffel_vandoorne", &stock),
-            "person/stoffel_vandoorne|game/stoffel_vandoorne"
+            identity("pascal_wehrlein", &stock, &ids),
+            "swofty.classic-seasons/pascal_wehrlein"
+        );
+        assert_eq!(
+            identity("jack_aitken", &stock, &ids),
+            "person/jack_aitken|game/jack_aitken"
         );
     }
 
@@ -573,7 +751,14 @@ mod tests {
             .iter()
             .filter_map(Value::as_str)
             .collect();
-        assert!(after.contains(&"swofty.classic-seasons*") && after.contains(&"swofty.progressive"));
+        for season in [
+            "swofty.classic-seasons*",
+            "swofty.progressive",
+            "msyeett.*",
+            "bydanix.*",
+        ] {
+            assert!(after.contains(&season), "{season} builds before Simplified");
+        }
         for needs_us in ["mildtdesign.more-driver-models", "swofty.driver-manager"] {
             assert!(
                 !after.iter().any(|p| match p.strip_suffix('*') {

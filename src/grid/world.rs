@@ -53,13 +53,152 @@ pub const MORE_DRIVER_MODELS: &str = "mildtdesign.more-driver-models";
 /// Its files the editor reads, in its data folder, whose changes it watches.
 pub const MORE_DRIVER_MODELS_FILES: [&str; 3] = ["switches.json", "numbers.json", "edits.json"];
 
+/// More Engine Suppliers: the engines its build adds, which it lists for grid editors
+/// in suppliers.json in its data folder, and the names it gives the game's engines.
+pub const ENGINE_SUPPLIERS: &str = "mildtdesign.more-engine-suppliers";
+/// More Tyre Suppliers: the tyre brands beside Pirelli, which it lists for grid
+/// editors in brands.json in its data folder, and puts on the cars the Grid Editor
+/// names in its own tyres.json (TYRES_FILE).
+pub const TYRE_SUPPLIERS: &str = "mildtdesign.more-tyre-suppliers";
+/// The tyre brand of each car the Grid Editor gives one, in its data folder:
+/// `{ "schema_version": 1, "cars": { "<car archive>": "<brand id>" } }`.
+pub const TYRES_FILE: &str = "tyres.json";
+
+/// More Engine Suppliers, when the profile has it on.
+pub struct EngineSuppliers {
+    pub addon: String,
+    /// Its engines' rows, each season's, with their names.
+    pub engines: Vec<(String, String)>,
+    /// The names it gives the game's engines, by engine row.
+    pub names: HashMap<String, String>,
+}
+
+impl EngineSuppliers {
+    fn read(addon: &AddonRef, data_root: &Path) -> EngineSuppliers {
+        let data = data_root.join("addon-data").join(&addon.id);
+        let listed = read_json(&data.join("suppliers.json"));
+        let engines = listed["engines"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|e| {
+                let name = e["name"].as_str().unwrap_or_default().to_owned();
+                e["engine_rows"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(move |r| Some((r.as_str()?.to_owned(), name.clone())))
+            })
+            .collect();
+        let names = read_json(&data.join("engines.json"))["game"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(label, e)| Some((label.clone(), e["name"].as_str()?.to_owned())))
+            .collect();
+        EngineSuppliers {
+            addon: addon.name.clone(),
+            engines,
+            names,
+        }
+    }
+}
+
+/// More Tyre Suppliers, when the profile has it on.
+pub struct TyreSuppliers {
+    pub addon: String,
+    /// Its brands, by id, with their names; Pirelli isn't one.
+    pub brands: Vec<(String, String)>,
+    /// The brands its own season tabs give cars, by grid (a stock package, or an
+    /// addon's id) and team folder.
+    choices: HashMap<String, HashMap<String, String>>,
+    /// The profile's addons' ids, by name, which name its grids.
+    addon_ids: HashMap<String, String>,
+}
+
+impl TyreSuppliers {
+    /// Its brands.json, else, from a version before it wrote one, its presets with the
+    /// player's names and the player's own brands.
+    fn read(addon: &AddonRef, data_root: &Path, addons: &[AddonRef]) -> TyreSuppliers {
+        let data = data_root.join("addon-data").join(&addon.id);
+        let pair = |b: &Value| Some((b["id"].as_str()?.to_owned(), b["name"].as_str()?.to_owned()));
+        let saved = read_json(&data.join("tyres.json"));
+        let listed = read_json(&data.join("brands.json"));
+        let mut brands: Vec<(String, String)> = listed["brands"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(pair)
+            .collect();
+        if !listed["brands"].is_array() {
+            brands = read_json(&addon.dir.join("presets.json"))["presets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(pair)
+                .map(|(id, name)| {
+                    let mine = saved["presets"][&id]["name"].as_str().map(str::to_owned);
+                    (id, mine.unwrap_or(name))
+                })
+                .chain(saved["custom"].as_array().into_iter().flatten().filter_map(pair))
+                .collect();
+        }
+        brands.retain(|(id, _)| id != "pirelli");
+        let choices = saved["grids"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(grid, teams)| {
+                let teams = teams.as_object().into_iter().flatten();
+                let teams = teams.filter_map(|(t, b)| Some((t.clone(), b.as_str()?.to_owned())));
+                (grid.clone(), teams.collect())
+            })
+            .collect();
+        TyreSuppliers {
+            addon: addon.name.clone(),
+            brands,
+            choices,
+            addon_ids: addons.iter().map(|a| (a.name.clone(), a.id.clone())).collect(),
+        }
+    }
+
+    /// The brand its own season tabs give a car, by the car's archive
+    /// (`2025_asset_groups/<package>/teams/<folder>/...`) and the name of the addon
+    /// whose grid it races, none for the game's grids.
+    pub fn own_choice(&self, archive: &str, addon: Option<&str>) -> Option<&str> {
+        let mut parts = archive.split('/');
+        let package = parts.nth(1)?;
+        let folder = parts.nth(1)?;
+        let grid = addon
+            .and_then(|n| self.addon_ids.get(n))
+            .map_or(package, String::as_str);
+        let teams = self.choices.get(grid)?;
+        teams
+            .get(folder)
+            .or_else(|| teams.get(&format!("{package}:{folder}")))
+            .map(String::as_str)
+    }
+
+    pub fn name_of<'a>(&'a self, id: &'a str) -> &'a str {
+        match id {
+            "pirelli" => "Pirelli",
+            _ => self
+                .brands
+                .iter()
+                .find(|(b, _)| b == id)
+                .map_or(id, |(_, n)| n.as_str()),
+        }
+    }
+}
+
 /// Progressive Career: a career through the Classic Seasons years. Its entrant lists
 /// are that career's seasons on the 2026 teams, not grids of their own, so they're
 /// left out; the Classic Seasons grids they take their teams from are edited instead.
 pub const PROGRESSIVE: &str = "swofty.progressive";
-/// Where the build puts the seats edited for Progressive's seasons, in Simplified's
-/// folder in the game, and its DLL reads them (native/src/progressive.cpp).
-pub const PROGRESSIVE_SEATS: &str = "profile/progressive.json";
+/// Where the build puts the seats edited for the grids the game makes from records,
+/// Progressive's seasons and content.package grids, in Simplified's folder in the
+/// game, and its DLL reads them (native/src/progressive.cpp).
+pub const EDITS_FILE: &str = "profile/grid-editor.json";
 
 /// Progressive Career, when the profile has it on.
 pub struct Progressive {
@@ -230,6 +369,71 @@ fn registry_records(addon: &AddonRef, kind: &str) -> BTreeMap<String, Value> {
     out
 }
 
+/// A grid an addon defines as a content.package record, such as each Classic Seasons
+/// year since 0.7: the game makes its entrant list when it starts, after the build's
+/// database edits, so its seats are changed with a layer on the record instead.
+pub struct Package {
+    /// The record's id, `<addon>/<key>`.
+    pub id: String,
+    /// Its teams by key, with their seats' driver labels in order.
+    pub teams: Vec<(String, Vec<String>)>,
+}
+
+impl Package {
+    /// The team key and seat a driver has in it.
+    pub fn seat_of(&self, driver: &str) -> Option<(&str, usize)> {
+        self.teams.iter().find_map(|(key, seats)| {
+            let at = seats.iter().position(|d| d == driver)?;
+            Some((key.as_str(), at))
+        })
+    }
+}
+
+/// A registry reference's label: what follows its last slash, as the core reads it.
+pub fn key_of(id: &str) -> &str {
+    id.rsplit('/').next().unwrap_or(id)
+}
+
+/// The content.package records of the profile's addons, by the entrant list each
+/// makes, and the driver.identity records they register, by driver label.
+fn registry_grids(addons: &[AddonRef]) -> (HashMap<String, Package>, HashMap<String, String>) {
+    let mut packages = HashMap::new();
+    let mut identities = HashMap::new();
+    for addon in addons {
+        for (key, rec) in registry_records(addon, "content.package") {
+            let Some(list) = rec["entrant_list"].as_str() else {
+                continue;
+            };
+            let teams = rec["teams"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|t| {
+                    let seats = t["drivers"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|s| key_of(s["driver"].as_str().unwrap_or_default()).to_owned())
+                        .collect();
+                    Some((t["key"].as_str()?.to_owned(), seats))
+                })
+                .collect();
+            packages.insert(
+                list.to_owned(),
+                Package {
+                    id: format!("{}/{key}", addon.id),
+                    teams,
+                },
+            );
+        }
+        for (key, rec) in registry_records(addon, "driver.identity") {
+            let label = rec["label"].as_str().filter(|l| !l.is_empty()).unwrap_or(&key);
+            identities.insert(label.to_owned(), format!("{}/{key}", addon.id));
+        }
+    }
+    (packages, identities)
+}
+
 /// The registry's team colours are #AARRGGBB; the database's are signed ARGB.
 fn registry_colour(text: &str) -> Option<String> {
     let h = text.trim().trim_start_matches('#');
@@ -369,6 +573,15 @@ pub struct World {
     pub registry_teams: HashMap<String, RegistryTeam>,
     /// Progressive Career, when the profile has it on.
     pub progressive: Option<Progressive>,
+    /// The grids addons define as content.package records, by entrant list.
+    pub packages: HashMap<String, Package>,
+    /// The driver.identity records addons register, by driver label: what a record
+    /// names a driver the game doesn't have by.
+    pub driver_ids: HashMap<String, String>,
+    /// More Engine Suppliers, when the profile has it on.
+    pub engine_suppliers: Option<EngineSuppliers>,
+    /// More Tyre Suppliers, when the profile has it on.
+    pub tyre_suppliers: Option<TyreSuppliers>,
     pub built: Option<PathBuf>,
     pub notes: Vec<String>,
 }
@@ -955,6 +1168,7 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
             let source = match &op {
                 ErpOp::PutResource { source, .. }
                 | ErpOp::MergeSlices { source, .. }
+                | ErpOp::AppendSlices { source, .. }
                 | ErpOp::Overlay { source, .. } => resolve(source, addon, &inputs.data_root),
                 _ => None,
             };
@@ -1010,6 +1224,7 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
         build_drivers = driver_labels(&db).difference(&before).cloned().collect();
         build_drivers.extend(drivers_from_build(&mut db, &edits, stock_drivers.len()));
     }
+    let (packages, driver_ids) = registry_grids(&inputs.addons);
     Ok(World {
         db,
         lang,
@@ -1030,6 +1245,18 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
             .iter()
             .find(|a| a.id == PROGRESSIVE)
             .map(Progressive::read),
+        packages,
+        driver_ids,
+        engine_suppliers: inputs
+            .addons
+            .iter()
+            .find(|a| a.id == ENGINE_SUPPLIERS)
+            .map(|a| EngineSuppliers::read(a, &inputs.data_root)),
+        tyre_suppliers: inputs
+            .addons
+            .iter()
+            .find(|a| a.id == TYRE_SUPPLIERS)
+            .map(|a| TyreSuppliers::read(a, &inputs.data_root, &inputs.addons)),
         roster: inputs
             .addons
             .iter()

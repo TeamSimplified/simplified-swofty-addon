@@ -10,6 +10,9 @@ pub const LISTS: &str = "entrants.entrant_lists";
 pub const POOL: &str = "entrants.entrant_lists.entrants";
 pub const TEAMS: &str = "entrants.teams";
 pub const DRIVERS: &str = "entrants.drivers";
+pub const VEHICLES: &str = "entrants.vehicles";
+const VEHICLE_PACKAGES: &str = "entrants.vehicles.vehicle_packages";
+const ENGINES: &str = "entrants.engines";
 
 /// The grids the base game ships, in tab order.
 pub const BASE: [(&str, &str); 5] = [
@@ -58,6 +61,45 @@ pub struct Seat {
     /// The looks preset the seat dresses its driver in: its own, else the one of the
     /// driver entry it names.
     pub look: String,
+    /// The car the seat races, a vehicle row's label.
+    pub vehicle: String,
+}
+
+/// A car a team races on a grid.
+#[derive(Debug, Clone)]
+pub struct Car {
+    pub vehicle: String,
+    /// Its engine, an `entrants.engines` label.
+    pub engine: String,
+    /// The engine's name on this car, where the car names it itself, such as
+    /// McLaren's Mercedes-AMG: its `engine_name_override`'s text.
+    pub engine_name: Option<String>,
+    /// Its archive, `2025_asset_groups/<package>/teams/<folder>/wep/<file>.erp`: what
+    /// More Tyre Suppliers knows the car by.
+    pub archive: String,
+}
+
+/// An engine a team's cars can take: the game's, or one More Engine Suppliers adds.
+#[derive(Debug, Clone)]
+pub struct Engine {
+    pub label: String,
+    pub name: String,
+    /// The addon that adds it; none for the game's own.
+    pub addon: Option<String>,
+}
+
+impl Engine {
+    /// The 2026 engines go in 2026 cars, the others in the rest.
+    pub fn for_2026(&self) -> bool {
+        self.label.ends_with("_2026")
+    }
+
+    /// An engine of the game's own era a team picks from: the 2025 or the 2026 ones, and
+    /// More Engine Suppliers'. The game's other rows, its V8s and road cars' engines, are
+    /// offered only to a grid whose cars run them.
+    pub fn current(&self) -> bool {
+        self.for_2026() || self.addon.is_some() || BASE_2025.contains(&self.label.as_str())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +119,8 @@ pub struct Team {
     /// game makes it at startup, after the database edits, so its own fields can't be
     /// edited from here.
     pub registry: Option<String>,
+    /// The cars its seats race on this grid.
+    pub cars: Vec<Car>,
 }
 
 impl Team {
@@ -105,6 +149,9 @@ pub struct Grid {
     /// Last season's champion, who races as #1: the top of the standings the grid
     /// names, when that driver always takes the 1.
     pub champion: Option<String>,
+    /// The content.package record that makes the grid in the game, whose seats are
+    /// changed with a layer rather than database edits.
+    pub package: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +241,7 @@ pub struct Catalog {
     pub helmets: Vec<Helmet>,
     /// The characters who can lead a team, by name.
     pub principals: Vec<Principal>,
+    pub engines: Vec<Engine>,
 }
 
 /// A character who can be a team principal.
@@ -394,6 +442,99 @@ fn drivers(world: &World) -> BTreeMap<String, Driver> {
     out
 }
 
+/// A car's archive, from its package's resource path with the car's file in it.
+fn car_archive(db: &Db, packages: &HashMap<String, String>, vehicle: &str) -> String {
+    let path = packages
+        .get(&db.field(vehicle, "vehicle_package"))
+        .map(|p| db.field(p, "resource_path"))
+        .unwrap_or_default();
+    if path.is_empty() {
+        return String::new();
+    }
+    format!(
+        "2025_asset_groups/{}.erp",
+        path.replace("[FILENAME]", &db.field(vehicle, "asset_filename"))
+    )
+}
+
+/// The game's 2025 engines, which its 2025 cars and the seasons that copy them run.
+const BASE_2025: [&str; 4] = ["Renault", "Ferrari", "Mercedes", "Honda"];
+
+/// The engine an engine row stands for in the editor. The game's Aston Martin runs a
+/// Mercedes of its own, BWT Mercedes, which its car names Mercedes: it shows as the
+/// Mercedes, and picking that leaves the car on its own row.
+pub fn engine_alias(label: &str) -> &str {
+    match label {
+        "BWT Mercedes" => "Mercedes",
+        other => other,
+    }
+}
+
+/// An engine's name with its era: the game names its 2025 and 2026 engines alike.
+pub fn engine_name(label: &str, name: &str) -> String {
+    if label.ends_with("_2026") {
+        format!("{name} 2026")
+    } else if label.contains("2009-2013") {
+        format!("{name} V8 2009–2013")
+    } else if BASE_2025.contains(&label) || label.starts_with("mes_") {
+        format!("{name} 2025")
+    } else if let Some(year) = season_of(label) {
+        format!("{name} {year}")
+    } else {
+        name.to_owned()
+    }
+}
+
+/// The season a season addon's engine is of, by its label: "ms14_renault" -> 2014.
+fn season_of(label: &str) -> Option<String> {
+    let (head, _) = label.split_once('_')?;
+    let digits = head.trim_start_matches(|c: char| c.is_ascii_lowercase());
+    let letters = head.len() - digits.len();
+    (letters >= 2 && digits.len() == 2 && digits.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| format!("20{digits}"))
+}
+
+/// The engines a team's cars can take: the game's F1 engines, and those More Engine
+/// Suppliers' last build added, from its suppliers.json, as its engine rows exist only
+/// once it builds.
+fn engines(world: &World) -> Vec<Engine> {
+    let db = &world.db;
+    let mut out: Vec<Engine> = db
+        .rows(ENGINES, "Engine")
+        .iter()
+        .filter_map(|r| {
+            let label = db.field(r, "_metadata_");
+            let key = db.field(r, "supplier");
+            if label.is_empty() || key.is_empty() {
+                return None;
+            }
+            let renamed = world.engine_suppliers.as_ref().and_then(|m| m.names.get(&label));
+            let name = renamed
+                .cloned()
+                .or_else(|| world.text(&key).filter(|n| !n.is_empty()))
+                .unwrap_or_else(|| title_case(label.split("_F1_").next().unwrap_or(&label)));
+            Some(Engine {
+                name: engine_name(&label, &name),
+                label,
+                addon: None,
+            })
+        })
+        .collect();
+    if let Some(mes) = &world.engine_suppliers {
+        for (label, name) in &mes.engines {
+            match out.iter_mut().find(|e| e.label == *label) {
+                Some(e) => e.addon = Some(mes.addon.clone()),
+                None => out.push(Engine {
+                    label: label.clone(),
+                    name: engine_name(label, name),
+                    addon: Some(mes.addon.clone()),
+                }),
+            }
+        }
+    }
+    out
+}
+
 fn seats_of(db: &Db, list_row: &str, list: &str, pool: &HashMap<String, String>) -> Vec<(String, Seat)> {
     let rows = db.rows(list_row, "entrant");
     let labels: Vec<String> = rows.iter().map(|r| db.field(r, "_metadata_")).collect();
@@ -440,6 +581,7 @@ fn seats_of(db: &Db, list_row: &str, list: &str, pool: &HashMap<String, String>)
                 driver,
                 car_number: db.int(r, "car_number").unwrap_or(255),
                 look,
+                vehicle: db.field(r, "vehicle"),
             },
         ));
     }
@@ -468,6 +610,14 @@ pub fn catalog(world: &World) -> Catalog {
         .into_iter()
         .map(|r| (db.field(&r, "_metadata_"), r))
         .collect();
+    let labelled = |container: &str, row: &str| -> HashMap<String, String> {
+        db.rows(container, row)
+            .into_iter()
+            .map(|r| (db.field(&r, "_metadata_"), r))
+            .collect()
+    };
+    let vehicles = labelled(VEHICLES, "vehicle");
+    let vehicle_packages = labelled(VEHICLE_PACKAGES, "vehicle_package");
 
     let mut order: Vec<(String, String, Option<String>)> = BASE
         .iter()
@@ -549,10 +699,31 @@ pub fn catalog(world: &World) -> Catalog {
                 boss: db.field(trow, "team_boss"),
                 optional,
                 registry: world.registry_teams.get(&team_label).map(|r| r.addon.clone()),
+                cars: Vec::new(),
             });
         }
         for t in &mut teams {
             t.seats.sort_by_key(|s| s.position);
+            let mut labels: Vec<&String> = Vec::new();
+            for s in t.seats.iter().filter(|s| !s.vehicle.is_empty()) {
+                if !labels.contains(&&s.vehicle) {
+                    labels.push(&s.vehicle);
+                }
+            }
+            t.cars = labels
+                .into_iter()
+                .filter_map(|v| {
+                    let row = vehicles.get(v)?;
+                    Some(Car {
+                        vehicle: v.clone(),
+                        engine: db.field(row, "engine"),
+                        engine_name: world
+                            .text(&db.field(row, "engine_name_override"))
+                            .filter(|n| !n.is_empty()),
+                        archive: car_archive(db, &vehicle_packages, row),
+                    })
+                })
+                .collect();
         }
         if teams.is_empty() {
             continue;
@@ -568,6 +739,7 @@ pub fn catalog(world: &World) -> Catalog {
         grids.push(Grid {
             champion: top,
             ui_path: db.field(row, "ui_path"),
+            package: world.packages.get(&label).map(|p| p.id.clone()),
             label,
             title,
             origin,
@@ -626,6 +798,7 @@ pub fn catalog(world: &World) -> Catalog {
         nations,
         helmets,
         principals,
+        engines: engines(world),
     }
 }
 
@@ -741,6 +914,25 @@ fn helmets(db: &crate::grid::db::Db, drivers: &BTreeMap<String, Driver>) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engines_carry_their_era() {
+        assert_eq!(engine_name("Mercedes_2026", "Mercedes-AMG"), "Mercedes-AMG 2026");
+        assert_eq!(engine_name("Mercedes", "Mercedes"), "Mercedes 2025");
+        assert_eq!(engine_name("mes_toyota", "Toyota Racing"), "Toyota Racing 2025");
+        assert_eq!(
+            engine_name("mes_toyota_2026", "Toyota Racing"),
+            "Toyota Racing 2026"
+        );
+        assert_eq!(
+            engine_name("Ferrari_F1_V8_2009-2013", "Ferrari"),
+            "Ferrari V8 2009–2013"
+        );
+        assert_eq!(engine_name("BWT Mercedes", "BWT Mercedes"), "BWT Mercedes");
+        assert_eq!(engine_name("ms14_renault", "Renault"), "Renault 2014");
+        assert_eq!(engine_name("cs16_ferrari", "Ferrari"), "Ferrari 2016");
+        assert_eq!(engine_name("classic_car", "Classic"), "Classic");
+    }
 
     #[test]
     fn names_split_at_the_last_word_or_a_particle() {

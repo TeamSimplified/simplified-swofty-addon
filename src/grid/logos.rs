@@ -208,6 +208,38 @@ impl State {
             owners,
         }
     }
+
+    /// The slices of `source` after this array's, which `addon` put in, with the
+    /// array's header and its view counting them. False when the resources won't take
+    /// the new count.
+    fn append(&mut self, source: &Array, addon: &str) -> bool {
+        const VIEW_COUNT: usize = 0x14;
+        let mut array = self.array.clone();
+        let added = array.append(source);
+        let mut resource = self.resource.clone();
+        let head = resource
+            .fragments
+            .first()
+            .and_then(|f| f.data().ok())
+            .and_then(|h| Array::with_count(&h, array.count));
+        let Some(head) = head else {
+            return false;
+        };
+        if resource.set_fragment(0, &head).is_err() || resource.set_fragment(1, &array.data).is_err() {
+            return false;
+        }
+        if let Some(view) = self.descriptor.as_mut()
+            && let Some(mut d) = view.fragments.first().and_then(|f| f.data().ok())
+            && let Some(at) = d.get_mut(VIEW_COUNT..VIEW_COUNT + 4)
+        {
+            at.copy_from_slice(&(array.count as u32).to_le_bytes());
+            view.set_fragment(0, &d).ok();
+        }
+        self.owners.extend(added.map(|i| (i, addon.to_owned())));
+        self.resource = resource;
+        self.array = array;
+        true
+    }
 }
 
 /// Whether two slices show the same picture: the same bytes, or a copy encoded again
@@ -592,6 +624,22 @@ pub fn load(
                         targets.insert(erp.clone(), cur);
                         shown = erp.clone();
                     }
+                }
+                // As the launcher does: the addon's slices go after the array as earlier
+                // addons left that archive, and the array and its view count them.
+                ErpOp::AppendSlices { erp, resource: r, .. } if *r == name => {
+                    let Some(theirs) = source(from, &name).and_then(|t| Array::read_slices(&t)) else {
+                        continue;
+                    };
+                    let mut cur = targets
+                        .get(erp)
+                        .cloned()
+                        .unwrap_or_else(|| State::stock(&res, stock_view.as_ref(), &array));
+                    if !theirs.fits(&cur.array) || !cur.append(&theirs, &ch.addon) {
+                        continue;
+                    }
+                    targets.insert(erp.clone(), cur);
+                    shown = erp.clone();
                 }
                 _ => {}
             }
