@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "teamsimplified.mods",
   "name": "Simplified for Swofty",
-  "version": "0.13.6",
+  "version": "0.13.7",
   "author": "Team Simplified",
   "description": "Adds support for mods and a grid editor",
   "license": "AGPL-3.0-or-later",

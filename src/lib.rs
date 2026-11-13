@@ -131,6 +131,36 @@ pub(crate) fn io_err(path: impl Into<PathBuf>) -> impl FnOnce(std::io::Error) ->
     move |source| Error::Io { path, source }
 }
 
+// Flushed to the disk before it returns, so a crash or power cut after a rename over
+// the file it replaces can't leave an empty or zero-filled file in its place.
+pub(crate) fn write_synced(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    std::fs::File::create(path)
+        .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
+        .map_err(io_err(path))
+}
+
+// A state file that doesn't parse goes to `<name>.bad`, over an older one, and the
+// caller carries on without it rather than failing every time it reads it.
+pub(crate) fn set_aside(path: &Path, e: &dyn std::fmt::Display) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".bad");
+    let bad = PathBuf::from(name);
+    match std::fs::rename(path, &bad) {
+        Ok(()) => eprintln!(
+            "warning: {} doesn't read ({e}); moved it to {} and carried on without it",
+            path.display(),
+            bad.display()
+        ),
+        Err(moved) => eprintln!(
+            "warning: {} doesn't read ({e}) and couldn't move to {} ({moved}); carried on without it",
+            path.display(),
+            bad.display()
+        ),
+    }
+    bad
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct State {
     #[serde(default)]
@@ -318,7 +348,7 @@ impl Addon for Simplified {
                 });
                 continue;
             }
-            let diff = library.diff(p, game)?;
+            let (diff, records) = library.diff_records(p, game)?;
             for a in diff
                 .archives
                 .iter()
@@ -330,7 +360,6 @@ impl Addon for Simplified {
                     uris: ui_uris(&a.added),
                 });
             }
-            let records = library.records(&p.id, &diff.build_key)?;
             let merged = merge::ops(&p.id, &diff, &records);
             batch.lines.push(format!(
                 "{}: {} record(s), {} resource(s), {} text entr(ies), {} file(s)",

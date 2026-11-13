@@ -181,7 +181,7 @@ impl Edits {
         let path = Self::path(data_dir);
         let tmp = path.with_extension("json.tmp");
         let text = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        crate::write_synced(&tmp, &text).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
     }
 

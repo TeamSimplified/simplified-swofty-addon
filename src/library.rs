@@ -112,7 +112,12 @@ impl Library {
             if entry.file_name().to_string_lossy().starts_with('.') || !path.is_file() {
                 continue;
             }
-            out.push(read_package(&path)?);
+            // A mod whose package.json doesn't parse is set aside and left out, and
+            // imports again over its folder.
+            match serde_json::from_slice::<Package>(&package::read_file(&path)?) {
+                Ok(p) => out.push(p),
+                Err(e) => _ = crate::set_aside(&path, &e),
+            }
         }
         out.sort_by_key(|p| p.name.to_lowercase());
         Ok(out)
@@ -159,11 +164,10 @@ impl Library {
         }
         std::fs::create_dir_all(&dir).map_err(io_err(&dir))?;
         let db = self.diff_path(&p.id, &key, "db");
-        std::fs::write(&db, records.to_bytes_unsorted()).map_err(io_err(&db))?;
+        crate::write_synced(&db, &records.to_bytes_unsorted())?;
         let json = self.diff_path(&p.id, &key, "json");
         let tmp = json.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&diff).expect("serialisable"))
-            .map_err(io_err(&tmp))?;
+        crate::write_synced(&tmp, &serde_json::to_vec_pretty(&diff).expect("serialisable"))?;
         std::fs::rename(&tmp, &json).map_err(io_err(&json))?;
         Ok(diff)
     }
@@ -171,6 +175,25 @@ impl Library {
     pub fn records(&self, id: &str, key: &str) -> Result<Gvdb> {
         let path = self.diff_path(id, key, "db");
         Gvdb::parse(&package::read_file(&path)?).map_err(|e| err(format!("{}: {e}", path.display())))
+    }
+
+    // A cached diff whose records don't read, such as ones a crash cut short, is
+    // computed again.
+    pub fn diff_records(&self, p: &Package, game: &dyn GameFiles) -> Result<(Diff, Gvdb)> {
+        let diff = self.diff(p, game)?;
+        let e = match self.records(&p.id, &diff.build_key) {
+            Ok(records) => return Ok((diff, records)),
+            Err(e) => e,
+        };
+        let json = self.diff_file(&p.id, &diff.build_key);
+        if !json.is_file() {
+            return Err(e);
+        }
+        eprintln!("warning: {e}; computing {}'s diff again", p.name);
+        std::fs::remove_file(&json).map_err(io_err(&json))?;
+        let diff = self.diff(p, game)?;
+        let records = self.records(&p.id, &diff.build_key)?;
+        Ok((diff, records))
     }
 
     pub fn remove(&self, id: &str) -> Result<Package> {
@@ -327,8 +350,7 @@ impl Library {
                 std::fs::copy(&serps_path, out.join(serps::FILE)).map_err(io_err(&out))?;
             }
             let json = serde_json::to_vec_pretty(&p).expect("serialisable");
-            let path = out.join(PACKAGE_FILE);
-            std::fs::write(&path, json).map_err(io_err(&path))?;
+            crate::write_synced(&out.join(PACKAGE_FILE), &json)?;
             placed.push((p, out));
         }
         for (p, out) in &placed {
@@ -774,5 +796,39 @@ mod tests {
         };
         assert_eq!(id(&info, "x"), "rm-designs.scuderia-alphatauri-orlen");
         assert_eq!(id(&ModInfo::default(), "My Mod (v2)"), "my-mod-v2");
+    }
+
+    #[test]
+    fn a_mod_whose_package_wont_parse_is_set_aside_and_left_out() {
+        let root = std::env::temp_dir().join(format!("simplified-library-unreadable-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let library = Library::new(&root);
+        for name in ["Good Mod", "Bad Mod"] {
+            let erp = root
+                .join("src")
+                .join(name)
+                .join("2025_asset_groups/ui_package/a.erp");
+            std::fs::create_dir_all(erp.parent().unwrap()).unwrap();
+            std::fs::write(erp, b"x").unwrap();
+            library
+                .import(&root.join("src").join(name), None, &mut |_, _| {})
+                .unwrap();
+        }
+        let ids: Vec<String> = library.list().unwrap().into_iter().map(|p| p.id).collect();
+        assert_eq!(ids.len(), 2);
+        let bad = ids.iter().find(|id| id.contains("bad")).unwrap();
+        let path = library.dir(bad).join(PACKAGE_FILE);
+        std::fs::write(&path, [0u8; 32]).unwrap();
+        let left: Vec<String> = library.list().unwrap().into_iter().map(|p| p.id).collect();
+        assert_eq!(left.len(), 1);
+        assert!(!left.contains(bad));
+        assert!(!path.exists());
+        assert!(library.dir(bad).join(format!("{PACKAGE_FILE}.bad")).is_file());
+
+        library
+            .import(&root.join("src/Bad Mod"), None, &mut |_, _| {})
+            .unwrap();
+        assert_eq!(library.list().unwrap().len(), 2);
+        std::fs::remove_dir_all(&root).ok();
     }
 }
