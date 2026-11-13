@@ -18,9 +18,9 @@ serde_json = "1"
 semver = "1"
 sevenz-rust2 = { version = "0.23", default-features = false, features = ["bzip2", "deflate", "ppmd"] }
 sha2 = "0.11"
-swofty-core = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "31978922867b8d71f0910c644e127198947ea6c6" }
-swofty-addon = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "31978922867b8d71f0910c644e127198947ea6c6" }
-swofty-formats = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "31978922867b8d71f0910c644e127198947ea6c6" }
+swofty-core = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "ef27d827864f2618a0d00513664d65354772446f" }
+swofty-addon = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "ef27d827864f2618a0d00513664d65354772446f" }
+swofty-formats = { git = "https://github.com/Swofty-Developments/SwoftyLauncher", rev = "ef27d827864f2618a0d00513664d65354772446f" }
 zip = { version = "9", default-features = false, features = ["bzip2", "deflate", "deflate64", "lzma", "ppmd", "xz", "zstd"] }
 rars = { version = "=0.10.0", default-features = false }
 

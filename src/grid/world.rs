@@ -13,7 +13,7 @@ use swofty_addon::manifest::AddonManifest;
 use swofty_addon::ops::{DbOp, DbOps, DbReport, ErpOp, apply_db_ops_lenient};
 use swofty_core::profile::Profile;
 use swofty_core::rowkeys::{Names, RowKeys};
-use swofty_core::settings::render_ops;
+use swofty_core::settings::{OnAddons, render_ops};
 use swofty_formats::gvdb::Gvdb;
 use swofty_formats::hash::fnv1a64;
 use swofty_formats::lng::Lng;
@@ -730,15 +730,20 @@ struct Loaded {
     files: Vec<String>,
 }
 
-fn load_ops(addon: &AddonRef, profile: &Profile, notes: &mut Vec<String>) -> Option<Loaded> {
+fn read_manifest(addon: &AddonRef, notes: &mut Vec<String>) -> Option<AddonManifest> {
     let raw = std::fs::read_to_string(addon.dir.join("swofty.json")).ok()?;
-    let manifest = match AddonManifest::parse(&raw) {
-        Ok(m) => m,
-        Err(e) => {
-            notes.push(format!("{}: swofty.json doesn't read ({e})", addon.name));
-            return None;
-        }
-    };
+    AddonManifest::parse(&raw)
+        .map_err(|e| notes.push(format!("{}: swofty.json doesn't read ({e})", addon.name)))
+        .ok()
+}
+
+fn load_ops(
+    addon: &AddonRef,
+    manifest: &AddonManifest,
+    profile: &Profile,
+    on: &OnAddons,
+    notes: &mut Vec<String>,
+) -> Option<Loaded> {
     let mut out = Loaded {
         db: DbOps {
             schema_version: 1,
@@ -758,7 +763,7 @@ fn load_ops(addon: &AddonRef, profile: &Profile, notes: &mut Vec<String>) -> Opt
         else {
             continue;
         };
-        if render_ops(&mut doc, &manifest, profile).is_err() {
+        if render_ops(&mut doc, manifest, profile, on).is_err() {
             notes.push(format!(
                 "{}: {rel} doesn't render with this profile's settings",
                 addon.name
@@ -785,8 +790,8 @@ fn load_ops(addon: &AddonRef, profile: &Profile, notes: &mut Vec<String>) -> Opt
             }
         }
     }
-    for f in manifest.operations.files {
-        out.files.push(f.target);
+    for f in &manifest.operations.files {
+        out.files.push(f.target.clone());
     }
     Some(out)
 }
@@ -1058,11 +1063,20 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
     let mut defaults: Vec<(String, String)> = Vec::new();
     let mut sets: Vec<(String, String)> = Vec::new();
     let mut registry_teams = HashMap::new();
-    for addon in &inputs.addons {
+    let manifests: Vec<Option<AddonManifest>> = inputs
+        .addons
+        .iter()
+        .map(|a| read_manifest(a, &mut notes))
+        .collect();
+    let on = OnAddons::new(manifests.iter().flatten());
+    for (addon, manifest) in inputs.addons.iter().zip(&manifests) {
         if addon.id == inputs.me {
             continue;
         }
-        let Some(ops) = load_ops(addon, &profile, &mut notes) else {
+        let Some(manifest) = manifest else {
+            continue;
+        };
+        let Some(ops) = load_ops(addon, manifest, &profile, &on, &mut notes) else {
             continue;
         };
         let before: HashSet<String> = db
