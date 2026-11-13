@@ -293,10 +293,7 @@ pub fn placements(catalog: &Catalog, edits: &Edits, lib: &Library, data_dir: &Pa
 }
 
 /// Every op for the edits that name rows the profile has. `logo_root` is where the
-/// logo archives go and `logo_rel` their path from the ops' source root. With
-/// `join`, logo arrays other addons left differing between archives are made one
-/// again, which only the profile's own build wants, not an exported addon.
-#[allow(clippy::too_many_arguments)]
+/// logo archives go and `logo_rel` their path from the ops' source root.
 pub fn all(
     catalog: &Catalog,
     edits: &Edits,
@@ -305,7 +302,6 @@ pub fn all(
     logo_root: &Path,
     logo_rel: &str,
     cached: bool,
-    join: bool,
 ) -> Out {
     let mut out = Out::default();
     let mut done = BTreeSet::new();
@@ -335,8 +331,8 @@ pub fn all(
     driver_ops(catalog, edits, &mut out);
     if let Some(lib) = lib {
         let places = placements(catalog, edits, lib, data_dir);
-        if !places.is_empty() || join {
-            let baked = logos::bake(lib, &places, logo_root, logo_rel, cached, join);
+        if !places.is_empty() {
+            let baked = logos::bake(lib, &places, logo_root, logo_rel, cached);
             out.ops.extend(baked.ops);
             out.lines.extend(baked.lines);
             out.warnings.extend(baked.warnings);
@@ -683,7 +679,7 @@ pub fn export(
 ) -> Result<(PathBuf, usize), String> {
     let _ = std::fs::remove_dir_all(out_dir);
     std::fs::create_dir_all(out_dir.join("ops")).map_err(|e| e.to_string())?;
-    let out = all(catalog, edits, lib, data_dir, out_dir, "logos", false, false);
+    let out = all(catalog, edits, lib, data_dir, out_dir, "logos", false);
     if out.ops.is_empty() {
         return Err("there's nothing to export: you haven't edited it".into());
     }

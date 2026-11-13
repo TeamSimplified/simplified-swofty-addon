@@ -13,9 +13,10 @@
 // arrays with its teams in the UI archives, while a team mod merges its logo into
 // a game-sized copy it adds to vfx_package/common.erp, which the game then shows,
 // so a Classic Seasons team reads past its end and gets the last slice, the 2026
-// Williams logo. Where an addon grew an array, the editor joins every copy into
-// one, matching teams by name since the grown lists move teams along, and writes
-// it to every archive whose copy differs.
+// Williams logo. Where an addon grew an array, the editor shows every copy joined
+// into one, matching teams by name since the grown lists move teams along. A build
+// writes no copy whole: each archive keeps its own, with only the placed logos
+// changed in it, and none at all without placements.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -153,6 +154,17 @@ impl Names<'_> {
         }
     }
 
+    /// Where the team at `i` of the built list sits in a copy with `count` slices: a
+    /// game-sized copy follows the game's list, a grown one the built list.
+    fn copy_index(&self, i: usize, count: usize, stock_count: usize) -> Option<usize> {
+        let at = if count == stock_count {
+            self.stock_index(i, stock_count)
+        } else {
+            Some(i)
+        };
+        at.filter(|&at| at < count)
+    }
+
     /// Where the team at `i` of the built list sits in the game's array.
     fn stock_index(&self, i: usize, stock_count: usize) -> Option<usize> {
         if self.built.len() == stock_count || self.built.is_empty() {
@@ -283,11 +295,9 @@ pub struct Shelf {
     /// The archive whose copy the game is likeliest to show: the one the last addon
     /// to change the array wrote, else the first carrier.
     pub shown: String,
-    /// The array the editor shows and builds on: the shown copy, or, where an addon
-    /// grew the array, every copy joined over the grown one.
+    /// The array the editor shows: the shown copy, or, where an addon grew the
+    /// array, every copy joined over the grown one.
     pub combined: State,
-    /// An addon grew the array, so every archive gets the joined array whole.
-    pub grown: bool,
 }
 
 impl Shelf {
@@ -644,10 +654,7 @@ pub fn load(
                 _ => {}
             }
         }
-        let (combined, grown) = match combine(&targets, &shown, &array, &names) {
-            Some(c) => (c, true),
-            None => (targets[&shown].clone(), false),
-        };
+        let combined = combine(&targets, &shown, &array, &names).unwrap_or_else(|| targets[&shown].clone());
         shelves.insert(
             a.clone(),
             Shelf {
@@ -655,7 +662,6 @@ pub fn load(
                 targets,
                 shown,
                 combined,
-                grown,
             },
         );
     }
@@ -807,20 +813,12 @@ fn write_archive(template: &Path, resources: Vec<Resource>, out: &Path) -> Resul
 
 /// Writes the archives the placements need under `root` and returns the ops that
 /// put them in, with sources under `rel` (relative to the cache dir or the addon
-/// folder the ops are read from). Where no addon grew an array, each archive gets
-/// a merge-slices, so later addons' slices still merge. Where one did, such as
-/// Classic Seasons, every archive whose copy differs gets the joined array whole
-/// with these slices in it, its view too, since a merge would fall back to the
-/// game's shorter array; with `join`, that happens even without placements, to
-/// mend copies other addons left short.
-pub fn bake(
-    lib: &Library,
-    placements: &[Placement],
-    root: &Path,
-    rel: &str,
-    cached: bool,
-    join: bool,
-) -> Baked {
+/// folder the ops are read from). Each archive keeps the copy of the array earlier
+/// addons left there, its size and their slices with it: only the placed slices
+/// change, each at its team's place in that copy. A copy of the game's size gets a
+/// merge-slices; a copy an addon grew gets its picture resource back with the same
+/// slice count, so its view still holds. Without placements nothing is written.
+pub fn bake(lib: &Library, placements: &[Placement], root: &Path, rel: &str, cached: bool) -> Baked {
     let mut baked = Baked {
         ops: Vec::new(),
         lines: Vec::new(),
@@ -830,13 +828,6 @@ pub fn bake(
     for p in placements {
         by_array.entry(&p.array).or_default().push(p);
     }
-    if join {
-        for (a, shelf) in &lib.shelves {
-            if shelf.grown {
-                by_array.entry(a.as_str()).or_default();
-            }
-        }
-    }
     let mut pictures: HashMap<PathBuf, Option<Image>> = HashMap::new();
     let source = |path: &str| {
         if cached {
@@ -845,12 +836,17 @@ pub fn bake(
             json!(path)
         }
     };
+    let none = Vec::new();
     for (array, list) in by_array {
         let Some(shelf) = lib.shelves.get(array) else {
             continue;
         };
         let stock = &shelf.stock;
         let name = resource(array);
+        let names = Names {
+            stock: lib.stock_lists.get(array).unwrap_or(&none),
+            built: lib.lists.get(array).unwrap_or(&none),
+        };
         let mut slices: Vec<(usize, Vec<u8>)> = Vec::new();
         for p in list {
             let picture =
@@ -870,89 +866,46 @@ pub fn bake(
                 Err(e) => baked.warnings.push(format!("{array}: {e}")),
             }
         }
-        let file_stem = array.replace('.', "_");
-        if shelf.grown {
-            let combined = &shelf.combined;
-            let mut whole = combined.array.clone();
-            let n_slice = whole.slice_len();
-            for (i, data) in &slices {
-                if *i < whole.count && data.len() == n_slice {
-                    whole.data[i * n_slice..(i + 1) * n_slice].copy_from_slice(data);
-                }
-            }
-            let stale: Vec<&String> = shelf
-                .targets
-                .iter()
-                .filter(|(_, t)| t.array.count != whole.count || t.array.data != whole.data)
-                .map(|(erp, _)| erp)
-                .collect();
-            if stale.is_empty() {
-                continue;
-            }
-            let mut res = combined.resource.clone();
-            if let Err(e) = res.set_fragment(1, &whole.data) {
-                baked.warnings.push(format!("{array}: {e}"));
-                continue;
-            }
-            let mut resources = vec![res];
-            resources.extend(combined.descriptor.clone());
-            let path = format!("{rel}/{file_stem}.erp");
-            if let Err(e) = write_archive(&stock.template, resources, &root.join(&path)) {
-                baked.warnings.push(e);
-                continue;
-            }
-            for erp in &stale {
-                baked.ops.push(json!({ "op": "erp.put-resource", "erp": erp, "resource": name, "source": source(&path) }));
-                if combined.descriptor.is_some() {
-                    baked.ops.push(json!({ "op": "erp.put-resource", "erp": erp, "resource": descriptor(array), "source": source(&path) }));
-                }
-            }
-            baked.lines.push(if slices.is_empty() {
-                format!(
-                    "{array}: {} copies made whole again ({} teams)",
-                    stale.len(),
-                    whole.count
-                )
-            } else {
-                format!(
-                    "{} logo slice(s) in {array}, into {} archive(s)",
-                    slices.len(),
-                    stale.len()
-                )
-            });
-            continue;
-        }
         if slices.is_empty() {
             continue;
         }
+        let file_stem = array.replace('.', "_");
         let mut merged = false;
+        let mut archives = 0;
         for (n, (erp, state)) in shelf.targets.iter().enumerate() {
-            let grown = !state.array.same_layout(&stock.array);
-            let (base_res, base) = if grown {
-                (&state.resource, &state.array)
-            } else {
+            if !state.array.fits(&stock.array) {
+                baked.warnings.push(format!(
+                    "{array}: the copy in {erp} has another format or slice size, so it keeps its logos"
+                ));
+                continue;
+            }
+            let game_sized = state.array.same_layout(&stock.array);
+            let (base_res, base) = if game_sized {
                 (&stock.resource, &stock.array)
+            } else {
+                (&state.resource, &state.array)
             };
             let mut array_data = base.clone();
             let n_slice = array_data.slice_len();
+            let mut placed = 0;
             for (i, data) in &slices {
-                if *i < array_data.count && data.len() == n_slice {
-                    array_data.data[i * n_slice..(i + 1) * n_slice].copy_from_slice(data);
+                let Some(at) = names.copy_index(*i, array_data.count, stock.array.count) else {
+                    continue;
+                };
+                if data.len() == n_slice {
+                    array_data.data[at * n_slice..(at + 1) * n_slice].copy_from_slice(data);
+                    placed += 1;
                 }
+            }
+            if placed == 0 {
+                continue;
             }
             let mut res = base_res.clone();
             if let Err(e) = res.set_fragment(1, &array_data.data) {
                 baked.warnings.push(format!("{array}: {e}"));
                 continue;
             }
-            if grown {
-                let path = format!("{rel}/{file_stem}.{n}.erp");
-                if let Err(e) = write_archive(&stock.template, vec![res], &root.join(&path)) {
-                    baked.warnings.push(e);
-                    continue;
-                }
-                baked.ops.push(json!({ "op": "erp.put-resource", "erp": erp, "resource": name, "source": source(&path) }));
-            } else {
+            if game_sized {
                 let path = format!("{rel}/{file_stem}.erp");
                 if !merged {
                     if let Err(e) = write_archive(&stock.template, vec![res], &root.join(&path)) {
@@ -962,13 +915,211 @@ pub fn bake(
                     merged = true;
                 }
                 baked.ops.push(json!({ "op": "erp.merge-slices", "erp": erp, "resource": name, "source": source(&path) }));
+            } else {
+                let path = format!("{rel}/{file_stem}.{n}.erp");
+                if let Err(e) = write_archive(&stock.template, vec![res], &root.join(&path)) {
+                    baked.warnings.push(e);
+                    continue;
+                }
+                baked.ops.push(json!({ "op": "erp.put-resource", "erp": erp, "resource": name, "source": source(&path) }));
             }
+            archives += 1;
         }
-        baked.lines.push(format!(
-            "{} logo slice(s) in {array}, into {} archive(s)",
-            slices.len(),
-            shelf.targets.len()
-        ));
+        if archives > 0 {
+            baked.lines.push(format!(
+                "{} logo slice(s) in {array}, into {archives} archive(s)",
+                slices.len()
+            ));
+        }
     }
     baked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swofty_formats::erp::{Fragment, HEADER_LEN, MAGIC, STORED};
+
+    const ARRAY: &str = "broadcast_ui_generic.grid_team_logos";
+    const SLICE: usize = 16;
+    const UI: &str = "2025_asset_groups/ui_package/flow_race_intro.erp";
+    const VFX: &str = "2025_asset_groups/vfx_package/common.erp";
+
+    fn fragment(data: Vec<u8>) -> Fragment {
+        Fragment {
+            name: *b"temp",
+            offset: 0,
+            size: data.len() as u64,
+            flags: 0x10,
+            compression: STORED,
+            packed: data.len() as u64,
+            raw: data,
+        }
+    }
+
+    fn surface(marks: &[u8]) -> Resource {
+        let mut head = vec![0u8; 40];
+        for (at, v) in [(8, 69u32), (12, 4), (16, 4), (24, 1), (28, marks.len() as u32)] {
+            head[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        let data = marks.iter().flat_map(|&m| [m; SLICE]).collect();
+        Resource {
+            name: resource(ARRAY),
+            kind: [0; 16],
+            unk: vec![0; 6],
+            fragments: vec![fragment(head), fragment(data)],
+            hash: [0; 16],
+        }
+    }
+
+    fn state(marks: &[u8]) -> State {
+        let resource = surface(marks);
+        State {
+            array: Array::read(&resource).unwrap(),
+            resource,
+            descriptor: None,
+            owners: HashMap::new(),
+        }
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|n| n.to_string()).collect()
+    }
+
+    fn scratch(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("simplified-logos-{}-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The game's array holds s0..s3. Classic Seasons grew the copy in the UI archive,
+    /// listing cs_a between s1 and s2 and cs_b at the end, and a team mod changed s1 in
+    /// a game-sized copy in vfx_package/common.erp.
+    fn library(dir: &Path) -> Library {
+        let stock = state(&[0, 1, 2, 3]);
+        let template = dir.join("template.erp");
+        let mut header = [0u8; HEADER_LEN];
+        header[..4].copy_from_slice(MAGIC);
+        header[4..8].copy_from_slice(&4u32.to_le_bytes());
+        let mut erp = Erp {
+            header,
+            version: 4,
+            resources: vec![stock.resource.clone()],
+        };
+        std::fs::write(&template, erp.to_bytes()).unwrap();
+        let targets = BTreeMap::from([
+            (UI.to_owned(), state(&[0, 1, 0xa0, 2, 3, 0xb0])),
+            (VFX.to_owned(), state(&[0, 0x51, 2, 3])),
+        ]);
+        let shelf = Shelf {
+            stock: Stock {
+                carriers: vec![UI.to_owned()],
+                header: texture::header(&stock.resource).unwrap(),
+                resource: stock.resource,
+                array: stock.array,
+                template,
+            },
+            combined: targets[UI].clone(),
+            targets,
+            shown: VFX.to_owned(),
+        };
+        Library {
+            lists: HashMap::from([(ARRAY.to_owned(), names(&["s0", "s1", "cs_a", "s2", "s3", "cs_b"]))]),
+            stock_lists: HashMap::from([(ARRAY.to_owned(), names(&["s0", "s1", "s2", "s3"]))]),
+            shelves: HashMap::from([(ARRAY.to_owned(), shelf)]),
+            notes: Vec::new(),
+        }
+    }
+
+    fn placement(lib: &Library, dir: &Path, key: &str) -> Placement {
+        let picture = dir.join(format!("{key}.png"));
+        let rgba = [200u8, 30, 60, 255].repeat(16);
+        image::save_png(
+            &Image {
+                width: 4,
+                height: 4,
+                rgba,
+            },
+            &picture,
+        )
+        .unwrap();
+        Placement {
+            array: ARRAY.to_owned(),
+            slice: lib.slice(ARRAY, key).unwrap(),
+            picture,
+            size: 100,
+        }
+    }
+
+    fn written(root: &Path, op: &Value) -> Array {
+        let path = root.join(op["source"]["path"].as_str().unwrap());
+        let file = ErpFile::open(&path).unwrap();
+        let res = file.load(file.erp.find(&resource(ARRAY)).unwrap()).unwrap();
+        Array::read(&res).unwrap()
+    }
+
+    fn op_for<'a>(baked: &'a Baked, erp: &str) -> &'a Value {
+        baked.ops.iter().find(|o| o["erp"] == erp).unwrap()
+    }
+
+    #[test]
+    fn no_custom_logo_writes_no_array() {
+        let dir = scratch("none");
+        let lib = library(&dir);
+        let root = dir.join("out");
+        let baked = bake(&lib, &[], &root, "build", true);
+        assert!(baked.ops.is_empty() && baked.lines.is_empty() && baked.warnings.is_empty());
+        assert!(!root.exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn one_custom_logo_keeps_the_grown_size_and_the_other_slices() {
+        let dir = scratch("grown");
+        let lib = library(&dir);
+        let root = dir.join("out");
+        let baked = bake(&lib, &[placement(&lib, &dir, "s2")], &root, "build", true);
+        assert_eq!(baked.ops.len(), 2, "{:?}", baked.ops);
+        assert!(baked.ops.iter().all(|o| o["resource"] == resource(ARRAY)));
+        let ui = op_for(&baked, UI);
+        assert_eq!(ui["op"], "erp.put-resource");
+        let grown = written(&root, ui);
+        let before = &lib.shelves[ARRAY].targets[UI].array;
+        assert_eq!((grown.count, grown.slice_len()), (6, SLICE));
+        for i in [0, 1, 2, 4, 5] {
+            assert_eq!(grown.slice(i), before.slice(i), "slice {i}");
+        }
+        assert_ne!(grown.slice(3), before.slice(3));
+        assert_eq!(
+            baked.lines,
+            ["1 logo slice(s) in broadcast_ui_generic.grid_team_logos, into 2 archive(s)"]
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn existing_keys_keep_their_slices() {
+        let dir = scratch("keys");
+        let lib = library(&dir);
+        let root = dir.join("out");
+        let baked = bake(&lib, &[placement(&lib, &dir, "s2")], &root, "build", true);
+        let ours = written(&root, op_for(&baked, UI)).slice(3).to_vec();
+        let vfx = op_for(&baked, VFX);
+        assert_eq!(vfx["op"], "erp.merge-slices");
+        let merged = written(&root, vfx);
+        let stock = &lib.shelves[ARRAY].stock.array;
+        assert_eq!(merged.count, stock.count);
+        assert_eq!(merged.slice(2), &ours[..]);
+        for i in [0, 1, 3] {
+            assert_eq!(merged.slice(i), stock.slice(i), "slice {i}");
+        }
+        assert!(
+            baked
+                .ops
+                .iter()
+                .all(|o| o["resource"] != descriptor(ARRAY) && o["resource"] != UIDB)
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
