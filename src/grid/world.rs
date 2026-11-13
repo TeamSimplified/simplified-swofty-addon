@@ -7,13 +7,15 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
+use serde::de::{self, Deserializer, Visitor};
 use serde_json::Value;
 use swofty_addon::asset::{AssetOp, FileOp, LangOp, OpFile, Root, Source};
-use swofty_addon::manifest::AddonManifest;
+use swofty_addon::manifest::{AddonManifest, Operations};
 use swofty_addon::ops::{DbOp, DbOps, DbReport, ErpOp, apply_db_ops_lenient};
 use swofty_core::profile::Profile;
 use swofty_core::rowkeys::{Names, RowKeys};
-use swofty_core::settings::render_ops;
+use swofty_core::settings::{OnAddons, render_ops};
 use swofty_formats::gvdb::Gvdb;
 use swofty_formats::hash::fnv1a64;
 use swofty_formats::lng::Lng;
@@ -730,15 +732,72 @@ struct Loaded {
     files: Vec<String>,
 }
 
-fn load_ops(addon: &AddonRef, profile: &Profile, notes: &mut Vec<String>) -> Option<Loaded> {
-    let raw = std::fs::read_to_string(addon.dir.join("swofty.json")).ok()?;
-    let manifest = match AddonManifest::parse(&raw) {
-        Ok(m) => m,
-        Err(e) => {
-            notes.push(format!("{}: swofty.json doesn't read ({e})", addon.name));
-            return None;
+// The keys a struct's derived Deserialize reads, as it names them to the deserializer.
+fn known_keys<'de, T: Deserialize<'de>>() -> &'static [&'static str] {
+    struct Keys<'a>(&'a mut &'static [&'static str]);
+
+    impl<'de> Deserializer<'de> for Keys<'_> {
+        type Error = de::value::Error;
+
+        fn deserialize_any<V: Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
+            Err(de::Error::custom("not a struct"))
         }
-    };
+
+        fn deserialize_struct<V: Visitor<'de>>(
+            self,
+            _: &'static str,
+            fields: &'static [&'static str],
+            visitor: V,
+        ) -> Result<V::Value, Self::Error> {
+            *self.0 = fields;
+            self.deserialize_any(visitor)
+        }
+
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf
+            option unit unit_struct newtype_struct seq tuple tuple_struct map enum identifier
+            ignored_any
+        }
+    }
+
+    let mut keys: &'static [&'static str] = &[];
+    let _ = T::deserialize(Keys(&mut keys));
+    keys
+}
+
+fn keep_known<'de, T: Deserialize<'de>>(doc: Option<&mut Value>) {
+    if let Some(doc) = doc.and_then(Value::as_object_mut) {
+        let known = known_keys::<T>();
+        doc.retain(|k, _| known.contains(&k.as_str()));
+    }
+}
+
+// Another addon's manifest, read for what its operations do: keys a newer launcher
+// added at the top or in `operations` are left out instead of failing the read.
+fn parse_other(raw: &str) -> swofty_addon::Result<AddonManifest> {
+    let invalid = |e: serde_json::Error| swofty_addon::Error::Manifest(e.to_string());
+    let mut doc: Value = serde_json::from_str(raw).map_err(invalid)?;
+    keep_known::<AddonManifest>(Some(&mut doc));
+    keep_known::<Operations>(doc.get_mut("operations"));
+    let m: AddonManifest = serde_json::from_value(doc).map_err(invalid)?;
+    m.validate()?;
+    Ok(m)
+}
+
+fn read_manifest(addon: &AddonRef, notes: &mut Vec<String>) -> Option<AddonManifest> {
+    let raw = std::fs::read_to_string(addon.dir.join("swofty.json")).ok()?;
+    parse_other(&raw)
+        .map_err(|e| notes.push(format!("{}: swofty.json doesn't read ({e})", addon.name)))
+        .ok()
+}
+
+fn load_ops(
+    addon: &AddonRef,
+    manifest: &AddonManifest,
+    profile: &Profile,
+    on: &OnAddons,
+    notes: &mut Vec<String>,
+) -> Option<Loaded> {
     let mut out = Loaded {
         db: DbOps {
             schema_version: 1,
@@ -758,7 +817,7 @@ fn load_ops(addon: &AddonRef, profile: &Profile, notes: &mut Vec<String>) -> Opt
         else {
             continue;
         };
-        if render_ops(&mut doc, &manifest, profile).is_err() {
+        if render_ops(&mut doc, manifest, profile, on).is_err() {
             notes.push(format!(
                 "{}: {rel} doesn't render with this profile's settings",
                 addon.name
@@ -785,8 +844,8 @@ fn load_ops(addon: &AddonRef, profile: &Profile, notes: &mut Vec<String>) -> Opt
             }
         }
     }
-    for f in manifest.operations.files {
-        out.files.push(f.target);
+    for f in &manifest.operations.files {
+        out.files.push(f.target.clone());
     }
     Some(out)
 }
@@ -1058,11 +1117,20 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
     let mut defaults: Vec<(String, String)> = Vec::new();
     let mut sets: Vec<(String, String)> = Vec::new();
     let mut registry_teams = HashMap::new();
-    for addon in &inputs.addons {
+    let manifests: Vec<Option<AddonManifest>> = inputs
+        .addons
+        .iter()
+        .map(|a| read_manifest(a, &mut notes))
+        .collect();
+    let on = OnAddons::new(manifests.iter().flatten());
+    for (addon, manifest) in inputs.addons.iter().zip(&manifests) {
         if addon.id == inputs.me {
             continue;
         }
-        let Some(ops) = load_ops(addon, &profile, &mut notes) else {
+        let Some(manifest) = manifest else {
+            continue;
+        };
+        let Some(ops) = load_ops(addon, manifest, &profile, &on, &mut notes) else {
             continue;
         };
         let before: HashSet<String> = db
@@ -1306,5 +1374,91 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(p.seats["2016"]["jenson_button"], (4, 1));
         assert_eq!(p.seats["2016"]["fernando_alonso"], (4, 0));
+    }
+
+    fn silly_season(extra: &str, operations: &str) -> String {
+        format!(
+            r#"{{
+              "schema_version": 1,
+              "id": "someone.silly_season",
+              "name": "Silly Season",
+              "version": "1.2.0",
+              "author": "Someone",
+              {extra}
+              "operations": {{ "assets": ["ops/text.json"], "files": [{{ "source": "a.bin", "target": "x/a.bin" }}]{operations} }}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn a_manifest_with_a_source_link_reads() {
+        let raw = silly_season(r#""repository": "https://github.com/someone/silly-season","#, "");
+        let m = parse_other(&raw).unwrap();
+        assert_eq!(m.source_url(), Some("https://github.com/someone/silly-season"));
+        assert_eq!(AddonManifest::parse(&raw).unwrap(), m);
+    }
+
+    #[test]
+    fn keys_a_newer_launcher_adds_are_left_out() {
+        let raw = silly_season(
+            r#""some_new_field": { "anything": [1, 2] },"#,
+            r#", "some_new_ops": ["ops/new.json"]"#,
+        );
+        let err = AddonManifest::parse(&raw).unwrap_err().to_string();
+        assert!(err.contains("unknown field `some_new_field`"), "{err}");
+        let m = parse_other(&raw).unwrap();
+        assert_eq!(m.id, "someone.silly_season");
+        assert_eq!(m.operations.assets, ["ops/text.json"]);
+        assert_eq!(m.operations.files[0].target, "x/a.bin");
+    }
+
+    #[test]
+    fn a_broken_manifest_still_says_why() {
+        let err = parse_other(&silly_season(r#""version": "one","#, ""))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("invalid manifest"), "{err}");
+        let err = parse_other(&silly_season("", "").replace("someone.silly_season", "Silly"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("id must be lowercase"), "{err}");
+        assert!(parse_other("[]").is_err());
+    }
+
+    #[test]
+    fn the_grid_editor_reads_the_ops_of_an_addon_with_newer_keys() {
+        let dir = std::env::temp_dir().join(format!("simplified-newer-manifest-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("ops")).unwrap();
+        let raw = silly_season(
+            r#""repository": "https://github.com/someone/silly-season", "some_new_field": true,"#,
+            "",
+        );
+        std::fs::write(dir.join("swofty.json"), raw).unwrap();
+        std::fs::write(
+            dir.join("ops/text.json"),
+            r#"{ "schema_version": 1, "ops": [
+                { "op": "lang.set", "language": "eng", "key": "TEAM", "value": "Silly",
+                  "when": { "addon": "someone.other" } } ] }"#,
+        )
+        .unwrap();
+        let addon = AddonRef {
+            id: "someone.silly_season".into(),
+            name: "Silly Season".into(),
+            dir: dir.clone(),
+        };
+        let mut notes = Vec::new();
+        let m = read_manifest(&addon, &mut notes);
+        let other = parse_other(&silly_season("", "").replace("silly_season", "other")).unwrap();
+        let profile = Profile::new("test");
+        let loaded = |on: &OnAddons, notes: &mut Vec<String>| {
+            load_ops(&addon, m.as_ref().unwrap(), &profile, on, notes).unwrap()
+        };
+        let off = loaded(&OnAddons::default(), &mut notes);
+        let on = loaded(&OnAddons::new([&other]), &mut notes);
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(off.files, ["x/a.bin"]);
+        assert!(off.lang.is_empty());
+        assert_eq!(on.lang.len(), 1);
     }
 }

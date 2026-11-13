@@ -805,9 +805,9 @@ dependencies = [
 
 [[package]]
 name = "rars"
-version = "0.12.3"
+version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8cfe43d4831a02f45c89f11a84fb32b45e818e8914396038cf3494501041f95"
+checksum = "f10c4922c8ceb429e2eed0b2f61672f673d53a42fdfeb07fd0e143777ee9a979"
 dependencies = [
  "aho-corasick",
  "crc32fast",
@@ -1132,8 +1132,8 @@ dependencies = [
 
 [[package]]
 name = "swofty-addon"
-version = "1.8.10"
-source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=31978922867b8d71f0910c644e127198947ea6c6#31978922867b8d71f0910c644e127198947ea6c6"
+version = "1.9.40"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=ef27d827864f2618a0d00513664d65354772446f#ef27d827864f2618a0d00513664d65354772446f"
 dependencies = [
  "semver",
  "serde",
@@ -1145,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "swofty-addon-simplified"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "chrono",
  "jpeg-decoder",
@@ -1165,14 +1165,14 @@ dependencies = [
 
 [[package]]
 name = "swofty-core"
-version = "1.8.10"
-source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=31978922867b8d71f0910c644e127198947ea6c6#31978922867b8d71f0910c644e127198947ea6c6"
+version = "1.9.40"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=ef27d827864f2618a0d00513664d65354772446f#ef27d827864f2618a0d00513664d65354772446f"
 dependencies = [
  "flate2",
  "libc",
  "md-5",
  "png 0.18.1",
- "rars 0.12.3",
+ "rars 0.12.4",
  "regex",
  "ring",
  "rustls",
@@ -1196,8 +1196,8 @@ dependencies = [
 
 [[package]]
 name = "swofty-formats"
-version = "1.8.10"
-source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=31978922867b8d71f0910c644e127198947ea6c6#31978922867b8d71f0910c644e127198947ea6c6"
+version = "1.9.40"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=ef27d827864f2618a0d00513664d65354772446f#ef27d827864f2618a0d00513664d65354772446f"
 dependencies = [
  "aes",
  "bcdec_rs",
@@ -1208,13 +1208,13 @@ dependencies = [
 
 [[package]]
 name = "swofty-sdk"
-version = "1.8.10"
-source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=31978922867b8d71f0910c644e127198947ea6c6#31978922867b8d71f0910c644e127198947ea6c6"
+version = "1.9.40"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=ef27d827864f2618a0d00513664d65354772446f#ef27d827864f2618a0d00513664d65354772446f"
 
 [[package]]
 name = "swofty-shaders"
-version = "1.8.10"
-source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=31978922867b8d71f0910c644e127198947ea6c6#31978922867b8d71f0910c644e127198947ea6c6"
+version = "1.9.40"
+source = "git+https://github.com/Swofty-Developments/SwoftyLauncher?rev=ef27d827864f2618a0d00513664d65354772446f#ef27d827864f2618a0d00513664d65354772446f"
 dependencies = [
  "serde",
  "serde_json",
