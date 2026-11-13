@@ -114,17 +114,16 @@ it edits, Classic Seasons (`swofty.classic-seasons*`), Progressive Career, the F
 addons (`load_after` in `swofty.json`), so its edits win over theirs. Not after every
 addon: More Driver Models requires Simplified and so builds after it, and `*` would make
 a cycle the launcher refuses to launch. A season addon from another author needs its id
-pattern added there. An array that an earlier addon grew, as Classic Seasons does, or
-appended to (`erp.append-slices`, as the F1 2014 season does), gets the whole grown
-array with the edited slices in it, since a slice merge would fall back to the game's
-shorter array.
+pattern added there.
 
-Addons can also leave one logo array differing between archives: Classic Seasons grows
-the arrays with its teams, while a team mod merges its logo into a copy of the game's
-size in `vfx_package/common.erp`, which the game then shows, so every Classic Seasons
-team reads past its end and gets the last logo. On every Play the editor joins those
-copies into one, matching teams by name, and writes it to each archive whose copy
-differs, so both the added teams and the team mods keep their logos.
+Team logos are written only when a team has a logo set in the editor; with none, the
+build leaves every logo array as the other addons made it. A logo goes into each
+archive's own copy of the array, at its team's slice in that copy, with the copy's size
+and every other slice kept. A copy of the game's size gets an `erp.merge-slices`. A copy
+an earlier addon grew, as Classic Seasons does, or appended to (`erp.append-slices`, as
+the F1 2014 season does), gets its picture resource back with the same slice count,
+since a slice merge would fall back to the game's shorter array. The editor never
+writes a whole array of another size, so the slices other addons added stay theirs.
 
 Needs Swofty Launcher 1.5.25 or newer, for its colour picker and transparent pictures.
 

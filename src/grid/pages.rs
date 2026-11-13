@@ -2754,7 +2754,6 @@ pub fn build(app: &mut App, host: &mut Host, params: &Value) -> Value {
         &root,
         &format!("{base}build"),
         true,
-        true,
     );
     ops::newer_heads(&l.catalog, &l.world, &mut out);
     if let Some(game) = app.game_dir.as_deref() {
