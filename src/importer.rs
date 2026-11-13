@@ -192,9 +192,7 @@ impl Record {
     pub fn load(data: &Path) -> Result<Self> {
         let path = data.join(RECORD);
         let mut record: Self = match std::fs::read(&path) {
-            Ok(bytes) => {
-                serde_json::from_slice(&bytes).map_err(|e| err(format!("{}: {e}", path.display())))?
-            }
+            Ok(bytes) => Self::parse(&path, &bytes).unwrap_or_default(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
             Err(e) => return Err(io_err(&path)(e)),
         };
@@ -214,6 +212,15 @@ impl Record {
         Ok(record)
     }
 
+    // A record that doesn't parse, such as an empty or zero-filled one a crash left, is
+    // set aside and read as none: the importer starts over as on a first run, and the
+    // addons made before stay installed.
+    fn parse(path: &Path, bytes: &[u8]) -> Option<Self> {
+        serde_json::from_slice(bytes)
+            .map_err(|e| crate::set_aside(path, &e))
+            .ok()
+    }
+
     fn holds_local(&self) -> bool {
         self.last.is_some() || self.mods.values().any(|e| e.at != 0 || e.error.is_some())
     }
@@ -226,8 +233,9 @@ impl Record {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(io_err(&path)(e)),
         };
-        let on_disk: Self =
-            serde_json::from_slice(&bytes).map_err(|e| err(format!("{}: {e}", path.display())))?;
+        let Some(on_disk) = Self::parse(&path, &bytes) else {
+            return Ok(());
+        };
         if on_disk.holds_local() {
             Self::load(data)?.save(data)?;
         }
@@ -264,7 +272,7 @@ fn write_json(data: &Path, name: &str, value: &impl Serialize) -> Result<()> {
     let path = data.join(name);
     let tmp = data.join(format!("{name}.tmp"));
     let text = serde_json::to_vec_pretty(value).map_err(|e| err(format!("{}: {e}", path.display())))?;
-    std::fs::write(&tmp, text).map_err(io_err(&tmp))?;
+    crate::write_synced(&tmp, &text)?;
     std::fs::rename(&tmp, &path).map_err(io_err(&path))
 }
 
@@ -2260,5 +2268,88 @@ mod tests {
         for dir in [a, b] {
             std::fs::remove_dir_all(&dir).ok();
         }
+    }
+
+    #[test]
+    fn a_record_that_wont_parse_is_set_aside_and_read_as_none() {
+        let dir = record_dir("unreadable");
+        let bad = dir.join(format!("{RECORD}.bad"));
+        let cases: [(&str, &[u8], &str); 3] = [
+            ("zero-filled", &[0; 64], "expected value at line 1 column 1"),
+            ("empty", b"", "EOF while parsing a value at line 1 column 0"),
+            (
+                "cut short",
+                br#"{"mods": {"one": {"name": "On"#,
+                "EOF while parsing",
+            ),
+        ];
+        std::fs::write(&bad, "an older one").unwrap();
+        for (case, bytes, why) in cases {
+            let e = serde_json::from_slice::<Record>(bytes).unwrap_err().to_string();
+            assert!(e.starts_with(why), "{case}: {e}");
+            std::fs::write(dir.join(RECORD), bytes).unwrap();
+            assert_eq!(Record::load(&dir).unwrap(), Record::default(), "{case}");
+            assert!(!dir.join(RECORD).exists(), "{case}");
+            assert_eq!(std::fs::read(&bad).unwrap(), bytes, "{case}");
+
+            std::fs::write(dir.join(RECORD), bytes).unwrap();
+            Record::split_older(&dir).unwrap();
+            assert!(!dir.join(RECORD).exists(), "{case}");
+        }
+
+        let mut record = Record::default();
+        record.mods.insert(
+            "one".into(),
+            Entry {
+                name: "One".into(),
+                converter: CONVERTER,
+                ..Entry::default()
+            },
+        );
+        record.save(&dir).unwrap();
+        assert_eq!(Record::load(&dir).unwrap(), record);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_readable_record_is_read_and_left_as_it_is() {
+        let dir = record_dir("readable");
+        let text = serde_json::json!({
+            "mods": { "one": { "name": "One", "converter": 3,
+                               "made": { "id": "mod.one", "name": "One", "base": true } } },
+        })
+        .to_string();
+        std::fs::write(dir.join(RECORD), &text).unwrap();
+        let read = Record::load(&dir).unwrap();
+        assert_eq!(read.addon("one").unwrap().id, "mod.one");
+        assert!(read.addon("one").unwrap().base);
+        Record::split_older(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(RECORD)).unwrap(), text);
+        assert!(!dir.join(format!("{RECORD}.bad")).exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unreadable_record_blocks_neither_the_build_nor_the_page() {
+        let host = Host::new("unreadable", &["one"]);
+        host.profile("one", &["swofty.core", ID]);
+        std::fs::create_dir_all(&host.data).unwrap();
+        std::fs::write(host.data.join(RECORD), [0u8; 512]).unwrap();
+        assert!(with(&host, "one", handed_over).unwrap().is_empty());
+        assert!(with(&host, "one", page::view).is_ok());
+        assert!(host.data.join(format!("{RECORD}.bad")).is_file());
+        assert!(!host.data.join(RECORD).exists());
+
+        std::fs::write(host.data.join(RECORD), b"").unwrap();
+        let effect = with(&host, "one", |cx| {
+            page::event(cx, Event::Startup {}, &Fake::default())
+        })
+        .unwrap();
+        assert_eq!(effect, Some(Effect::None));
+        assert_eq!(
+            std::fs::read(host.data.join(format!("{RECORD}.bad"))).unwrap(),
+            b""
+        );
+        std::fs::remove_dir_all(&host.root).ok();
     }
 }

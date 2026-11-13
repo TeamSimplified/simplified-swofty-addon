@@ -453,11 +453,10 @@ impl Writer {
         game: &dyn GameFiles,
         progress: &mut dyn FnMut(f32, &str),
     ) -> Result<()> {
-        let diff = library.diff(p, game)?;
+        let (diff, records) = library.diff_records(p, game)?;
         self.log_diff(&diff);
         self.log.time("diff");
         progress(0.3, &p.name);
-        let records = library.records(&p.id, &diff.build_key)?;
         let mut merged = merge::ops(&p.id, &diff, &records);
         let origin = Origin {
             addon: ID.into(),
