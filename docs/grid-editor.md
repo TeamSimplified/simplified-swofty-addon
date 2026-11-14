@@ -116,14 +116,18 @@ addon: More Driver Models requires Simplified and so builds after it, and `*` wo
 a cycle the launcher refuses to launch. A season addon from another author needs its id
 pattern added there.
 
-Team logos are written only when a team has a logo set in the editor; with none, the
-build leaves every logo array as the other addons made it. A logo goes into each
+A team's logo is written when it has one set in the editor. A logo goes into each
 archive's own copy of the array, at its team's slice in that copy, with the copy's size
 and every other slice kept. A copy of the game's size gets an `erp.merge-slices`. A copy
 an earlier addon grew, as Classic Seasons does, or appended to (`erp.append-slices`, as
 the F1 2014 season does), gets its picture resource back with the same slice count,
-since a slice merge would fall back to the game's shorter array. The editor never
-writes a whole array of another size, so the slices other addons added stay theirs.
+since a slice merge would fall back to the game's shorter array.
+
+A copy shorter than the array an earlier addon grew is grown to match on every build,
+with or without a logo set: it gets the grown array and its view, with the logos its
+own addon put in it at their teams' slices. A team mod's game-sized copy in
+`vfx_package/common.erp` is such a copy; the game shows it in place of the grown ones,
+and every team past its end would show its last logo, Van Amersfoort Racing's.
 
 Needs Swofty Launcher 1.5.25 or newer, for its colour picker and transparent pictures.
 
