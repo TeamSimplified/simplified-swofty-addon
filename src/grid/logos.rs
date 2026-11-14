@@ -15,8 +15,8 @@
 // so a Classic Seasons team reads past its end and gets the last slice, the 2026
 // Williams logo. Where an addon grew an array, the editor shows every copy joined
 // into one, matching teams by name since the grown lists move teams along. A build
-// writes no copy whole: each archive keeps its own, with only the placed logos
-// changed in it, and none at all without placements.
+// leaves a grown copy as it is, with only the placed logos changed in it, and grows
+// each shorter copy to the joined array, so no team reads past a copy's end.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -303,6 +303,14 @@ pub struct Shelf {
 impl Shelf {
     pub fn shown(&self) -> &State {
         &self.combined
+    }
+
+    /// Whether a copy is shorter than the array an addon grew. The game can show it
+    /// in place of the grown copies, and a team past its end gets its last slice.
+    fn is_short(&self, state: &State) -> bool {
+        self.combined.array.count > self.stock.array.count
+            && state.array.count < self.combined.array.count
+            && state.array.fits(&self.combined.array)
     }
 }
 
@@ -817,8 +825,17 @@ fn write_archive(template: &Path, resources: Vec<Resource>, out: &Path) -> Resul
 /// addons left there, its size and their slices with it: only the placed slices
 /// change, each at its team's place in that copy. A copy of the game's size gets a
 /// merge-slices; a copy an addon grew gets its picture resource back with the same
-/// slice count, so its view still holds. Without placements nothing is written.
-pub fn bake(lib: &Library, placements: &[Placement], root: &Path, rel: &str, cached: bool) -> Baked {
+/// slice count, so its view still holds. With `join`, which only the profile's own
+/// build wants, a copy shorter than the array an addon grew gets the joined array
+/// and its view, placements or not. Without `join` and placements nothing is written.
+pub fn bake(
+    lib: &Library,
+    placements: &[Placement],
+    root: &Path,
+    rel: &str,
+    cached: bool,
+    join: bool,
+) -> Baked {
     let mut baked = Baked {
         ops: Vec::new(),
         lines: Vec::new(),
@@ -827,6 +844,13 @@ pub fn bake(lib: &Library, placements: &[Placement], root: &Path, rel: &str, cac
     let mut by_array: BTreeMap<&str, Vec<&Placement>> = BTreeMap::new();
     for p in placements {
         by_array.entry(&p.array).or_default().push(p);
+    }
+    if join {
+        for (a, shelf) in &lib.shelves {
+            if shelf.targets.values().any(|t| shelf.is_short(t)) {
+                by_array.entry(a.as_str()).or_default();
+            }
+        }
     }
     let mut pictures: HashMap<PathBuf, Option<Image>> = HashMap::new();
     let source = |path: &str| {
@@ -866,13 +890,48 @@ pub fn bake(lib: &Library, placements: &[Placement], root: &Path, rel: &str, cac
                 Err(e) => baked.warnings.push(format!("{array}: {e}")),
             }
         }
-        if slices.is_empty() {
-            continue;
-        }
         let file_stem = array.replace('.', "_");
         let mut merged = false;
+        let mut joined = false;
         let mut archives = 0;
+        let mut grown = 0;
         for (n, (erp, state)) in shelf.targets.iter().enumerate() {
+            if join && shelf.is_short(state) {
+                let path = format!("{rel}/{file_stem}.joined.erp");
+                if !joined {
+                    let mut whole = shelf.combined.array.clone();
+                    let n_slice = whole.slice_len();
+                    for (i, data) in &slices {
+                        if *i < whole.count && data.len() == n_slice {
+                            whole.data[i * n_slice..(i + 1) * n_slice].copy_from_slice(data);
+                        }
+                    }
+                    let mut res = shelf.combined.resource.clone();
+                    if let Err(e) = res.set_fragment(1, &whole.data) {
+                        baked.warnings.push(format!("{array}: {e}"));
+                        continue;
+                    }
+                    let mut resources = vec![res];
+                    resources.extend(shelf.combined.descriptor.clone());
+                    if let Err(e) = write_archive(&stock.template, resources, &root.join(&path)) {
+                        baked.warnings.push(e);
+                        continue;
+                    }
+                    joined = true;
+                }
+                baked.ops.push(json!({ "op": "erp.put-resource", "erp": erp, "resource": name, "source": source(&path) }));
+                if shelf.combined.descriptor.is_some() {
+                    baked.ops.push(json!({ "op": "erp.put-resource", "erp": erp, "resource": descriptor(array), "source": source(&path) }));
+                }
+                grown += 1;
+                if !slices.is_empty() {
+                    archives += 1;
+                }
+                continue;
+            }
+            if slices.is_empty() {
+                continue;
+            }
             if !state.array.fits(&stock.array) {
                 baked.warnings.push(format!(
                     "{array}: the copy in {erp} has another format or slice size, so it keeps its logos"
@@ -929,6 +988,12 @@ pub fn bake(lib: &Library, placements: &[Placement], root: &Path, rel: &str, cac
             baked.lines.push(format!(
                 "{} logo slice(s) in {array}, into {archives} archive(s)",
                 slices.len()
+            ));
+        }
+        if grown > 0 {
+            baked.lines.push(format!(
+                "{array}: {grown} shorter copy(ies) grown to its {} teams",
+                shelf.combined.array.count
             ));
         }
     }
@@ -1008,10 +1073,24 @@ mod tests {
             resources: vec![stock.resource.clone()],
         };
         std::fs::write(&template, erp.to_bytes()).unwrap();
+        let mut modded = state(&[0, 0x51, 2, 3]);
+        modded.owners.insert(1, "team.mod".to_owned());
         let targets = BTreeMap::from([
             (UI.to_owned(), state(&[0, 1, 0xa0, 2, 3, 0xb0])),
-            (VFX.to_owned(), state(&[0, 0x51, 2, 3])),
+            (VFX.to_owned(), modded),
         ]);
+        let built = names(&["s0", "s1", "cs_a", "s2", "s3", "cs_b"]);
+        let game = names(&["s0", "s1", "s2", "s3"]);
+        let combined = combine(
+            &targets,
+            VFX,
+            &stock.array,
+            &Names {
+                stock: &game,
+                built: &built,
+            },
+        )
+        .unwrap();
         let shelf = Shelf {
             stock: Stock {
                 carriers: vec![UI.to_owned()],
@@ -1020,13 +1099,13 @@ mod tests {
                 array: stock.array,
                 template,
             },
-            combined: targets[UI].clone(),
+            combined,
             targets,
             shown: VFX.to_owned(),
         };
         Library {
-            lists: HashMap::from([(ARRAY.to_owned(), names(&["s0", "s1", "cs_a", "s2", "s3", "cs_b"]))]),
-            stock_lists: HashMap::from([(ARRAY.to_owned(), names(&["s0", "s1", "s2", "s3"]))]),
+            lists: HashMap::from([(ARRAY.to_owned(), built)]),
+            stock_lists: HashMap::from([(ARRAY.to_owned(), game)]),
             shelves: HashMap::from([(ARRAY.to_owned(), shelf)]),
             notes: Vec::new(),
         }
@@ -1068,7 +1147,7 @@ mod tests {
         let dir = scratch("none");
         let lib = library(&dir);
         let root = dir.join("out");
-        let baked = bake(&lib, &[], &root, "build", true);
+        let baked = bake(&lib, &[], &root, "build", true, false);
         assert!(baked.ops.is_empty() && baked.lines.is_empty() && baked.warnings.is_empty());
         assert!(!root.exists());
         std::fs::remove_dir_all(&dir).ok();
@@ -1079,7 +1158,7 @@ mod tests {
         let dir = scratch("grown");
         let lib = library(&dir);
         let root = dir.join("out");
-        let baked = bake(&lib, &[placement(&lib, &dir, "s2")], &root, "build", true);
+        let baked = bake(&lib, &[placement(&lib, &dir, "s2")], &root, "build", true, false);
         assert_eq!(baked.ops.len(), 2, "{:?}", baked.ops);
         assert!(baked.ops.iter().all(|o| o["resource"] == resource(ARRAY)));
         let ui = op_for(&baked, UI);
@@ -1103,7 +1182,7 @@ mod tests {
         let dir = scratch("keys");
         let lib = library(&dir);
         let root = dir.join("out");
-        let baked = bake(&lib, &[placement(&lib, &dir, "s2")], &root, "build", true);
+        let baked = bake(&lib, &[placement(&lib, &dir, "s2")], &root, "build", true, false);
         let ours = written(&root, op_for(&baked, UI)).slice(3).to_vec();
         let vfx = op_for(&baked, VFX);
         assert_eq!(vfx["op"], "erp.merge-slices");
@@ -1120,6 +1199,61 @@ mod tests {
                 .iter()
                 .all(|o| o["resource"] != descriptor(ARRAY) && o["resource"] != UIDB)
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_shorter_copy_grows_to_the_grown_array_without_a_custom_logo() {
+        let dir = scratch("short");
+        let lib = library(&dir);
+        let root = dir.join("out");
+        let baked = bake(&lib, &[], &root, "build", true, true);
+        assert_eq!(baked.ops.len(), 1, "{:?}", baked.ops);
+        let vfx = op_for(&baked, VFX);
+        assert_eq!(vfx["op"], "erp.put-resource");
+        let whole = written(&root, vfx);
+        let ui = &lib.shelves[ARRAY].targets[UI].array;
+        assert_eq!((whole.count, whole.slice_len()), (6, SLICE));
+        for i in [0, 2, 3, 4, 5] {
+            assert_eq!(whole.slice(i), ui.slice(i), "slice {i}");
+        }
+        assert_eq!(whole.slice(1), &[0x51; SLICE][..]);
+        assert_eq!(
+            baked.lines,
+            ["broadcast_ui_generic.grid_team_logos: 1 shorter copy(ies) grown to its 6 teams"]
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_custom_logo_lands_on_its_team_in_the_copy_that_grew() {
+        let dir = scratch("short-placed");
+        let lib = library(&dir);
+        let root = dir.join("out");
+        let baked = bake(&lib, &[placement(&lib, &dir, "s2")], &root, "build", true, true);
+        assert_eq!(baked.ops.len(), 2, "{:?}", baked.ops);
+        let ui = written(&root, op_for(&baked, UI));
+        let vfx = op_for(&baked, VFX);
+        assert_eq!(vfx["op"], "erp.put-resource");
+        let whole = written(&root, vfx);
+        assert_eq!((ui.count, whole.count), (6, 6));
+        assert_eq!(whole.slice(3), ui.slice(3));
+        assert_ne!(whole.slice(3), lib.shelves[ARRAY].targets[UI].array.slice(3));
+        assert_eq!(whole.slice(1), &[0x51; SLICE][..]);
+        assert_eq!(whole.slice(5), ui.slice(5));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn copies_of_the_game_size_alone_are_left_as_they_are() {
+        let dir = scratch("level");
+        let mut lib = library(&dir);
+        let shelf = lib.shelves.get_mut(ARRAY).unwrap();
+        shelf.targets.remove(UI);
+        shelf.combined = shelf.targets[VFX].clone();
+        let root = dir.join("out");
+        let baked = bake(&lib, &[], &root, "build", true, true);
+        assert!(baked.ops.is_empty() && baked.lines.is_empty() && baked.warnings.is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 }
