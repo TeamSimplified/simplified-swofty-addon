@@ -1,8 +1,8 @@
 # Simplified for Swofty
 
-**Simplified for Swofty** is Team Simplified's addon for [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). Its **Mod Importer** turns any F1 25 mod into a standalone Swofty addon, and its **Grid Editor** edits the grids. Both show under **Simplified for Swofty** in the launcher's sidebar, below an **About** page: **Mod Importer**, then **Grid Editor**. The importer is also `swofty mods` on the command line.
+**Simplified for Swofty** is Team Simplified's addon for [Swofty Launcher for F1 25](https://github.com/Swofty-Developments/SwoftyLauncher). Its **Simplified Importer** turns any F1 25 mod into a standalone Swofty addon, and its **Grid Editor** edits the grids. Both show under **Simplified for Swofty** in the launcher's sidebar: **Simplified Importer**, then **Grid Editor**. The importer is also `swofty mods` on the command line.
 
-- Works with any mod: drop its zip, 7z, rar or folder on the launcher, or choose it on the Mod Importer page. The game folders can sit at the top or up to three folders down, or in a folder named like `F1 25`. Mods made with Simplified Studio (`.serps`) and community track zips import too.
+- Works with any mod: drop its zip, 7z, rar or folder on the launcher, or choose it on the Simplified Importer page. The game folders can sit at the top or up to three folders down, or in a folder named like `F1 25`. Mods made with Simplified Studio (`.serps`) and community track zips import too.
 - Each mod becomes a Swofty data addon on the **Addons** page, with its own switch, place in the load order and conflicts. Lower in the list wins.
 - The addon holds what the mod changes from the game's own files: database records, text, archive resources, files and tracks.
 - After an import the addon is on in the active profile, and the launcher switches to **Addons** with the addon highlighted.
@@ -15,10 +15,11 @@
 
 How it works is in [docs/design.md](docs/design.md).
 
-## The Mod Importer page
+## The Simplified Importer page
 
 - **Choose a mod…** picks zips, 7z and rar archives and folders, several at once. A drop anywhere on the window does the same.
 - After an import, the launcher shows the new addon on **Addons**, or a notice with what went wrong. A mod that can't be made into an addon isn't kept.
+- At the bottom, Team Simplified's logo, the addon's version and a short about Team Simplified, with links to their GitHub and the Simplified Suite. Until 0.14.0 these were on an **About** page of their own.
 
 ## The Grid Editor page
 
@@ -30,10 +31,6 @@ How it works is in [docs/design.md](docs/design.md).
 - With Progressive Career on, the Classic Seasons, F1 2025 and F1 2026 grids are its seasons too: their team names, logos and drivers reach its careers. With More Driver Models on, drivers another addon gives older heads, such as Classic Seasons', take More Driver Models' heads.
 
 More in [docs/grid-editor.md](docs/grid-editor.md).
-
-## The About page
-
-- Team Simplified's logo, the addon's version and a short about Team Simplified and Simplified for Swofty, with links to their GitHub and the Simplified Suite.
 
 ## Mods imported before 0.7.0
 
@@ -54,7 +51,7 @@ Its id is `teamsimplified.mods`, the same id the launcher's built-in copy used, 
 
 The helper speaks the launcher's helper protocol through `swofty_addon::helper::run_helper`. Version 0.7.0 needs Swofty Launcher 1.3.0 or later: it installs, turns on and orders addons with the addon host calls (`install_addon`, `set_addon_enabled`, `addons`, `move_addon`) and asks the launcher to show an addon with the `show_addon` effect. The helper decides which dropped files and folders it imports, checking them by their contents.
 
-`sections/mods.svg` gives the Mod Importer page its sidebar icon, Team Simplified's mark, and `sections/grids.svg` gives the Grid Editor page its own.
+`sections/mods.svg` gives the Simplified Importer page its sidebar icon, Team Simplified's mark, and `sections/grids.svg` gives the Grid Editor page its own.
 
 The one-time move of tracks from the launcher's old `maps/` folder only runs in the built-in copy.
 

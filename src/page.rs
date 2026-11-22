@@ -1,5 +1,5 @@
-// The Simplified Importer page: the import card. Each imported mod becomes an addon,
-// listed on Addons.
+// The Simplified Importer page: the import card, then the about section. Each imported mod
+// becomes an addon, listed on Addons.
 use swofty_addon::launcher::Cx;
 use swofty_addon::view::{
     Block, Body, Button, ButtonKind, ButtonSize, DropZone, Effect, Event, Icon, Notice, Shown, Style, Tone,
@@ -7,7 +7,7 @@ use swofty_addon::view::{
 };
 
 use crate::importer::{self, Convert, Done, Record};
-use crate::{ENABLE, IMPORT, NoProgress, Result, err, plural};
+use crate::{ENABLE, IMPORT, NoProgress, Result, about, err, plural};
 
 pub const CONVERT: &str = "convert-library";
 pub const SHOW_ADDON: &str = "show-addon:";
@@ -93,6 +93,7 @@ pub fn view(cx: &Cx) -> Result<View> {
     if !vanilla {
         blocks.push(choose());
     }
+    blocks.push(about::block(cx));
     blocks.push(Block::Text {
         text: FOOTER.into(),
         tone: Tone::Muted,
@@ -140,7 +141,31 @@ pub fn event(cx: &Cx, event: Event, conv: &dyn Convert) -> Result<Option<Effect>
         }
         Event::Click { id } if id == ENABLE => Effect::SetAddonEnabled(true),
         Event::Click { id } if id.starts_with(SHOW_ADDON) => Effect::ShowAddon(id[SHOW_ADDON.len()..].into()),
+        Event::Click { id } if id.starts_with(about::LINK) => about::open(&id)?,
         _ => return Ok(None),
     };
     Ok(Some(effect))
+}
+
+#[cfg(test)]
+mod tests {
+    use swofty_addon::launcher::Addon;
+
+    use crate::{SECTION, Simplified, grid};
+
+    #[test]
+    fn the_sidebar_lists_the_simplified_importer_then_the_grid_editor() {
+        let pages: Vec<(String, String)> = Simplified::new()
+            .sections()
+            .into_iter()
+            .map(|s| (s.id, s.title))
+            .collect();
+        assert_eq!(
+            pages,
+            [
+                (SECTION.to_owned(), "Simplified Importer".to_owned()),
+                (grid::SECTION.to_owned(), "Grid Editor".to_owned())
+            ]
+        );
+    }
 }

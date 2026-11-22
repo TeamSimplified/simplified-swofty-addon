@@ -34,13 +34,8 @@
     },
     "sections": [
       {
-        "id": "about",
-        "title": "About",
-        "icon": "info"
-      },
-      {
         "id": "mods",
-        "title": "Mod Importer",
+        "title": "Simplified Importer",
         "icon": "package"
       },
       {
@@ -60,7 +55,7 @@
     "commands": [
       {
         "name": "mods",
-        "about": "Mods in the Mod Importer's library, the addons made from them, and the order of those not converted",
+        "about": "Mods in the Simplified Importer's library, the addons made from them, and the order of those not converted",
         "subcommands": [
           {
             "name": "list",

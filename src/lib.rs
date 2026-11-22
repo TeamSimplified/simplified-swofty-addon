@@ -298,7 +298,7 @@ impl Addon for Simplified {
         Some(include_bytes!("../icon.svg"))
     }
 
-    // The Simplified Importer and About pages and the mods command are declared once, in swofty.json,
+    // The Simplified Importer and Grid Editor pages and the mods command are declared once, in swofty.json,
     // which the launcher also reads when it runs this addon as a helper program.
     fn sections(&self) -> Vec<SectionSpec> {
         self.launcher().sections.clone()
@@ -307,7 +307,6 @@ impl Addon for Simplified {
     fn view(&self, cx: &Cx, section: &str) -> Result<View> {
         match section {
             SECTION => page::view(cx),
-            about::SECTION => about::view(cx),
             grid::SECTION => self.grid.view(cx),
             _ => Err(Error::NoSection(section.into())),
         }
@@ -593,14 +592,13 @@ impl Simplified {
         event: Event,
         conv: &dyn importer::Convert,
     ) -> Result<Effect> {
-        // The launcher sends startup to the first section, About; the importer runs it.
+        // The launcher sends startup to the first section; the importer runs it.
         let section = match event {
             Event::Startup {} => SECTION,
             _ => section,
         };
         match section {
             SECTION => Ok(page::event(cx, event, conv)?.unwrap_or(Effect::None)),
-            about::SECTION => about::event(event),
             grid::SECTION => self.grid.event(cx, event),
             _ => Err(Error::NoSection(section.into())),
         }
