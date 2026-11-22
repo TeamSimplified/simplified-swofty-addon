@@ -648,7 +648,7 @@ pub fn startup(
     }
     if m.left > 0 {
         parts.push(format!(
-            "{} more convert at the next start, or with Convert now on the Mod Importer",
+            "{} more convert at the next start, or with Convert now on the Simplified Importer",
             m.left
         ));
     }
@@ -772,7 +772,7 @@ fn migrated(
     }
     if !m.failed.is_empty() {
         m.lines.push(format!(
-            "{} still {} through the Mod Importer's build step",
+            "{} still {} through the Simplified Importer's build step",
             crate::plural(m.failed.len(), "mod", "mods"),
             if m.failed.len() == 1 { "loads" } else { "load" }
         ));
@@ -1000,7 +1000,7 @@ mod tests {
     use swofty_addon::view::{Block, Body, Effect, Event};
 
     use super::*;
-    use crate::{ID, IMPORT, NoProgress, SECTION, Simplified, Slot, page};
+    use crate::{ID, IMPORT, NoProgress, SECTION, Simplified, Slot, about, page};
 
     #[derive(Default)]
     struct Memory(Mutex<Option<Value>>);
@@ -1677,7 +1677,7 @@ mod tests {
         assert_eq!(
             start().as_deref(),
             Some(
-                "Converted 1 mod into an addon; 1 more convert at the next start, or with Convert now on the Mod Importer"
+                "Converted 1 mod into an addon; 1 more convert at the next start, or with Convert now on the Simplified Importer"
             )
         );
         assert_eq!(start().as_deref(), Some("Converted 1 mod into an addon"));
@@ -1979,7 +1979,7 @@ mod tests {
         );
 
         let view = with(&host, "one", |cx| addon.view(cx, SECTION)).unwrap();
-        assert_eq!(cards(&view), ["Import a mod"]);
+        assert_eq!(cards(&view), ["Import a mod", about::TITLE]);
         assert!(view.notices.is_empty(), "{:?}", view.notices);
         let text = all_text(&view);
         assert_eq!(view.footer, None);
@@ -2010,6 +2010,17 @@ mod tests {
         })
         .unwrap();
         assert_eq!(effect, Effect::ShowAddon("imported.livery".into()));
+
+        let effect = with(&host, "one", |cx| {
+            addon.event_with(cx, SECTION, click(format!("{}suite", about::LINK)), &conv)
+        })
+        .unwrap();
+        assert_eq!(
+            effect,
+            Effect::Open(PathBuf::from(
+                "https://github.com/TeamSimplified/simplified-suite"
+            ))
+        );
         std::fs::remove_dir_all(&host.root).ok();
     }
 
@@ -2027,7 +2038,7 @@ mod tests {
         })
         .unwrap();
         let view = with(&host, "vanilla", |cx| addon.view(cx, SECTION)).unwrap();
-        assert!(cards(&view).is_empty());
+        assert_eq!(cards(&view), [about::TITLE]);
         assert!(
             view.notices[0]
                 .text

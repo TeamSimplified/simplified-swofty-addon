@@ -1,23 +1,21 @@
-// The About page: Team Simplified's header and the panel about Team Simplified, with
-// links to their projects.
+// The about section at the bottom of the Simplified Importer page: Team Simplified's mark,
+// the addon's version, a short about Team Simplified and links to their projects.
 use std::path::PathBuf;
 
 use swofty_addon::launcher::Cx;
-use swofty_addon::view::{Art, Block, Body, Button, Card, Effect, Event, Fact, Hero, Tone, View};
+use swofty_addon::view::{Art, Block, Button, Effect, Fact, Hero};
 
-use crate::page::FOOTER;
 use crate::{Result, err};
 
-pub const SECTION: &str = "about";
 pub const LINK: &str = "link:";
-// The sidebar's mark (sections/about.svg), drawn as the sidebar draws it.
+pub const TITLE: &str = "Simplified for Swofty";
+// The sidebar's mark (sections/mods.svg), drawn as the sidebar draws it.
 const ART: &[u8] = include_bytes!("../art/simplified-mark.png");
 const ART_FILE: &str = "simplified-mark.png";
-const ABOUT: &str = "Team Simplified make modding tools for F1 25: Simplified Studio, the SERPs Launcher, a track installer, swappers, editors and a database merger, open source in the Simplified Suite.";
-const IMPORTER: &str = "Simplified for Swofty is their part of Swofty Launcher: its Simplified Importer turns any F1 25 mod into a Swofty addon.";
+const ABOUT: &str = "By Team Simplified, who make modding tools for F1 25: Simplified Studio, the SERPs Launcher, a track installer, swappers, editors and a database merger, open source in the Simplified Suite.";
 
-// Links shown in the Team Simplified panel. None marks a placeholder for a link
-// Team Simplified has not confirmed yet; it is not shown.
+// Links shown in the about section. None marks a placeholder for a link Team Simplified
+// has not confirmed yet; it is not shown.
 const LINKS: [(&str, &str, Option<&str>); 4] = [
     (
         "github",
@@ -51,74 +49,36 @@ fn facts() -> Vec<Fact> {
     vec![Fact::new("Version", env!("CARGO_PKG_VERSION"))]
 }
 
-fn hero(cx: &Cx) -> Block {
+fn links() -> Vec<Button> {
+    LINKS
+        .iter()
+        .filter(|(_, _, url)| url.is_some())
+        .map(|(id, label, _)| Button::new(format!("{LINK}{id}"), *label))
+        .collect()
+}
+
+fn hero(art: Art) -> Block {
     Block::Hero(Hero {
-        title: "Simplified for Swofty".into(),
-        subtitle: Some("By Team Simplified.".into()),
-        art: art(cx),
+        title: TITLE.into(),
+        subtitle: Some(ABOUT.into()),
+        art,
         pills: Vec::new(),
         facts: facts(),
-        buttons: Vec::new(),
+        buttons: links(),
     })
 }
 
-fn team() -> Block {
-    let mut blocks = vec![
-        Block::Text {
-            text: ABOUT.into(),
-            tone: Tone::Neutral,
-        },
-        Block::Text {
-            text: IMPORTER.into(),
-            tone: Tone::Neutral,
-        },
-        Block::Label("LINKS".into()),
-    ];
-    blocks.push(Block::Buttons(
-        LINKS
-            .iter()
-            .filter(|(_, _, url)| url.is_some())
-            .map(|(id, label, _)| Button::new(format!("{LINK}{id}"), *label))
-            .collect(),
-    ));
-    Block::Card(Card {
-        title: Some("Team Simplified".into()),
-        subtitle: Some("Modding tools for F1 25".into()),
-        blocks,
-        ..Card::default()
-    })
+pub fn block(cx: &Cx) -> Block {
+    hero(art(cx))
 }
 
-pub fn view(cx: &Cx) -> Result<View> {
-    Ok(View {
-        subtitle: "Team Simplified's addon for Swofty Launcher.".into(),
-        actions: Vec::new(),
-        notices: Vec::new(),
-        body: Body::Blocks(vec![
-            hero(cx),
-            team(),
-            Block::Text {
-                text: FOOTER.into(),
-                tone: Tone::Muted,
-            },
-        ]),
-        footer: None,
-        tick: false,
-    })
-}
-
-pub fn event(event: Event) -> Result<Effect> {
-    match event {
-        Event::Click { id } if id.starts_with(LINK) => {
-            let url = LINKS
-                .iter()
-                .find(|(l, _, _)| *l == &id[LINK.len()..])
-                .and_then(|(_, _, url)| *url)
-                .ok_or_else(|| err(format!("no link {id}")))?;
-            Ok(Effect::Open(PathBuf::from(url)))
-        }
-        _ => Ok(Effect::None),
-    }
+pub fn open(id: &str) -> Result<Effect> {
+    let url = id
+        .strip_prefix(LINK)
+        .and_then(|link| LINKS.iter().find(|(l, _, _)| *l == link))
+        .and_then(|(_, _, url)| *url)
+        .ok_or_else(|| err(format!("no link {id}")))?;
+    Ok(Effect::Open(PathBuf::from(url)))
 }
 
 #[cfg(test)]
@@ -127,27 +87,27 @@ mod tests {
 
     #[test]
     fn a_link_opens_its_page_and_a_placeholder_is_not_shown() {
-        let open = |id: &str| {
-            event(Event::Click {
-                id: format!("{LINK}{id}"),
-            })
-        };
+        let open = |id: &str| open(&format!("{LINK}{id}"));
         assert_eq!(
             open("github").unwrap(),
             Effect::Open(PathBuf::from("https://github.com/TeamSimplified"))
         );
+        assert_eq!(
+            open("suite").unwrap(),
+            Effect::Open(PathBuf::from(
+                "https://github.com/TeamSimplified/simplified-suite"
+            ))
+        );
         assert!(open("discord").is_err());
-        let Block::Card(card) = team() else {
-            panic!("the team panel is a card")
+        let Block::Hero(hero) = hero(Art::Monogram("TS".into())) else {
+            panic!("the about section is a hero")
         };
-        let Some(Block::Buttons(links)) = card.blocks.last() else {
-            panic!("links last")
-        };
-        assert_eq!(links.len(), 2);
+        let labels: Vec<&str> = hero.buttons.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(labels, ["Team Simplified on GitHub", "Simplified Suite"]);
     }
 
     #[test]
-    fn the_header_shows_the_addon_version() {
+    fn the_about_section_shows_the_addon_version() {
         let manifest: serde_json::Value = serde_json::from_str(crate::MANIFEST).unwrap();
         assert_eq!(
             facts(),

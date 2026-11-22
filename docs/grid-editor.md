@@ -1,7 +1,7 @@
 # Grid Editor
 
-The **Grid Editor** page of Simplified for Swofty, by Team Simplified, below the About and
-Simplified Importer pages. It has the grids down the left: DEFAULT (Formula 1 and Formula 2), OTHER (the grids
+The **Grid Editor** page of Simplified for Swofty, by Team Simplified, below the
+Simplified Importer page. It has the grids down the left: DEFAULT (Formula 1 and Formula 2), OTHER (the grids
 addons add) and MISC (Presets, Driver Profiles and My Team Emblem). Each grid's teams are
 in a table, where clicking a team opens a panel with its status, **Save preset**,
 **Export addon** and **Import preset**, its team selection logo with **Replace
