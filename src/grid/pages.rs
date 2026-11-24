@@ -1328,7 +1328,7 @@ fn season_look<'a>(d: &'a Driver, seat: &crate::grid::grids::Seat) -> Option<&'a
 fn driver_page(app: &App, l: &Loaded, label: &str, from: Option<&str>) -> Vec<Value> {
     let cat = &l.catalog;
     let mut blocks = Vec::new();
-    if let Some(t) = from.and_then(|f| cat.team(f)) {
+    if let Some(t) = from.and_then(|f| team(cat, &app.grid, f).ok()) {
         blocks.push(json!({ "buttons": [ { "id": "back-team", "label": format!("← Back to {}", name_of(&app.edits, t, "full")), "style": "primary" } ] }));
     }
     blocks.push(json!({ "form": { "id": "driver-pick", "live": true, "fields": [
@@ -1758,8 +1758,9 @@ pub fn view(app: &mut App, host: &mut Host, section: &str) -> Value {
 
 // ── Events ──────────────────────────────────────────────────────────────────────
 
-fn team<'a>(cat: &'a Catalog, label: &str) -> Result<&'a Team, String> {
-    cat.team(label)
+fn team<'a>(cat: &'a Catalog, open: &str, label: &str) -> Result<&'a Team, String> {
+    grid_of(cat, open, label)
+        .and_then(|g| g.teams.iter().find(|t| t.label == label))
         .ok_or_else(|| format!("{label} isn't on any grid of this profile"))
 }
 
@@ -1966,7 +1967,7 @@ fn keep_picture(path: &str, dir: &Path, prefix: &str) -> Result<String, String> 
 
 fn import_logo(app: &mut App, team_label: &str, kind: &str, path: &str) -> Result<(), String> {
     let l = app.loaded.as_ref().ok_or("the grids aren't read yet")?;
-    team(&l.catalog, team_label)?;
+    team(&l.catalog, &app.grid, team_label)?;
     let name = keep_picture(path, &logos_dir(&app.data_dir), team_label)?;
     let e = app.edits.team_mut(team_label);
     if kind == "all" {
@@ -2138,7 +2139,7 @@ pub fn event(app: &mut App, host: &mut Host, event: &Value) -> Result<Value, Str
                 return Ok(json!("reload"));
             }
             "reset" => {
-                let t = team(&l.catalog, arg)?.clone();
+                let t = team(&l.catalog, &app.grid, arg)?.clone();
                 let g = grid_of(&l.catalog, &app.grid, &t.label).cloned();
                 let before = g.as_ref().map(|g| drivers_now(&app.edits, g)).unwrap_or_default();
                 app.edits.reset_team(&t);
@@ -2152,7 +2153,7 @@ pub fn event(app: &mut App, host: &mut Host, event: &Value) -> Result<Value, Str
             }
             "restore" => {
                 let (label, part) = arg.split_once(':').ok_or("restore what?")?;
-                let t = team(&l.catalog, label)?.clone();
+                let t = team(&l.catalog, &app.grid, label)?.clone();
                 let g = grid_of(&l.catalog, &app.grid, &t.label).cloned();
                 let before = g.as_ref().map(|g| drivers_now(&app.edits, g)).unwrap_or_default();
                 restore(&mut app.edits, &t, part);
@@ -2194,7 +2195,7 @@ pub fn event(app: &mut App, host: &mut Host, event: &Value) -> Result<Value, Str
                 return Ok(notice(format!("{} is back to default", grid.title)));
             }
             "save-team" => {
-                let t = team(&l.catalog, arg)?;
+                let t = team(&l.catalog, &app.grid, arg)?;
                 let name = name_of(&app.edits, t, "full");
                 let preset = Preset {
                     schema_version: 1,
@@ -2332,7 +2333,7 @@ fn submit(app: &mut App, host: &mut Host, s: &Value) -> Result<Value, String> {
     match kind {
         "teams" => {
             let label = s["row"].as_str().unwrap_or_default();
-            let t = team(cat, label)?.clone();
+            let t = team(cat, arg, label)?.clone();
             for c in &changed {
                 match c.as_str() {
                     "team" => set_name(&mut app.edits, &t, "full", &str_of(c)),
@@ -2349,13 +2350,13 @@ fn submit(app: &mut App, host: &mut Host, s: &Value) -> Result<Value, String> {
             }
         }
         "names" => {
-            let t = team(cat, arg)?.clone();
+            let t = team(cat, &app.grid, arg)?.clone();
             for c in &changed {
                 set_name(&mut app.edits, &t, c, &str_of(c));
             }
         }
         "suppliers" => {
-            let t = team(cat, arg)?.clone();
+            let t = team(cat, &app.grid, arg)?.clone();
             let w = &app.loaded.as_ref().ok_or("the grids aren't read")?.world;
             let g = grid_of(cat, &app.grid, arg).ok_or("no grid")?;
             // A choice that's what the team has without one leaves no edit.
@@ -2377,7 +2378,7 @@ fn submit(app: &mut App, host: &mut Host, s: &Value) -> Result<Value, String> {
         }
         "seats" => {
             let label = arg.split(':').next().unwrap_or(arg);
-            let t = team(cat, label)?.clone();
+            let t = team(cat, &app.grid, label)?.clone();
             let g = grid_of(cat, &app.grid, label).ok_or("no grid")?;
             for c in &changed {
                 let Some((what, i)) = c.split_once(':') else {
@@ -2400,7 +2401,7 @@ fn submit(app: &mut App, host: &mut Host, s: &Value) -> Result<Value, String> {
             }
         }
         "colours" => {
-            let t = team(cat, arg)?.clone();
+            let t = team(cat, &app.grid, arg)?.clone();
             match s["row"].as_str() {
                 // The team page: one row, a column per colour.
                 Some("now") => {
@@ -2418,7 +2419,7 @@ fn submit(app: &mut App, host: &mut Host, s: &Value) -> Result<Value, String> {
             }
         }
         "seat-cells" => {
-            let t = team(cat, arg)?.clone();
+            let t = team(cat, &app.grid, arg)?.clone();
             let g = grid_of(cat, &app.grid, arg).ok_or("no grid")?;
             let i: usize = s["row"]
                 .as_str()
@@ -2430,7 +2431,7 @@ fn submit(app: &mut App, host: &mut Host, s: &Value) -> Result<Value, String> {
             set_seat(&mut app.edits, cat, g, &t, i, None, n);
         }
         "boss" => {
-            let t = team(cat, arg)?.clone();
+            let t = team(cat, &app.grid, arg)?.clone();
             let pick = str_of("boss");
             let e = app.edits.teams.entry(t.label.clone()).or_default();
             e.boss = (!pick.is_empty() && pick != t.boss).then_some(pick);
@@ -2463,7 +2464,7 @@ fn submit(app: &mut App, host: &mut Host, s: &Value) -> Result<Value, String> {
         }
         "logo-size" => {
             let (label, kind) = arg.split_once(':').ok_or("which logo?")?;
-            team(cat, label)?;
+            team(cat, &app.grid, label)?;
             if let Some(v) = values["size"].as_f64() {
                 let v = (v.round() as u32).clamp(20, 100);
                 let e = app.edits.team_mut(label);
@@ -2559,7 +2560,7 @@ fn submit(app: &mut App, host: &mut Host, s: &Value) -> Result<Value, String> {
             }
         }
         "apply-team" => {
-            let t = team(cat, arg)?.clone();
+            let t = team(cat, &app.grid, arg)?.clone();
             let slug = str_of("preset");
             if slug.is_empty() || slug == "null" {
                 return Err("pick a team preset".into());
@@ -2576,7 +2577,7 @@ fn submit(app: &mut App, host: &mut Host, s: &Value) -> Result<Value, String> {
             return Ok(notice(format!("{} put on {}", preset.name, t.name("full"))));
         }
         "save-team" => {
-            let t = team(cat, arg)?;
+            let t = team(cat, &app.grid, arg)?;
             let name = str_of("name").trim().to_owned();
             let name = if name.is_empty() {
                 name_of(&app.edits, t, "full")
@@ -2835,4 +2836,90 @@ pub fn summary(app: &App) -> Value {
         return Value::Null;
     }
     json!({ "label": "GRID EDITOR", "items": items })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grid::grids::Seat;
+    use std::collections::BTreeMap;
+
+    fn seat(key: &str, driver: &str) -> Seat {
+        Seat {
+            key: key.into(),
+            select: String::new(),
+            row: String::new(),
+            position: 0,
+            reference: String::new(),
+            override_driver: String::new(),
+            driver: driver.into(),
+            car_number: -1,
+            look: String::new(),
+            vehicle: String::new(),
+        }
+    }
+
+    fn grid(label: &str, seats: &[(&str, &str)]) -> Grid {
+        Grid {
+            label: label.into(),
+            title: label.into(),
+            origin: None,
+            ui_path: String::new(),
+            teams: vec![Team {
+                label: "mercedes_26".into(),
+                row: String::new(),
+                names: Vec::new(),
+                timing: String::new(),
+                colours: Vec::new(),
+                seats: seats.iter().map(|(k, d)| seat(k, d)).collect(),
+                boss: String::new(),
+                optional: None,
+                registry: None,
+                cars: Vec::new(),
+            }],
+            champion: None,
+            package: None,
+        }
+    }
+
+    fn catalog() -> Catalog {
+        Catalog {
+            grids: vec![
+                grid("f1_2026", &[("a/m26_1", "russell"), ("a/m26_2", "antonelli")]),
+                grid("f1_2021", &[("b/m21_1", "hamilton"), ("b/m21_2", "bottas")]),
+            ],
+            drivers: BTreeMap::new(),
+            nations: Vec::new(),
+            helmets: Vec::new(),
+            principals: Vec::new(),
+            engines: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_shared_team_label_resolves_on_the_open_grid() {
+        let cat = catalog();
+        assert_eq!(
+            team(&cat, "f1_2021", "mercedes_26").unwrap().seats[1].key,
+            "b/m21_2"
+        );
+        assert_eq!(
+            team(&cat, "f1_2026", "mercedes_26").unwrap().seats[1].key,
+            "a/m26_2"
+        );
+        assert_eq!(team(&cat, "none", "mercedes_26").unwrap().seats[1].key, "a/m26_2");
+        assert!(team(&cat, "f1_2021", "nobody").is_err());
+    }
+
+    #[test]
+    fn a_driver_picked_on_the_second_grid_lands_on_its_seat() {
+        let cat = catalog();
+        let mut edits = Edits::default();
+        let t = team(&cat, "f1_2021", "mercedes_26").unwrap().clone();
+        let g = grid_of(&cat, "f1_2021", "mercedes_26").unwrap();
+        assert_eq!(g.label, "f1_2021");
+        set_seat(&mut edits, &cat, g, &t, 1, Some("norris"), None);
+        assert_eq!(edits.seats["b/m21_2"].driver.as_deref(), Some("norris"));
+        assert!(!edits.seats.contains_key("a/m26_2"));
+    }
 }
