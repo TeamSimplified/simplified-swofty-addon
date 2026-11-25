@@ -1488,8 +1488,9 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
                     missing.add(SKIP_NO_ROW, label);
                 }
             }
+            let wearing = r.drivers.keys().filter(|l| heads.contains(*l)).count();
             read_log.push(format!(
-                "roster drivers in the catalog: {present} of {}; not: {}",
+                "roster drivers in the catalog: {present} of {}, {wearing} with a head of their own label in profile_heads or the game folder; not in the catalog: {}",
                 r.drivers.len(),
                 missing.line()
             ));
@@ -1745,5 +1746,67 @@ mod tests {
             line.contains("switches.json unreadable: not valid JSON"),
             "{line}"
         );
+    }
+
+    fn built(rows: &[(&str, &str)], count: usize) -> BuildEdits {
+        let mut edits = BuildEdits::new();
+        edits.insert(
+            fnv1a64("entrants.drivers._driver_instancecount_"),
+            (0, count.to_string().into_bytes()),
+        );
+        for (i, (label, head)) in rows.iter().enumerate() {
+            let row = count - rows.len() + i;
+            for (field, value) in [("_metadata_", label), ("head", head)] {
+                edits.insert(
+                    fnv1a64(format!("entrants.drivers.driver_{row}.{field}")),
+                    (2, value.as_bytes().to_vec()),
+                );
+            }
+        }
+        edits
+    }
+
+    fn two_driver_db() -> Db {
+        let mut db = Db::new(Gvdb {
+            records: vec![
+                swofty_formats::gvdb::Record::new("entrants.drivers._driver_instancecount_", 0, "2"),
+                swofty_formats::gvdb::Record::new("entrants.drivers.driver_0._metadata_", 2, "stock_a"),
+                swofty_formats::gvdb::Record::new("entrants.drivers.driver_1._metadata_", 2, "stock_b"),
+            ],
+        });
+        db.reindex();
+        db
+    }
+
+    #[test]
+    fn the_rows_a_build_adds_come_in_when_their_heads_are_in_the_profile() {
+        let mut db = two_driver_db();
+        let edits = built(
+            &[
+                ("esteban_gutierrez", "Esteban_Gutierrez"),
+                ("felipe_nasr", "felipe_nasr"),
+                ("stock_a", "stock_a"),
+                ("no_head_yet", "missing"),
+            ],
+            6,
+        );
+        let heads = HashSet::from(["esteban_gutierrez".to_owned(), "stock_a".to_owned()]);
+        let grown = grow_from_build(&mut db, &edits, &heads, &mut Vec::new());
+        db.reindex();
+        assert_eq!(db.count("entrants.drivers", "driver"), 3);
+        assert_eq!(grown.drivers_built, 6);
+        assert_eq!(grown.drivers_listed, 4);
+        assert_eq!(
+            grown.drivers_added,
+            HashSet::from(["esteban_gutierrez".to_owned()])
+        );
+        assert!(
+            db.find("entrants.drivers", "driver", "esteban_gutierrez")
+                .is_some()
+        );
+        assert!(grown.drivers_skipped.has(SKIP_HEAD, "felipe_nasr"));
+        assert!(grown.drivers_skipped.has(SKIP_HEAD, "no_head_yet"));
+        assert!(grown.drivers_skipped.has(SKIP_PRESENT, "stock_a"));
+        assert_eq!(grown.drivers_skipped.total(), 3);
     }
 }
