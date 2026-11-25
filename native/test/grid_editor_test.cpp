@@ -97,6 +97,8 @@ struct Run {
         api = core.api();
         api.storage = &kStorage;
         swofty::api = &api;
+        for (const char *driver : {"stoffel_vandoorne", "sergio_perez", "pascal_wehrlein"})
+            core.stock(drivers::identities, driver, drivers::Identity{});
         core.run_register();
     }
 };
@@ -105,10 +107,11 @@ static void the_2016_mclaren()
 {
     Run run("test/storage/");
     auto seasons = run.core.layers("career.season");
-    check(seasons.size() == 1, "one season layer: 2017 has no seats, so it gets none");
-    if (seasons.size() != 1)
+    check(seasons.size() == 2, "one layer a Progressive id for 2016: 2017 has no seats, so it gets none");
+    if (seasons.size() != 2)
         return;
-    check(seasons[0]->id == "swofty.progressive/2016", "on Progressive's 2016 season");
+    check(seasons[0]->id == "swofty.swofty-seasons-progressive/2016", "on Progressive's 2016 season");
+    check(seasons[1]->id == "swofty.progressive/2016", "and on the older Progressive's");
     check(seasons[0]->scope == SWOFTY_SCOPE_PROFILE, "for the profile that played");
 
     auto v = run.core.apply(*seasons[0], json::parse(kSeason2016));
@@ -120,7 +123,10 @@ static void the_2016_mclaren()
           "Vandoorne takes Button's McLaren seat");
     check(mclaren["seats"][0].as_string() == "game/fernando_alonso", "Alonso keeps his");
     check(mclaren["team"].as_string() == "constructor/mclaren", "the team stays Progressive's");
-    check((*v)["teams"][0]["seats"][0].as_string() == "game/daniel_ricciardo", "Red Bull is untouched");
+    check((*v)["teams"][0]["seats"][1].as_string() == "game/sergio_perez",
+          "every slot's seats apply: Perez takes Red Bull's second seat as well");
+    check((*v)["teams"][0]["seats"][0].as_string() == "game/daniel_ricciardo",
+          "a seat whose driver doesn't resolve is skipped, and takes only its seat");
     check((*v)["progressive"]["ratings_source"].as_string() == "official", "Progressive's own data rides through");
 
     auto other = run.core.apply(*seasons[0], json::parse(R"({ "year": 2016, "teams": [ { "slot": 3,
@@ -128,12 +134,12 @@ static void the_2016_mclaren()
     check(other && (*other)["teams"].size() == 1, "a slot the season doesn't have is skipped, not added");
 }
 
-static void the_2022_williams()
+static void every_seat_on_a_package_applies()
 {
     Run run("test/storage/");
     auto layers = run.core.layers("content.package");
-    check(layers.size() == 2, "a layer a seat on the package");
-    if (layers.size() != 2)
+    check(layers.size() == 1, "one layer on the package, whatever the seats: the core keeps one a record");
+    if (layers.size() != 1)
         return;
     check(layers[0]->id == "swofty.classic-seasons-2022/f1_2022", "on Classic Seasons' 2022 grid");
     check(layers[0]->scope == SWOFTY_SCOPE_PROFILE, "for the profile that played");
@@ -145,7 +151,7 @@ static void the_2022_williams()
             v = *next;
     }
     const json::Value &williams = v["teams"][1];
-    check(williams["drivers"][1]["driver"].as_string() == "swofty.classic-seasons/pascal_wehrlein",
+    check(williams["drivers"][1]["driver"].as_string() == "game/pascal_wehrlein",
           "Wehrlein takes Latifi's Williams seat");
     check(williams["drivers"][1]["number"].as_int() == 94, "with his number");
     check(williams["drivers"][1]["look"].is_null(), "and no look reference");
@@ -157,6 +163,9 @@ static void the_2022_williams()
     check(v["teams"][0]["drivers"][0]["driver"].as_string() == "game/charles_leclerc" &&
               v["teams"][0]["drivers"][0]["number"].as_int() == 7,
           "a number alone changes only the number");
+    check(v["teams"][0]["drivers"][1]["driver"].as_string() == "game/carlos_sainz-jr" &&
+              v["teams"][0]["drivers"][1]["number"].as_int() == 55,
+          "a seat whose driver doesn't resolve is skipped whole, and the seats beside it still apply");
     check(v["database"]["entrant_prefix"].as_string() == "cs2022-" && v["leaderboard"].as_string() == "box",
           "the package's own data rides through");
 }
@@ -175,7 +184,7 @@ static void no_seats_file()
 int main()
 {
     the_2016_mclaren();
-    the_2022_williams();
+    every_seat_on_a_package_applies();
     no_seats_file();
     return failures ? 1 : 0;
 }

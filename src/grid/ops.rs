@@ -988,6 +988,7 @@ mod tests {
             .collect();
         for season in [
             "swofty.classic-seasons*",
+            "swofty.swofty-seasons-progressive",
             "swofty.progressive",
             "msyeett.*",
             "bydanix.*",
