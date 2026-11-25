@@ -26,6 +26,10 @@ impl Db {
             .collect();
     }
 
+    pub fn record(&self, key: u64) -> Option<&swofty_formats::gvdb::Record> {
+        self.index.get(&key).map(|&i| &self.gvdb.records[i])
+    }
+
     pub fn has_key(&self, key: u64) -> bool {
         self.index.contains_key(&key)
     }

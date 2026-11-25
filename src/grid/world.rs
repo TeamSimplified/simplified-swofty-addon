@@ -1073,19 +1073,31 @@ struct Grown {
     drivers_skipped: Skips,
 }
 
+fn build_file(built: &Path) -> Option<Db> {
+    let bytes = std::fs::read(built.join(DB_REL)).ok()?;
+    Some(Db::new(Gvdb::parse(&bytes).ok()?))
+}
+
 fn grow_from_build(
     db: &mut Db,
     edits: &BuildEdits,
+    file: Option<&Db>,
     heads: &HashSet<String>,
     notes: &mut Vec<String>,
 ) -> Grown {
     let keys = RowKeys::builtin();
     let mut grown = Grown::default();
     for (container, row, shape) in GROWN_TABLES {
+        let file = file.filter(|_| row == "driver");
+        let get = |key: u64| -> Option<(u8, Vec<u8>)> {
+            edits
+                .get(&key)
+                .cloned()
+                .or_else(|| file?.record(key).map(|r| (r.tag, r.value.clone())))
+        };
         let count_path = format!("{container}._{row}_instancecount_");
-        let Some(built_count) = edits
-            .get(&fnv1a64(&count_path))
-            .and_then(|(_, v)| String::from_utf8_lossy(v).trim().parse::<usize>().ok())
+        let Some(built_count) = get(fnv1a64(&count_path))
+            .and_then(|(_, v)| String::from_utf8_lossy(&v).trim().parse::<usize>().ok())
         else {
             continue;
         };
@@ -1104,13 +1116,12 @@ fn grow_from_build(
             grown.drivers_built = built_count;
         }
         for i in 0..built_count {
-            let Some((_, label)) = edits.get(&fnv1a64(format!("{container}.{row}_{i}._metadata_"))) else {
+            let Some((_, label)) = get(fnv1a64(format!("{container}.{row}_{i}._metadata_"))) else {
                 continue;
             };
-            let label = String::from_utf8_lossy(label).into_owned();
-            let head = edits
-                .get(&fnv1a64(format!("{container}.{row}_{i}.head")))
-                .map(|(_, h)| String::from_utf8_lossy(h).to_lowercase());
+            let label = String::from_utf8_lossy(&label).into_owned();
+            let head = get(fnv1a64(format!("{container}.{row}_{i}.head")))
+                .map(|(_, h)| String::from_utf8_lossy(&h).to_lowercase());
             let driver = row == "driver";
             if driver {
                 grown.drivers_listed += 1;
@@ -1132,12 +1143,8 @@ fn grow_from_build(
                 grown.drivers_added.insert(label);
             }
             for f in fields {
-                if let Some((tag, value)) = edits.get(&fnv1a64(format!("{container}.{row}_{i}.{f}"))) {
-                    db.put_key(
-                        fnv1a64(format!("{container}.{row}_{live}.{f}")),
-                        *tag,
-                        value.clone(),
-                    );
+                if let Some((tag, value)) = get(fnv1a64(format!("{container}.{row}_{i}.{f}"))) {
+                    db.put_key(fnv1a64(format!("{container}.{row}_{live}.{f}")), tag, value);
                 }
             }
             live += 1;
@@ -1445,14 +1452,19 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
     let mut build_drivers = HashSet::new();
     if let Some(dir) = &built {
         let edits = build_edits(dir);
-        if edits.is_empty() {
-            read_log.push(format!(
-                "build {}: swofty/assets.json missing, unreadable or without db_edits",
-                dir.display()
-            ));
-        }
+        let file = build_file(dir);
+        read_log.push(format!(
+            "build {}: {} db_edits in swofty/assets.json, database file {}",
+            dir.file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+            edits.len(),
+            file.as_ref().map_or_else(
+                || "missing or unreadable".to_owned(),
+                |f| format!("{} records", f.gvdb.records.len())
+            )
+        ));
         let before = driver_labels(&db);
-        let grown = grow_from_build(&mut db, &edits, &heads, &mut notes);
+        let grown = grow_from_build(&mut db, &edits, file.as_ref(), &heads, &mut notes);
         if grown.added > 0 {
             db.reindex();
         }
@@ -1791,7 +1803,7 @@ mod tests {
             6,
         );
         let heads = HashSet::from(["esteban_gutierrez".to_owned(), "stock_a".to_owned()]);
-        let grown = grow_from_build(&mut db, &edits, &heads, &mut Vec::new());
+        let grown = grow_from_build(&mut db, &edits, None, &heads, &mut Vec::new());
         db.reindex();
         assert_eq!(db.count("entrants.drivers", "driver"), 3);
         assert_eq!(grown.drivers_built, 6);
@@ -1808,5 +1820,45 @@ mod tests {
         assert!(grown.drivers_skipped.has(SKIP_HEAD, "no_head_yet"));
         assert!(grown.drivers_skipped.has(SKIP_PRESENT, "stock_a"));
         assert_eq!(grown.drivers_skipped.total(), 3);
+    }
+
+    #[test]
+    fn the_rows_a_build_writes_into_the_database_file_come_in_too() {
+        let mut db = two_driver_db();
+        let mut file = two_driver_db();
+        for (row, label, head) in [
+            (2, "esteban_gutierrez", "esteban_gutierrez"),
+            (3, "felipe_nasr", "missing"),
+        ] {
+            for (field, value) in [("_metadata_", label), ("head", head)] {
+                file.put_key(
+                    fnv1a64(format!("entrants.drivers.driver_{row}.{field}")),
+                    2,
+                    value.as_bytes().to_vec(),
+                );
+            }
+        }
+        file.put_key(
+            fnv1a64("entrants.drivers._driver_instancecount_"),
+            0,
+            b"4".to_vec(),
+        );
+        let heads = HashSet::from(["esteban_gutierrez".to_owned()]);
+        let grown = grow_from_build(&mut db, &BuildEdits::new(), Some(&file), &heads, &mut Vec::new());
+        db.reindex();
+        assert_eq!(
+            grown.drivers_added,
+            HashSet::from(["esteban_gutierrez".to_owned()])
+        );
+        assert!(
+            db.find("entrants.drivers", "driver", "esteban_gutierrez")
+                .is_some()
+        );
+        assert!(grown.drivers_skipped.has(SKIP_HEAD, "felipe_nasr"));
+        assert_eq!(grown.drivers_skipped.count(SKIP_PRESENT), 2);
+        let edits = built(&[("aarav_amin", "esteban_gutierrez")], 3);
+        let mut db = two_driver_db();
+        let grown = grow_from_build(&mut db, &edits, Some(&file), &heads, &mut Vec::new());
+        assert_eq!(grown.drivers_built, 3, "a runtime edit wins over the file");
     }
 }
