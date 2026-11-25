@@ -14,6 +14,7 @@ pub mod image;
 pub mod logos;
 pub mod ops;
 pub mod pages;
+pub mod readlog;
 pub mod world;
 
 use std::path::Path;

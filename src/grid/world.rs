@@ -21,6 +21,7 @@ use swofty_formats::hash::fnv1a64;
 use swofty_formats::lng::Lng;
 
 use crate::grid::db::Db;
+use crate::grid::readlog::{self, Skips};
 
 pub const DB_REL: &str = "game_package/gamedatabases/gamedatabases.2025.bin";
 pub const HEADS_DIR: &str = "2025_asset_groups/animation_package/scenes/cinematics/drivers/heads";
@@ -303,9 +304,19 @@ fn read_json(path: &Path) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn roster(addon: &AddonRef, data_root: &Path) -> Option<Roster> {
-    let doc = read_json(&addon.dir.join("roster.json"));
+fn roster(addon: &AddonRef, data_root: &Path) -> (Option<Roster>, String) {
+    let file = addon.dir.join("roster.json");
+    let doc = match readlog::read_json_checked(&file) {
+        Ok(doc) => doc,
+        Err(e) => return (None, format!("roster: {} not read: {e}", file.display())),
+    };
+    let Some(categories) = doc["categories"].as_array() else {
+        return (None, format!("roster: {} has no categories list", file.display()));
+    };
     let data = data_root.join("addon-data").join(&addon.id);
+    let files = MORE_DRIVER_MODELS_FILES
+        .map(|f| readlog::data_file(&data.join(f)))
+        .join(", ");
     let switches = read_json(&data.join("switches.json"));
     let numbers = read_json(&data.join("numbers.json"));
     let edits = read_json(&data.join("edits.json"));
@@ -314,15 +325,18 @@ fn roster(addon: &AddonRef, data_root: &Path) -> Option<Roster> {
             .as_array()
             .is_some_and(|a| a.iter().any(|x| x.as_str() == Some(v)))
     };
-    let number = |v: &Value| v.as_i64().or_else(|| v.as_str()?.trim().parse().ok());
+    let number = |v: &Value| v.as_i64().or_else(|| v.as_str()?.trim().parse::<i64>().ok());
     let mut drivers = HashMap::new();
-    for c in doc["categories"].as_array()? {
+    let (mut in_game, mut unnamed) = (0, 0);
+    for c in categories {
         let category = c["name"].as_str().unwrap_or_default();
         for d in c["drivers"].as_array().into_iter().flatten() {
             let Some(label) = d["file_name"].as_str() else {
+                unnamed += 1;
                 continue;
             };
             if d["in_game"].as_bool() == Some(true) {
+                in_game += 1;
                 continue;
             }
             drivers.insert(
@@ -336,10 +350,21 @@ fn roster(addon: &AddonRef, data_root: &Path) -> Option<Roster> {
             );
         }
     }
-    Some(Roster {
-        addon: addon.name.clone(),
-        drivers,
-    })
+    let on = drivers.values().filter(|d| d.on).count();
+    let line = format!(
+        "roster: {} read, {} categories, {} drivers kept ({on} on, {} off), {in_game} in the game skipped, {unnamed} without file_name; data: {files}",
+        file.display(),
+        categories.len(),
+        drivers.len(),
+        drivers.len() - on,
+    );
+    (
+        Some(Roster {
+            addon: addon.name.clone(),
+            drivers,
+        }),
+        line,
+    )
 }
 
 /// A team an addon defines in the launcher's registry (team.identity in its
@@ -689,6 +714,7 @@ pub struct World {
     pub tyre_suppliers: Option<TyreSuppliers>,
     pub built: Option<PathBuf>,
     pub notes: Vec<String>,
+    pub read_log: Vec<String>,
 }
 
 impl World {
@@ -800,16 +826,7 @@ pub fn clean(text: &str) -> String {
 }
 
 pub fn latest_build(data_root: &Path, profile: &str) -> Option<PathBuf> {
-    let dir = data_root.join("cache/overlay").join(profile);
-    std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .filter_map(|e| {
-            let plan = e.path().join("plan.json");
-            Some((plan.metadata().ok()?.modified().ok()?, e.path()))
-        })
-        .max()
-        .map(|(_, p)| p)
+    readlog::pick_build(data_root, profile).chosen
 }
 
 fn read_lng(path: &Path) -> Option<Lng> {
@@ -953,6 +970,11 @@ fn load_ops(
     Some(out)
 }
 
+const SKIP_HEAD: &str = "head not in profile_heads or the game folder";
+const SKIP_PRESENT: &str = "label already in the database";
+const SKIP_OFF: &str = "off on More Driver Models' page";
+const SKIP_NO_ROW: &str = "no row in the last build";
+
 const GROWN_TABLES: [(&str, &str, &str); 4] = [
     ("entrants.drivers", "driver", "entrants.drivers.driver_N"),
     (
@@ -1042,14 +1064,23 @@ fn drivers_from_build(db: &mut Db, edits: &BuildEdits, stock: usize) -> HashSet<
 // has that isn't here yet is added at the end, its keys from the launcher's key
 // catalogue. A driver comes back only while his head is still in the profile: one an
 // addon turned off since added doesn't.
+#[derive(Default)]
+struct Grown {
+    added: usize,
+    drivers_built: usize,
+    drivers_listed: usize,
+    drivers_added: HashSet<String>,
+    drivers_skipped: Skips,
+}
+
 fn grow_from_build(
     db: &mut Db,
     edits: &BuildEdits,
     heads: &HashSet<String>,
     notes: &mut Vec<String>,
-) -> usize {
+) -> Grown {
     let keys = RowKeys::builtin();
-    let mut added = 0;
+    let mut grown = Grown::default();
     for (container, row, shape) in GROWN_TABLES {
         let count_path = format!("{container}._{row}_instancecount_");
         let Some(built_count) = edits
@@ -1069,6 +1100,9 @@ fn grow_from_build(
             .collect();
         let mut live = db.count(container, row);
         let before = live;
+        if row == "driver" {
+            grown.drivers_built = built_count;
+        }
         for i in 0..built_count {
             let Some((_, label)) = edits.get(&fnv1a64(format!("{container}.{row}_{i}._metadata_"))) else {
                 continue;
@@ -1077,11 +1111,25 @@ fn grow_from_build(
             let head = edits
                 .get(&fnv1a64(format!("{container}.{row}_{i}.head")))
                 .map(|(_, h)| String::from_utf8_lossy(h).to_lowercase());
-            if row == "driver" && head.is_some_and(|h| !heads.contains(&h)) {
+            let driver = row == "driver";
+            if driver {
+                grown.drivers_listed += 1;
+            }
+            if driver && head.is_some_and(|h| !heads.contains(&h)) {
+                grown.drivers_skipped.add(SKIP_HEAD, &label);
                 continue;
             }
-            if label.is_empty() || !here.insert(label) {
+            if label.is_empty() {
                 continue;
+            }
+            if !here.insert(label.clone()) {
+                if driver {
+                    grown.drivers_skipped.add(SKIP_PRESENT, &label);
+                }
+                continue;
+            }
+            if driver {
+                grown.drivers_added.insert(label);
             }
             for f in fields {
                 if let Some((tag, value)) = edits.get(&fnv1a64(format!("{container}.{row}_{i}.{f}"))) {
@@ -1095,12 +1143,12 @@ fn grow_from_build(
             live += 1;
         }
         if live > before {
-            added += live - before;
+            grown.added += live - before;
             let tag = db.gvdb.get(&count_path).map_or(0, |r| r.tag);
             db.put_key(fnv1a64(&count_path), tag, live.to_string().into_bytes());
         }
     }
-    added
+    grown
 }
 
 pub fn heads_in_game(game_dir: &Path) -> HashSet<String> {
@@ -1138,7 +1186,9 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
     }
     let stock_keys: HashSet<String> = lang.keys().cloned().collect();
 
-    let built = latest_build(&inputs.data_root, &inputs.profile);
+    let pick = readlog::pick_build(&inputs.data_root, &inputs.profile);
+    let built = pick.chosen.clone();
+    let mut read_log = vec![pick.line(&inputs.profile)];
     if let Some(dir) = &built {
         for name in ["all.lng", "eng.lng"] {
             let Some(table) = read_lng(&dir.join("swofty/assets/lang").join(name)) else {
@@ -1384,16 +1434,71 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
             }
         }
     }
+    let (roster, roster_line) = match inputs.addons.iter().find(|a| a.id == MORE_DRIVER_MODELS) {
+        Some(a) => roster(a, &inputs.data_root),
+        None => (
+            None,
+            "roster: More Driver Models is not on in this profile".to_owned(),
+        ),
+    };
+    read_log.push(roster_line);
     let mut build_drivers = HashSet::new();
     if let Some(dir) = &built {
         let edits = build_edits(dir);
+        if edits.is_empty() {
+            read_log.push(format!(
+                "build {}: swofty/assets.json missing, unreadable or without db_edits",
+                dir.display()
+            ));
+        }
         let before = driver_labels(&db);
-        let n = grow_from_build(&mut db, &edits, &heads, &mut notes);
-        if n > 0 {
+        let grown = grow_from_build(&mut db, &edits, &heads, &mut notes);
+        if grown.added > 0 {
             db.reindex();
         }
-        build_drivers = driver_labels(&db).difference(&before).cloned().collect();
+        let after = driver_labels(&db);
+        build_drivers = after.difference(&before).cloned().collect();
         build_drivers.extend(drivers_from_build(&mut db, &edits, stock_drivers.len()));
+        let mdm_added = roster.as_ref().map_or(0, |r| {
+            grown
+                .drivers_added
+                .iter()
+                .filter(|l| r.drivers.contains_key(*l))
+                .count()
+        });
+        read_log.push(format!(
+            "build drivers: the build has {} rows, the database {} before it, {} with a label of their own, {} rows added ({mdm_added} More Driver Models'), skipped: {}",
+            grown.drivers_built,
+            before.len(),
+            grown.drivers_listed,
+            grown.drivers_added.len(),
+            grown.drivers_skipped.line()
+        ));
+        if let Some(r) = &roster {
+            let mut missing = Skips::default();
+            let mut present = 0;
+            for (label, d) in &r.drivers {
+                if !d.on {
+                    missing.add(SKIP_OFF, label);
+                } else if after.contains(label) {
+                    present += 1;
+                } else if grown.drivers_skipped.has(SKIP_HEAD, label) {
+                    missing.add(SKIP_HEAD, label);
+                } else {
+                    missing.add(SKIP_NO_ROW, label);
+                }
+            }
+            read_log.push(format!(
+                "roster drivers in the catalog: {present} of {}; not: {}",
+                r.drivers.len(),
+                missing.line()
+            ));
+        }
+    } else if let Some(r) = &roster {
+        read_log.push(format!(
+            "no build to read: none of the {} roster drivers can be added",
+            r.drivers.len()
+        ));
     }
     let (packages, driver_ids, registry_drivers) = registry_grids(&inputs.addons);
     Ok(World {
@@ -1429,13 +1534,10 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
             .iter()
             .find(|a| a.id == TYRE_SUPPLIERS)
             .map(|a| TyreSuppliers::read(a, &inputs.data_root, &inputs.addons)),
-        roster: inputs
-            .addons
-            .iter()
-            .find(|a| a.id == MORE_DRIVER_MODELS)
-            .and_then(|a| roster(a, &inputs.data_root)),
+        roster,
         built,
         notes,
+        read_log,
     })
 }
 
@@ -1585,5 +1687,63 @@ mod tests {
             serde_json::from_str(r#"{ "names": { "full": { "literal": "Felipe Massa" } } }"#).unwrap();
         let d = registry_driver("SWOFTY 2017", "sw17_massa", &bare);
         assert_eq!((d.first.as_str(), d.last.as_str()), ("Felipe", "Massa"));
+    }
+
+    fn roster_dir(name: &str, roster: &str, switches: Option<&str>) -> (AddonRef, PathBuf) {
+        let root = std::env::temp_dir().join(format!("simplified-roster-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let addon = root.join("addons").join(MORE_DRIVER_MODELS);
+        std::fs::create_dir_all(&addon).unwrap();
+        std::fs::write(addon.join("roster.json"), roster).unwrap();
+        if let Some(text) = switches {
+            let data = root.join("addon-data").join(MORE_DRIVER_MODELS);
+            std::fs::create_dir_all(&data).unwrap();
+            std::fs::write(data.join("switches.json"), text).unwrap();
+        }
+        let addon = AddonRef {
+            id: MORE_DRIVER_MODELS.into(),
+            name: "More Driver Models".into(),
+            dir: addon,
+        };
+        (addon, root)
+    }
+
+    const ROSTER: &str = r#"{ "categories": [
+        { "name": "Formula 1", "drivers": [
+            { "file_name": "esteban_gutierrez", "name": "Esteban Gutiérrez", "number": "21" },
+            { "file_name": "max_verstappen", "name": "Max Verstappen", "in_game": true } ] },
+        { "name": "Icons", "drivers": [
+            { "file_name": "ayrton_senna", "name": "Ayrton Senna" }, { "name": "No File" } ] } ] }"#;
+
+    #[test]
+    fn the_roster_log_counts_what_it_parsed() {
+        let (addon, root) = roster_dir("counts", ROSTER, Some(r#"{ "off_categories": ["Icons"] }"#));
+        let (read, line) = roster(&addon, &root);
+        let roster = read.unwrap();
+        assert_eq!(roster.drivers.len(), 2);
+        assert!(roster.drivers["esteban_gutierrez"].on);
+        assert!(!roster.drivers["ayrton_senna"].on);
+        assert!(line.contains("roster.json read, 2 categories, 2 drivers kept (1 on, 1 off), 1 in the game skipped, 1 without file_name"), "{line}");
+        assert!(line.contains("switches.json ok"), "{line}");
+        assert!(line.contains("numbers.json missing"), "{line}");
+    }
+
+    #[test]
+    fn the_roster_log_names_the_file_it_could_not_read() {
+        let (addon, root) = roster_dir("broken", "{ not json", Some("[1,"));
+        let (read, line) = roster(&addon, &root);
+        assert!(read.is_none());
+        assert!(line.contains("roster.json not read: not valid JSON"), "{line}");
+        let (addon, root) = roster_dir("shape", r#"{ "drivers": [] }"#, None);
+        let (read, line) = roster(&addon, &root);
+        assert!(read.is_none());
+        assert!(line.contains("has no categories list"), "{line}");
+        let (addon, root) = roster_dir("data", ROSTER, Some("[1,"));
+        let (read, line) = roster(&addon, &root);
+        assert!(read.is_some());
+        assert!(
+            line.contains("switches.json unreadable: not valid JSON"),
+            "{line}"
+        );
     }
 }
