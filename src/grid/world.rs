@@ -197,7 +197,13 @@ impl TyreSuppliers {
 /// Progressive Career: a career through the Classic Seasons years. Its entrant lists
 /// are that career's seasons on the 2026 teams, not grids of their own, so they're
 /// left out; the Classic Seasons grids they take their teams from are edited instead.
-pub const PROGRESSIVE: &str = "swofty.progressive";
+pub const PROGRESSIVE: &str = "swofty.swofty-seasons-progressive";
+/// The addon id Progressive Career had before it moved to `PROGRESSIVE`; both are the same
+/// addon to Simplified, and they conflict, so a profile has one of them.
+pub const PROGRESSIVE_LEGACY: &str = "swofty.progressive";
+pub fn is_progressive(id: &str) -> bool {
+    id == PROGRESSIVE || id == PROGRESSIVE_LEGACY
+}
 /// Where the build puts the seats edited for the grids the game makes from records,
 /// Progressive's seasons and content.package grids, in Simplified's folder in the
 /// game, and its DLL reads them (native/src/progressive.cpp).
@@ -1355,7 +1361,7 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
         }
         for r in db.rows("entrants.entrant_lists", "entrant_list") {
             let label = db.field(&r, "_metadata_");
-            if !before.contains(&label) && addon.id != PROGRESSIVE {
+            if !before.contains(&label) && !is_progressive(&addon.id) {
                 list_origin.insert(label, addon.name.clone());
             }
         }
@@ -1532,7 +1538,7 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
         progressive: inputs
             .addons
             .iter()
-            .find(|a| a.id == PROGRESSIVE)
+            .find(|a| is_progressive(&a.id))
             .map(Progressive::read),
         packages,
         driver_ids,
