@@ -2716,7 +2716,7 @@ fn export(
         engines: l.catalog.engines.clone(),
     };
     let out_dir = app.cache_dir.join("export").join(&id);
-    let (dir, n) = ops::export(
+    let (dir, n, left) = ops::export(
         &out_dir,
         &id,
         &name,
@@ -2730,10 +2730,14 @@ fn export(
         return Ok(json!({ "open": path_str(&dir) }));
     }
     host.call("install_addon", json!({ "path": path_str(&dir) }))?;
-    let text = format!(
+    let mut text = format!(
         "Exported {name} with {}; turn it on in a profile on the Addons page",
         plural(n, "change", "changes")
     );
+    for note in &left {
+        text.push_str(". ");
+        text.push_str(note);
+    }
     if app.can("move_addon") {
         Ok(json!({ "show_addon": { "id": id, "notice": text } }))
     } else {
