@@ -796,6 +796,167 @@ mod tests {
         assert_eq!(out.ops[0]["value"], "career_f2_meinders");
     }
 
+    fn bare_world() -> World {
+        World {
+            db: crate::grid::db::Db::new(swofty_formats::gvdb::Gvdb { records: Vec::new() }),
+            lang: HashMap::new(),
+            stock_lists: HashSet::new(),
+            stock_looks: HashSet::new(),
+            list_origin: HashMap::new(),
+            touched: Default::default(),
+            seats: Default::default(),
+            erp: Vec::new(),
+            heads: HashSet::new(),
+            driver_origin: HashMap::new(),
+            head_origin: HashMap::new(),
+            stock_drivers: HashSet::new(),
+            build_drivers: HashSet::new(),
+            roster: None,
+            registry_teams: HashMap::new(),
+            progressive: None,
+            packages: HashMap::new(),
+            driver_ids: HashMap::new(),
+            registry_drivers: HashMap::new(),
+            engine_suppliers: None,
+            tyre_suppliers: None,
+            built: None,
+            notes: Vec::new(),
+            read_log: Vec::new(),
+        }
+    }
+
+    fn picked_driver(label: &str, pool: Option<&str>) -> crate::grid::grids::Driver {
+        crate::grid::grids::Driver {
+            label: label.into(),
+            first: String::new(),
+            last: label.into(),
+            number: 0,
+            head: label.into(),
+            has_model: true,
+            pool: pool.map(str::to_owned),
+            number_one: false,
+            origin: None,
+            row: "r".into(),
+            first_key: String::new(),
+            last_key: String::new(),
+            full_key: String::new(),
+            standard_key: String::new(),
+            code: String::new(),
+            nation: String::new(),
+            seasonal: false,
+            looks: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_picked_stock_named_driver_seats_his_own_row_not_the_packs() {
+        use crate::grid::edits::Edits;
+        use crate::grid::grids::{Grid, Team};
+        use crate::grid::world::{Package, PackageSeat, PackageTeam};
+        let pack_seats = |a: &str, b: &str| {
+            vec![
+                PackageSeat {
+                    driver: a.into(),
+                    number: 5,
+                    look: String::new(),
+                },
+                PackageSeat {
+                    driver: b.into(),
+                    number: 8,
+                    look: String::new(),
+                },
+            ]
+        };
+        let package = Package {
+            id: "swofty.swofty-seasons-2016/sw_2016".into(),
+            addon: "SWOFTY 2016".into(),
+            title: None,
+            teams: vec![
+                (
+                    "sw16_ferrari".into(),
+                    vec!["sw16_sebastian_vettel".into(), "sw16_kimi_raikkonen".into()],
+                ),
+                (
+                    "sw16_haas".into(),
+                    vec!["sw16_romain_grosjean".into(), "sw16_esteban_gutierrez".into()],
+                ),
+            ],
+            entries: vec![
+                PackageTeam {
+                    key: "sw16_ferrari".into(),
+                    team: "sw16_ferrari".into(),
+                    seats: pack_seats("sw16_sebastian_vettel", "sw16_kimi_raikkonen"),
+                },
+                PackageTeam {
+                    key: "sw16_haas".into(),
+                    team: "sw16_haas".into(),
+                    seats: pack_seats("sw16_romain_grosjean", "sw16_esteban_gutierrez"),
+                },
+            ],
+        };
+        let grid = crate::grid::grids::package_grid("sw_f1_2016", &package, |label, seat| {
+            Some(Team {
+                label: label.into(),
+                row: String::new(),
+                names: Vec::new(),
+                timing: String::new(),
+                colours: Vec::new(),
+                seats: vec![seat],
+                boss: String::new(),
+                optional: None,
+                registry: None,
+                cars: Vec::new(),
+            })
+        })
+        .unwrap();
+        let grid: Grid = grid;
+        let mut catalog = Catalog {
+            grids: vec![grid],
+            drivers: BTreeMap::new(),
+            nations: Vec::new(),
+            helmets: Vec::new(),
+            principals: Vec::new(),
+            engines: Vec::new(),
+        };
+        for (label, pool) in [
+            ("sw16_sebastian_vettel", Some("swp-sw16_sebastian_vettel")),
+            ("sw16_esteban_gutierrez", Some("swp-sw16_esteban_gutierrez")),
+            ("sebastian_vettel", None),
+            ("esteban_gutierrez", None),
+        ] {
+            catalog.drivers.insert(label.into(), picked_driver(label, pool));
+        }
+        let mut world = bare_world();
+        world.packages.insert("sw_f1_2016".into(), package);
+        world.stock_drivers.insert("sebastian_vettel".into());
+        world.build_drivers.insert("esteban_gutierrez".into());
+        world.driver_ids.insert(
+            "sw16_sebastian_vettel".into(),
+            "swofty.swofty-seasons-2016/sw16_sebastian_vettel".into(),
+        );
+        world.driver_ids.insert(
+            "sw16_esteban_gutierrez".into(),
+            "swofty.swofty-seasons-2016/sw16_esteban_gutierrez".into(),
+        );
+        let mut edits = Edits::default();
+        edits.seat_mut("sw_f1_2016/sw16_ferrari/0").driver = Some("sebastian_vettel".into());
+        edits.seat_mut("sw_f1_2016/sw16_haas/1").driver = Some("esteban_gutierrez".into());
+        let mut out = Out::default();
+        let seats = package_seats(&catalog, &edits, &world, &mut out);
+        let pkg = &seats["swofty.swofty-seasons-2016/sw_2016"];
+        let vettel = &pkg["sw16_ferrari"]["0"];
+        assert_eq!(vettel["label"], "sebastian_vettel");
+        assert_eq!(vettel["driver"], "game/sebastian_vettel");
+        assert!(pkg["sw16_ferrari"].get("1").is_none());
+        let gutierrez = &pkg["sw16_haas"]["1"];
+        assert_eq!(gutierrez["label"], "esteban_gutierrez");
+        assert_eq!(
+            gutierrez["driver"],
+            "person/esteban_gutierrez|game/esteban_gutierrez"
+        );
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    }
+
     #[test]
     fn drivers_are_named_by_a_record_that_resolves() {
         let stock = HashSet::from(["nicholas_latifi".to_owned()]);
