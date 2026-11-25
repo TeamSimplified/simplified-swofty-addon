@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::grid::db::Db;
-use crate::grid::world::World;
+use crate::grid::world::{Package, RegistryDriver, World};
 
 pub const LISTS: &str = "entrants.entrant_lists";
 pub const POOL: &str = "entrants.entrant_lists.entrants";
@@ -308,7 +308,7 @@ pub fn encode_colour(hex: &str) -> Option<String> {
 
 /// A full name as a first and a last name: the last word, or from a particle such as
 /// "de" in Nyck de Vries.
-fn split_name(name: &str) -> (String, String) {
+pub fn split_name(name: &str) -> (String, String) {
     let words: Vec<&str> = name.split_whitespace().collect();
     if words.len() < 2 {
         return (String::new(), name.to_owned());
@@ -439,7 +439,79 @@ fn drivers(world: &World) -> BTreeMap<String, Driver> {
             },
         );
     }
+    for (label, d) in &world.registry_drivers {
+        out.entry(label.clone())
+            .or_insert_with(|| registry_driver(label, d));
+    }
     out
+}
+
+/// The grid of a content.package record whose entrant list the game makes when it
+/// starts, so the database has none: its teams are the rows the record names and its
+/// seats what the record gives them. `team` makes a team of a label with its first seat.
+pub fn package_grid(
+    list: &str,
+    package: &Package,
+    mut team: impl FnMut(&str, Seat) -> Option<Team>,
+) -> Option<Grid> {
+    let mut teams: Vec<Team> = Vec::new();
+    for entry in &package.entries {
+        for (i, s) in entry.seats.iter().enumerate() {
+            let seat = Seat {
+                key: format!("{list}/{}/{i}", entry.key),
+                select: String::new(),
+                row: String::new(),
+                position: i as i64,
+                reference: String::new(),
+                override_driver: String::new(),
+                driver: s.driver.clone(),
+                car_number: s.number,
+                look: s.look.clone(),
+                vehicle: String::new(),
+            };
+            match teams.iter_mut().find(|t| t.label == entry.team) {
+                Some(t) => t.seats.push(seat),
+                None => teams.extend(team(&entry.team, seat)),
+            }
+        }
+    }
+    if teams.is_empty() {
+        return None;
+    }
+    Some(Grid {
+        label: list.to_owned(),
+        title: package.title.clone().unwrap_or_else(|| title_case(list)),
+        origin: Some(package.addon.clone()),
+        ui_path: String::new(),
+        teams,
+        champion: None,
+        package: Some(package.id.clone()),
+    })
+}
+
+/// A driver as an addon's driver.identity record has him, for one whose row the game
+/// makes when it starts.
+fn registry_driver(label: &str, d: &RegistryDriver) -> Driver {
+    Driver {
+        label: label.to_owned(),
+        first: d.first.clone(),
+        last: d.last.clone(),
+        number: d.number,
+        head: d.head.clone(),
+        has_model: true,
+        pool: None,
+        number_one: false,
+        origin: Some(d.addon.clone()),
+        row: String::new(),
+        first_key: String::new(),
+        last_key: String::new(),
+        full_key: String::new(),
+        standard_key: String::new(),
+        code: d.code.clone(),
+        nation: d.nation.clone(),
+        seasonal: false,
+        looks: Vec::new(),
+    }
 }
 
 /// A car's archive, from its package's resource path with the car's file in it.
@@ -634,6 +706,38 @@ pub fn catalog(world: &World) -> Catalog {
         order.push((label.clone(), title, Some(addon.clone())));
     }
 
+    let new_team = |team_label: &str, seat: Seat, optional: Option<String>| -> Option<Team> {
+        let trow = team_rows.get(team_label)?;
+        let names = NAME_FIELDS
+            .iter()
+            .map(|(field, part)| {
+                let key = db.field(trow, field);
+                NameField {
+                    field,
+                    part,
+                    value: world.text(&key).unwrap_or_default(),
+                    shared: key_uses.get(&key).copied().unwrap_or(0) > 1,
+                    key,
+                }
+            })
+            .collect();
+        Some(Team {
+            label: team_label.to_owned(),
+            row: trow.clone(),
+            names,
+            timing: db.field(trow, "timing_tower_texture_path"),
+            colours: COLOUR_FIELDS
+                .iter()
+                .map(|(f, _)| (*f, decode_colour(&db.field(trow, f))))
+                .collect(),
+            seats: vec![seat],
+            boss: db.field(trow, "team_boss"),
+            optional,
+            registry: world.registry_teams.get(team_label).map(|r| r.addon.clone()),
+            cars: Vec::new(),
+        })
+    };
+
     let mut grids = Vec::new();
     for (label, title, origin) in order {
         let row = &lists[&label];
@@ -670,37 +774,10 @@ pub fn catalog(world: &World) -> Catalog {
                 t.seats.push(seat);
                 continue;
             }
-            let Some(trow) = team_rows.get(&team_label) else {
+            let Some(t) = new_team(&team_label, seat, optional) else {
                 continue;
             };
-            let names = NAME_FIELDS
-                .iter()
-                .map(|(field, part)| {
-                    let key = db.field(trow, field);
-                    NameField {
-                        field,
-                        part,
-                        value: world.text(&key).unwrap_or_default(),
-                        shared: key_uses.get(&key).copied().unwrap_or(0) > 1,
-                        key,
-                    }
-                })
-                .collect();
-            teams.push(Team {
-                label: team_label.clone(),
-                row: trow.clone(),
-                names,
-                timing: db.field(trow, "timing_tower_texture_path"),
-                colours: COLOUR_FIELDS
-                    .iter()
-                    .map(|(f, _)| (*f, decode_colour(&db.field(trow, f))))
-                    .collect(),
-                seats: vec![seat],
-                boss: db.field(trow, "team_boss"),
-                optional,
-                registry: world.registry_teams.get(&team_label).map(|r| r.addon.clone()),
-                cars: Vec::new(),
-            });
+            teams.push(t);
         }
         for t in &mut teams {
             t.seats.sort_by_key(|s| s.position);
@@ -745,6 +822,16 @@ pub fn catalog(world: &World) -> Catalog {
             origin,
             teams,
         });
+    }
+    let mut packaged: Vec<(&String, &Package)> = world
+        .packages
+        .iter()
+        .filter(|(label, _)| !lists.contains_key(*label))
+        .collect();
+    packaged.sort_by_key(|(label, _)| *label);
+    for (label, package) in packaged {
+        let grid = package_grid(label, package, |team, seat| new_team(team, seat, None));
+        grids.extend(grid);
     }
     let drivers = drivers(world);
     for g in &mut grids {
@@ -963,5 +1050,47 @@ mod tests {
         assert!(is_generic_head("female_ls493_malerig"));
         assert!(!is_generic_head("max_verstappen"));
         assert!(!is_generic_head("male_lsx"));
+    }
+
+    #[test]
+    fn a_package_without_a_database_list_makes_a_grid_of_its_own() {
+        use crate::grid::world::{PackageSeat, PackageTeam};
+        let seat = |d: &str, n: i64| PackageSeat {
+            driver: d.into(),
+            number: n,
+            look: String::new(),
+        };
+        let package = Package {
+            id: "swofty.swofty-seasons-2015/sw_2015".into(),
+            addon: "SWOFTY 2015".into(),
+            title: Some("SWOFTY 2015".into()),
+            teams: Vec::new(),
+            entries: vec![PackageTeam {
+                key: "mercedes".into(),
+                team: "sw15_mercedes".into(),
+                seats: vec![seat("lewis_hamilton", 44), seat("sw16_rosberg", 6)],
+            }],
+        };
+        let blank = |label: &str, seat: Seat| Team {
+            label: label.into(),
+            row: String::new(),
+            names: Vec::new(),
+            timing: String::new(),
+            colours: Vec::new(),
+            seats: vec![seat],
+            boss: String::new(),
+            optional: None,
+            registry: None,
+            cars: Vec::new(),
+        };
+        let g = package_grid("sw_f1_2015", &package, |t, s| Some(blank(t, s))).unwrap();
+        assert_eq!(g.label, "sw_f1_2015");
+        assert_eq!(g.origin.as_deref(), Some("SWOFTY 2015"));
+        assert_eq!(g.package.as_deref(), Some("swofty.swofty-seasons-2015/sw_2015"));
+        let seats = &g.teams[0].seats;
+        assert_eq!(seats[1].driver, "sw16_rosberg");
+        assert_eq!(seats[1].car_number, 6);
+        assert_ne!(seats[0].key, seats[1].key);
+        assert!(package_grid("x", &package, |_, _| None).is_none());
     }
 }

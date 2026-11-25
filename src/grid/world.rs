@@ -377,8 +377,75 @@ fn registry_records(addon: &AddonRef, kind: &str) -> BTreeMap<String, Value> {
 pub struct Package {
     /// The record's id, `<addon>/<key>`.
     pub id: String,
+    /// The addon that has the record, and the title the record gives the grid.
+    pub addon: String,
+    pub title: Option<String>,
     /// Its teams by key, with their seats' driver labels in order.
     pub teams: Vec<(String, Vec<String>)>,
+    /// The same teams with the team row each makes and what each seat is given.
+    pub entries: Vec<PackageTeam>,
+}
+
+pub struct PackageTeam {
+    pub key: String,
+    /// The label of the team row the record names.
+    pub team: String,
+    pub seats: Vec<PackageSeat>,
+}
+
+pub struct PackageSeat {
+    pub driver: String,
+    pub number: i64,
+    pub look: String,
+}
+
+/// A driver an addon registers with a driver.identity record, whose row the game makes
+/// when it starts, so the database the editor reads has none.
+#[derive(Debug, Clone)]
+pub struct RegistryDriver {
+    pub addon: String,
+    pub first: String,
+    pub last: String,
+    pub code: String,
+    pub nation: String,
+    pub number: i64,
+    pub head: String,
+}
+
+/// The text of a registry name: `{ "literal": "Nico" }`, or a plain string.
+fn registry_text(v: &Value) -> Option<String> {
+    v["literal"]
+        .as_str()
+        .or_else(|| v.as_str())
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
+}
+
+pub fn registry_driver(addon: &str, label: &str, rec: &Value) -> RegistryDriver {
+    let full = registry_text(&rec["names"]["full"]).unwrap_or_default();
+    let (mut first, mut last) = (
+        registry_text(&rec["names"]["first"]),
+        registry_text(&rec["names"]["last"]),
+    );
+    if first.is_none() && last.is_none() {
+        let (f, l) = crate::grid::grids::split_name(&full);
+        (first, last) = (Some(f), Some(l));
+    }
+    let last = last.unwrap_or_default();
+    RegistryDriver {
+        addon: addon.to_owned(),
+        first: first.unwrap_or_default(),
+        last: if last.is_empty() && full.is_empty() {
+            label.to_owned()
+        } else {
+            last
+        },
+        code: rec["names"]["code"].as_str().unwrap_or_default().to_owned(),
+        nation: rec["nationality"].as_str().unwrap_or_default().to_owned(),
+        number: rec["number"].as_i64().unwrap_or(0),
+        head: key_of(rec["head"].as_str().unwrap_or_default()).to_lowercase(),
+    }
 }
 
 impl Package {
@@ -398,9 +465,16 @@ pub fn key_of(id: &str) -> &str {
 
 /// The content.package records of the profile's addons, by the entrant list each
 /// makes, and the driver.identity records they register, by driver label.
-fn registry_grids(addons: &[AddonRef]) -> (HashMap<String, Package>, HashMap<String, String>) {
+fn registry_grids(
+    addons: &[AddonRef],
+) -> (
+    HashMap<String, Package>,
+    HashMap<String, String>,
+    HashMap<String, RegistryDriver>,
+) {
     let mut packages = HashMap::new();
     let mut identities = HashMap::new();
+    let mut drivers = HashMap::new();
     for addon in addons {
         for (key, rec) in registry_records(addon, "content.package") {
             let Some(list) = rec["entrant_list"].as_str() else {
@@ -420,20 +494,46 @@ fn registry_grids(addons: &[AddonRef]) -> (HashMap<String, Package>, HashMap<Str
                     Some((t["key"].as_str()?.to_owned(), seats))
                 })
                 .collect();
+            let entries = rec["teams"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|t| {
+                    let seats = t["drivers"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|s| PackageSeat {
+                            driver: key_of(s["driver"].as_str().unwrap_or_default()).to_owned(),
+                            number: s["number"].as_i64().unwrap_or(-1),
+                            look: key_of(s["look"].as_str().unwrap_or_default()).to_owned(),
+                        })
+                        .collect();
+                    Some(PackageTeam {
+                        key: t["key"].as_str()?.to_owned(),
+                        team: key_of(t["team"].as_str()?).to_owned(),
+                        seats,
+                    })
+                })
+                .collect();
             packages.insert(
                 list.to_owned(),
                 Package {
                     id: format!("{}/{key}", addon.id),
+                    addon: addon.name.clone(),
+                    title: registry_text(&rec["title"]),
                     teams,
+                    entries,
                 },
             );
         }
         for (key, rec) in registry_records(addon, "driver.identity") {
             let label = rec["label"].as_str().filter(|l| !l.is_empty()).unwrap_or(&key);
             identities.insert(label.to_owned(), format!("{}/{key}", addon.id));
+            drivers.insert(label.to_owned(), registry_driver(&addon.name, label, &rec));
         }
     }
-    (packages, identities)
+    (packages, identities, drivers)
 }
 
 /// The registry's team colours are #AARRGGBB; the database's are signed ARGB.
@@ -580,6 +680,9 @@ pub struct World {
     /// The driver.identity records addons register, by driver label: what a record
     /// names a driver the game doesn't have by.
     pub driver_ids: HashMap<String, String>,
+    /// The same records' names, numbers and heads, by driver label, for drivers whose
+    /// rows only the game makes.
+    pub registry_drivers: HashMap<String, RegistryDriver>,
     /// More Engine Suppliers, when the profile has it on.
     pub engine_suppliers: Option<EngineSuppliers>,
     /// More Tyre Suppliers, when the profile has it on.
@@ -1292,7 +1395,7 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
         build_drivers = driver_labels(&db).difference(&before).cloned().collect();
         build_drivers.extend(drivers_from_build(&mut db, &edits, stock_drivers.len()));
     }
-    let (packages, driver_ids) = registry_grids(&inputs.addons);
+    let (packages, driver_ids, registry_drivers) = registry_grids(&inputs.addons);
     Ok(World {
         db,
         lang,
@@ -1315,6 +1418,7 @@ pub fn load(inputs: &Inputs) -> Result<World, String> {
             .map(Progressive::read),
         packages,
         driver_ids,
+        registry_drivers,
         engine_suppliers: inputs
             .addons
             .iter()
@@ -1460,5 +1564,26 @@ mod tests {
         assert_eq!(off.files, ["x/a.bin"]);
         assert!(off.lang.is_empty());
         assert_eq!(on.lang.len(), 1);
+    }
+
+    #[test]
+    fn a_registered_driver_reads_his_own_names_and_number() {
+        let rec: Value = serde_json::from_str(
+            r#"{ "donor": "game/nico_rosberg", "names": { "first": { "literal": "Nico" },
+                 "last": { "literal": "ROSBERG" }, "full": { "literal": "Nico Rosberg" }, "code": "ROS" },
+                 "nationality": "germany", "number": 6, "head": "swofty.swofty-seasons-2016/sw16_nico_rosberg" }"#,
+        )
+        .unwrap();
+        let d = registry_driver("SWOFTY 2016", "sw16_rosberg", &rec);
+        assert_eq!(
+            (d.first.as_str(), d.last.as_str(), d.number),
+            ("Nico", "ROSBERG", 6)
+        );
+        assert_eq!(d.head, "sw16_nico_rosberg");
+        assert_eq!(d.addon, "SWOFTY 2016");
+        let bare: Value =
+            serde_json::from_str(r#"{ "names": { "full": { "literal": "Felipe Massa" } } }"#).unwrap();
+        let d = registry_driver("SWOFTY 2017", "sw17_massa", &bare);
+        assert_eq!((d.first.as_str(), d.last.as_str()), ("Felipe", "Massa"));
     }
 }
