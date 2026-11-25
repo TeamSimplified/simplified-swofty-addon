@@ -97,8 +97,6 @@ struct Run {
         api = core.api();
         api.storage = &kStorage;
         swofty::api = &api;
-        for (const char *driver : {"stoffel_vandoorne", "sergio_perez", "pascal_wehrlein"})
-            core.stock(drivers::identities, driver, drivers::Identity{});
         core.run_register();
     }
 };
@@ -119,14 +117,14 @@ static void the_2016_mclaren()
     if (!v)
         return;
     const json::Value &mclaren = (*v)["teams"][1];
-    check(mclaren["seats"][1].as_string() == "person/stoffel_vandoorne|game/stoffel_vandoorne",
-          "Vandoorne takes Button's McLaren seat");
+    check(mclaren["seats"][1].as_string() == "person/stoffel_vandoorne|game/stoffel_vandoorne|person/jenson_button|game/jenson_button",
+          "Vandoorne takes Button's McLaren seat, with Button behind him");
     check(mclaren["seats"][0].as_string() == "game/fernando_alonso", "Alonso keeps his");
     check(mclaren["team"].as_string() == "constructor/mclaren", "the team stays Progressive's");
-    check((*v)["teams"][0]["seats"][1].as_string() == "game/sergio_perez",
-          "every slot's seats apply: Perez takes Red Bull's second seat as well");
-    check((*v)["teams"][0]["seats"][0].as_string() == "game/daniel_ricciardo",
-          "a seat whose driver doesn't resolve is skipped, and takes only its seat");
+    check((*v)["teams"][0]["seats"][1].as_string() == "game/sergio_perez|game/max_verstappen",
+          "every slot's seats apply: Perez takes Red Bull's second seat as well, falling back to Verstappen");
+    check((*v)["teams"][0]["seats"][0].as_string() == "game/ghost_driver|game/daniel_ricciardo",
+          "an unresolvable pick falls back to the seat's own driver");
     check((*v)["progressive"]["ratings_source"].as_string() == "official", "Progressive's own data rides through");
 
     auto other = run.core.apply(*seasons[0], json::parse(R"({ "year": 2016, "teams": [ { "slot": 3,
@@ -151,8 +149,8 @@ static void every_seat_on_a_package_applies()
             v = *next;
     }
     const json::Value &williams = v["teams"][1];
-    check(williams["drivers"][1]["driver"].as_string() == "game/pascal_wehrlein",
-          "Wehrlein takes Latifi's Williams seat");
+    check(williams["drivers"][1]["driver"].as_string() == "game/pascal_wehrlein|game/nicholas_latifi",
+          "Wehrlein takes Latifi's Williams seat, with Latifi behind him");
     check(williams["drivers"][1]["number"].as_int() == 94, "with his number");
     check(williams["drivers"][1]["look"].is_null(), "and no look reference");
     check(v["database"]["looks"]["williams/pascal_wehrlein"].as_string() == "2016-cs_manor_pascal_wehrlein",
@@ -163,9 +161,9 @@ static void every_seat_on_a_package_applies()
     check(v["teams"][0]["drivers"][0]["driver"].as_string() == "game/charles_leclerc" &&
               v["teams"][0]["drivers"][0]["number"].as_int() == 7,
           "a number alone changes only the number");
-    check(v["teams"][0]["drivers"][1]["driver"].as_string() == "game/carlos_sainz-jr" &&
-              v["teams"][0]["drivers"][1]["number"].as_int() == 55,
-          "a seat whose driver doesn't resolve is skipped whole, and the seats beside it still apply");
+    check(v["teams"][0]["drivers"][1]["driver"].as_string() == "game/ghost_driver|game/carlos_sainz-jr" &&
+              v["teams"][0]["drivers"][1]["number"].as_int() == 99,
+          "an unresolvable pick falls back to the seat's own driver, and the seats beside it still apply");
     check(v["database"]["entrant_prefix"].as_string() == "cs2022-" && v["leaderboard"].as_string() == "box",
           "the package's own data rides through");
 }
