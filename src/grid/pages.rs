@@ -327,13 +327,24 @@ fn nav_button(id: &str, label: &str, active: bool, edited: usize) -> Value {
     json!({ "buttons": [ { "id": id, "label": label, "style": if active { "primary" } else { "ghost" } } ] })
 }
 
+/// A grid's name in the list: two grids of one name, such as a season two addons both
+/// make, each show the addon they come from.
+fn grid_title(cat: &Catalog, g: &Grid) -> String {
+    match &g.origin {
+        Some(a) if cat.grids.iter().any(|o| o.label != g.label && o.title == g.title) => {
+            format!("{} · {a}", g.title)
+        }
+        _ => g.title.clone(),
+    }
+}
+
 /// The grids down the left: the game's own, then the ones addons add, then presets.
 fn nav(app: &App, cat: &Catalog) -> Value {
     let on = |g: &Grid| matches!(app.page, Page::Grid | Page::Team(_)) && app.grid == g.label;
     let grid_button = |g: &Grid| {
         nav_button(
             &format!("nav:{}", g.label),
-            &g.title,
+            &grid_title(cat, g),
             on(g),
             app.edits.count_in(g),
         )
@@ -1217,8 +1228,8 @@ fn grid_page(app: &App, l: &Loaded, grid: &Grid, presets: &[(String, Preset)]) -
             "Your edits to every team on this grid go. What the profile's addons change stays, and your presets are kept.",
         ));
     }
-    let mut card = json!({ "title": grid.title, "buttons": buttons, "blocks": blocks });
-    if let Some(a) = l.world.list_origin.get(&grid.label) {
+    let mut card = json!({ "title": grid_title(&l.catalog, grid), "buttons": buttons, "blocks": blocks });
+    if let Some(a) = &grid.origin {
         card["subtitle"] = json!(format!("From {a}"));
     }
     vec![json!({ "card": card })]
@@ -2921,5 +2932,90 @@ mod tests {
         set_seat(&mut edits, &cat, g, &t, 1, Some("norris"), None);
         assert_eq!(edits.seats["b/m21_2"].driver.as_deref(), Some("norris"));
         assert!(!edits.seats.contains_key("a/m26_2"));
+    }
+
+    fn driver(label: &str, first: &str, last: &str, number: i64, origin: Option<&str>) -> Driver {
+        Driver {
+            label: label.into(),
+            first: first.into(),
+            last: last.into(),
+            number,
+            head: String::new(),
+            has_model: true,
+            pool: None,
+            number_one: false,
+            origin: origin.map(str::to_owned),
+            row: String::new(),
+            first_key: String::new(),
+            last_key: String::new(),
+            full_key: String::new(),
+            standard_key: String::new(),
+            code: String::new(),
+            nation: String::new(),
+            seasonal: false,
+            looks: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn two_lists_of_one_name_each_get_an_entry_with_their_addon() {
+        let mut cat = catalog();
+        let mut progressive = grid("swp_f1_2015", &[("p/1", "sw16_rosberg")]);
+        progressive.title = "F1 2015".into();
+        progressive.origin = Some("Progressive Career".into());
+        let mut swofty = grid("sw_f1_2015", &[("s/1", "sw16_rosberg")]);
+        swofty.title = "F1 2015".into();
+        swofty.origin = Some("SWOFTY 2015".into());
+        cat.grids.extend([progressive, swofty]);
+        let titles: Vec<String> = cat.grids.iter().map(|g| grid_title(&cat, g)).collect();
+        assert_eq!(titles[0], "f1_2026");
+        assert_eq!(titles[2], "F1 2015 · Progressive Career");
+        assert_eq!(titles[3], "F1 2015 · SWOFTY 2015");
+        assert_eq!(
+            cat.grid("sw_f1_2015").unwrap().origin.as_deref(),
+            Some("SWOFTY 2015")
+        );
+        assert_eq!(
+            cat.grid("swp_f1_2015").unwrap().origin.as_deref(),
+            Some("Progressive Career")
+        );
+    }
+
+    #[test]
+    fn a_seat_keeps_the_driver_row_it_holds_beside_a_stock_twin() {
+        let mut cat = catalog();
+        cat.grids.push(grid(
+            "swp_f1_2015",
+            &[("p/1", "sw16_rosberg"), ("p/2", "sw17_massa")],
+        ));
+        cat.drivers.insert(
+            "nico_rosberg".into(),
+            driver("nico_rosberg", "Nico", "ROSBERG", 23, None),
+        );
+        cat.drivers.insert(
+            "sw16_rosberg".into(),
+            driver("sw16_rosberg", "Nico", "ROSBERG", 6, Some("SWOFTY 2016")),
+        );
+        cat.drivers.insert(
+            "sw17_massa".into(),
+            driver("sw17_massa", "Felipe", "MASSA", 19, Some("SWOFTY 2017")),
+        );
+        let g = cat.grid("swp_f1_2015").unwrap();
+        let edits = Edits::default();
+        let rosberg = seat_view(&cat, &edits, g, &g.teams[0].seats[0]);
+        assert_eq!(rosberg.label, "sw16_rosberg");
+        assert_eq!(rosberg.driver.unwrap().number, 6);
+        assert_eq!(driver_name(&edits, &rosberg), "Nico ROSBERG");
+        let massa = seat_view(&cat, &edits, g, &g.teams[0].seats[1]);
+        assert_eq!(driver_name(&edits, &massa), "Felipe MASSA");
+
+        let mut edits = Edits::default();
+        let t = g.teams[0].clone();
+        set_seat(&mut edits, &cat, g, &t, 1, Some("sw16_rosberg"), None);
+        assert_eq!(edits.seats["p/2"].driver.as_deref(), Some("sw16_rosberg"));
+        set_seat(&mut edits, &cat, g, &t, 1, Some("nico_rosberg"), None);
+        assert_eq!(edits.seats["p/2"].driver.as_deref(), Some("nico_rosberg"));
+        let view = seat_view(&cat, &edits, g, &t.seats[1]);
+        assert_eq!(view.driver.unwrap().number, 23);
     }
 }

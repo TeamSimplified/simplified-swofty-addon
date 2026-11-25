@@ -211,6 +211,12 @@ fn driver_ops(catalog: &Catalog, edits: &Edits, out: &mut Out) {
             ));
             continue;
         };
+        if d.row.is_empty() {
+            out.warnings.push(format!(
+                "{label} is made by his addon when the game starts, so his details are left alone"
+            ));
+            continue;
+        }
         let select = format!("entrants.drivers.driver[_metadata_={label}]");
         if e.first.is_some() || e.last.is_some() {
             let first = e.first.clone().unwrap_or_else(|| d.first.clone());
@@ -721,6 +727,74 @@ pub fn export(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_seat_edit_only_repoints_the_seat_it_is_on() {
+        use crate::grid::edits::Edits;
+        use crate::grid::grids::{Seat, Team};
+        let seat = |i: usize, driver: &str| Seat {
+            key: format!("l/s{i}"),
+            select: format!("lists.entrant_list[_metadata_=l].entrant[_metadata_=s{i}]"),
+            row: String::new(),
+            position: i as i64,
+            reference: String::new(),
+            override_driver: String::new(),
+            driver: driver.into(),
+            car_number: 5,
+            look: String::new(),
+            vehicle: String::new(),
+        };
+        let team = Team {
+            label: "red_bull".into(),
+            row: String::new(),
+            names: Vec::new(),
+            timing: String::new(),
+            colours: Vec::new(),
+            seats: vec![seat(0, "max_verstappen"), seat(1, "yuki_tsunoda")],
+            boss: String::new(),
+            optional: None,
+            registry: None,
+            cars: Vec::new(),
+        };
+        let mut catalog = Catalog {
+            grids: Vec::new(),
+            drivers: BTreeMap::new(),
+            nations: Vec::new(),
+            helmets: Vec::new(),
+            principals: Vec::new(),
+            engines: Vec::new(),
+        };
+        let f2 = crate::grid::grids::Driver {
+            label: "meinders".into(),
+            first: String::new(),
+            last: "Meinders".into(),
+            number: 22,
+            head: String::new(),
+            has_model: false,
+            pool: Some("career_f2_meinders".into()),
+            number_one: false,
+            origin: None,
+            row: "r".into(),
+            first_key: String::new(),
+            last_key: String::new(),
+            full_key: String::new(),
+            standard_key: String::new(),
+            code: String::new(),
+            nation: String::new(),
+            seasonal: false,
+            looks: Vec::new(),
+        };
+        catalog.drivers.insert("meinders".into(), f2);
+        let mut edits = Edits::default();
+        edits.seat_mut("l/s1").driver = Some("meinders".into());
+        let mut out = Out::default();
+        seat_ops(&team, &edits, &catalog, &mut out);
+        assert_eq!(out.ops.len(), 1);
+        assert_eq!(out.ops[0]["op"], "db.set");
+        assert_eq!(out.ops[0]["select"], team.seats[1].select);
+        assert_eq!(out.ops[0]["field"], "entrant_reference");
+        assert_eq!(out.ops[0]["value"], "career_f2_meinders");
+    }
 
     #[test]
     fn drivers_are_named_by_a_record_that_resolves() {
