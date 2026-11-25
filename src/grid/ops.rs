@@ -675,7 +675,27 @@ fn panel_safe(description: String) -> String {
     }
 }
 
-/// Writes an addon that carries the edits on its own.
+fn left_out(catalog: &Catalog, edits: &Edits) -> Vec<String> {
+    catalog
+        .grids
+        .iter()
+        .filter(|g| g.package.is_some())
+        .filter(|g| {
+            g.teams
+                .iter()
+                .any(|t| t.seats.iter().any(|s| edits.seats.contains_key(&s.key)))
+        })
+        .map(|g| {
+            format!(
+                "{}'s driver and car number changes can't go into an exported addon, because the game builds that grid when it starts. Your edits still apply while Simplified for Swofty is on.",
+                g.title
+            )
+        })
+        .collect()
+}
+
+/// Writes an addon that carries the edits on its own, and the notes on edits it
+/// had to leave out.
 #[allow(clippy::too_many_arguments)]
 pub fn export(
     out_dir: &Path,
@@ -686,12 +706,17 @@ pub fn export(
     edits: &Edits,
     lib: Option<&Library>,
     data_dir: &Path,
-) -> Result<(PathBuf, usize), String> {
+) -> Result<(PathBuf, usize, Vec<String>), String> {
     let _ = std::fs::remove_dir_all(out_dir);
     std::fs::create_dir_all(out_dir.join("ops")).map_err(|e| e.to_string())?;
     let out = all(catalog, edits, lib, data_dir, out_dir, "logos", false, false);
+    let left = left_out(catalog, edits);
     if out.ops.is_empty() {
-        return Err("there's nothing to export: you haven't edited it".into());
+        return Err(if left.is_empty() {
+            "there's nothing to export: you haven't edited it".into()
+        } else {
+            left.join(" ")
+        });
     }
     let mut kinds = BTreeSet::new();
     for op in &out.ops {
@@ -721,7 +746,7 @@ pub fn export(
     };
     write("swofty.json", &manifest)?;
     write("ops/grid.json", &json!({ "schema_version": 1, "ops": out.ops }))?;
-    Ok((out_dir.to_path_buf(), out.ops.len()))
+    Ok((out_dir.to_path_buf(), out.ops.len(), left))
 }
 
 #[cfg(test)]
@@ -1023,5 +1048,92 @@ mod tests {
             "\u{1F3CE}".repeat(48)
         ));
         assert!(long.len() <= DESCRIPTION_MAX);
+    }
+
+    fn package_grid_catalog() -> Catalog {
+        use crate::grid::grids::{Grid, Seat, Team};
+        let team = Team {
+            label: "red_bull".into(),
+            row: String::new(),
+            names: Vec::new(),
+            timing: String::new(),
+            colours: Vec::new(),
+            seats: vec![Seat {
+                key: "p/s0".into(),
+                select: String::new(),
+                row: String::new(),
+                position: 0,
+                reference: String::new(),
+                override_driver: String::new(),
+                driver: "max_verstappen".into(),
+                car_number: 1,
+                look: String::new(),
+                vehicle: String::new(),
+            }],
+            boss: String::new(),
+            optional: None,
+            registry: None,
+            cars: Vec::new(),
+        };
+        Catalog {
+            grids: vec![Grid {
+                label: "p".into(),
+                title: "SWOFTY 2013".into(),
+                origin: None,
+                ui_path: String::new(),
+                teams: vec![team],
+                champion: None,
+                package: Some("sw_f1_2013".into()),
+            }],
+            drivers: BTreeMap::new(),
+            nations: Vec::new(),
+            helmets: Vec::new(),
+            principals: Vec::new(),
+            engines: Vec::new(),
+        }
+    }
+
+    fn export_to(
+        test: &str,
+        catalog: &Catalog,
+        edits: &Edits,
+    ) -> Result<(PathBuf, usize, Vec<String>), String> {
+        let dir = std::env::temp_dir().join(format!("simplified-export-{}-{test}", std::process::id()));
+        let res = export(&dir, "gridedit.t", "T", "me", catalog, edits, None, &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        res
+    }
+
+    #[test]
+    fn exporting_only_a_season_grids_seats_says_they_are_left_out() {
+        let catalog = package_grid_catalog();
+        let mut edits = Edits::default();
+        edits.seat_mut("p/s0").number = Some(7);
+        let err = export_to("left-out", &catalog, &edits).unwrap_err();
+        assert!(
+            err.starts_with("SWOFTY 2013's driver and car number changes can't go into"),
+            "{err}"
+        );
+        assert!(err.contains("Your edits still apply"), "{err}");
+    }
+
+    #[test]
+    fn exporting_without_edits_says_nothing_was_edited() {
+        let err = export_to("none", &package_grid_catalog(), &Edits::default()).unwrap_err();
+        assert_eq!(err, "there's nothing to export: you haven't edited it");
+    }
+
+    #[test]
+    fn an_export_that_works_reports_the_season_seats_it_left_out() {
+        let mut catalog = package_grid_catalog();
+        let mut edits = Edits::default();
+        edits.seat_mut("p/s0").number = Some(7);
+        edits.team_mut("red_bull").boss = Some("christian_horner".into());
+        let (_, n, left) = export_to("partial", &catalog, &edits).unwrap();
+        assert!(n > 0);
+        assert_eq!(left.len(), 1);
+        assert!(left[0].starts_with("SWOFTY 2013's"), "{left:?}");
+        catalog.grids[0].package = None;
+        assert!(export_to("plain", &catalog, &edits).unwrap().2.is_empty());
     }
 }
