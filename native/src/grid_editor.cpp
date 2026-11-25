@@ -4,8 +4,8 @@
 // build's database edits apply. Simplified's build step puts them in profile/grid-editor.json, in
 // Simplified's folder in the game, and this layers them on those records for the profile that played,
 // one layer a record: the core keeps one layer an add-on and record, so every seat on a record goes in one
-// layer, and a seat whose driver doesn't resolve is skipped and counted in the layer's log line, not the
-// seats beside it.
+// layer. A picked driver goes on its seat as "<picked>|<the seat's driver>", so the core takes the first of
+// them that resolves and a pick that doesn't falls back to the seat's own driver, and only that seat.
 //
 // "seats": Progressive Career's line-ups. Progressive registers each year as a career.season record,
 // swofty.swofty-seasons-progressive/2016 to /2026 (swofty.progressive/ on the older add-on), and seats its
@@ -26,7 +26,6 @@
 #include <array>
 #include <charconv>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include <swofty/json.hpp>
@@ -61,20 +60,10 @@ static std::string text_of(const json::Value &v)
     return s ? *s : std::string();
 }
 
-static bool resolves(std::string_view reference)
+static Driver pick(const std::string &picked, const Driver &current)
 {
-    while (!reference.empty()) {
-        size_t bar = reference.find('|');
-        std::string_view one = reference.substr(0, bar);
-        if (!one.empty() && one.back() == '?')
-            one.remove_suffix(1);
-        if (!one.empty() && Driver(one).resolved())
-            return true;
-        if (bar == std::string_view::npos)
-            break;
-        reference.remove_prefix(bar + 1);
-    }
-    return false;
+    Driver d(picked);
+    return current.empty() || current.id() == picked ? d : d.or_else(current);
 }
 
 struct SeasonSeat {
@@ -112,14 +101,14 @@ static void progressive_seats(const json::Value &years)
                 size_t applied = 0, skipped = 0;
                 for (const SeasonSeat &e : edits) {
                     career::SeasonTeam *team = s.teams.find(e.slot);
-                    if (!team || !resolves(e.driver)) {
+                    if (!team) {
                         ++skipped;
                         continue;
                     }
-                    team->seats[e.seat] = Driver(e.driver);
+                    team->seats[e.seat] = pick(e.driver, team->seats[e.seat]);
                     ++applied;
                 }
-                swofty::log("[simplified] grid editor: %s/%s: %zu seats applied, %zu skipped", addon, year.c_str(),
+                swofty::log("[simplified] grid editor: %s/%s: %zu seats set, %zu skipped for structure", addon, year.c_str(),
                             applied, skipped);
             }, Scope::profile);
     }
@@ -144,20 +133,20 @@ static void package_seats(const json::Value &packages)
             size_t applied = 0, skipped = 0;
             for (const PackageSeat &e : edits) {
                 content::Team *team = p.teams.find(e.team);
-                if (!team || e.seat >= team->drivers.size() || (!e.driver.empty() && !resolves(e.driver))) {
+                if (!team || e.seat >= team->drivers.size()) {
                     ++skipped;
                     continue;
                 }
                 content::Seat &s = team->drivers[e.seat];
                 if (!e.driver.empty())
-                    s.driver = Driver(e.driver);
+                    s.driver = pick(e.driver, s.driver);
                 if (e.number > 0)
                     s.number = e.number;
                 if (!e.look.empty() && !e.label.empty() && s.look.empty())
                     p.extra["database"]["looks"][e.team + "/" + e.label] = json::Value(e.look);
                 ++applied;
             }
-            swofty::log("[simplified] grid editor: %s: %zu seats applied, %zu skipped", package.c_str(), applied,
+            swofty::log("[simplified] grid editor: %s: %zu seats set, %zu skipped for structure", package.c_str(), applied,
                         skipped);
         }, Scope::profile);
     }
