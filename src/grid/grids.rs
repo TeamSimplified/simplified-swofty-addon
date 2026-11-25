@@ -441,7 +441,7 @@ fn drivers(world: &World) -> BTreeMap<String, Driver> {
     }
     for (label, d) in &world.registry_drivers {
         out.entry(label.clone())
-            .or_insert_with(|| registry_driver(label, d));
+            .or_insert_with(|| registry_driver(label, d, pool.get(label).cloned()));
     }
     out
 }
@@ -491,7 +491,7 @@ pub fn package_grid(
 
 /// A driver as an addon's driver.identity record has him, for one whose row the game
 /// makes when it starts.
-fn registry_driver(label: &str, d: &RegistryDriver) -> Driver {
+fn registry_driver(label: &str, d: &RegistryDriver, pool: Option<String>) -> Driver {
     Driver {
         label: label.to_owned(),
         first: d.first.clone(),
@@ -499,7 +499,7 @@ fn registry_driver(label: &str, d: &RegistryDriver) -> Driver {
         number: d.number,
         head: d.head.clone(),
         has_model: true,
-        pool: None,
+        pool,
         number_one: false,
         origin: Some(d.addon.clone()),
         row: String::new(),
@@ -1092,5 +1092,25 @@ mod tests {
         assert_eq!(seats[1].car_number, 6);
         assert_ne!(seats[0].key, seats[1].key);
         assert!(package_grid("x", &package, |_, _| None).is_none());
+    }
+
+    #[test]
+    fn a_registered_driver_keeps_the_pool_entrant_that_seats_him() {
+        let d = RegistryDriver {
+            addon: "SWOFTY 2016".into(),
+            first: "Nico".into(),
+            last: "ROSBERG".into(),
+            code: "ROS".into(),
+            nation: "germany".into(),
+            number: 6,
+            head: String::new(),
+        };
+        assert_eq!(
+            registry_driver("sw16_rosberg", &d, Some("swp-sw16_rosberg".into()))
+                .pool
+                .as_deref(),
+            Some("swp-sw16_rosberg")
+        );
+        assert!(registry_driver("sw16_rosberg", &d, None).pool.is_none());
     }
 }
