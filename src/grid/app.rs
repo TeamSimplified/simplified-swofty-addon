@@ -281,22 +281,35 @@ impl App {
         };
         self.game_dir = Some(game_dir.clone());
         let stock_eng = Self::string(host, "game_original_lang", json!({ "code": "eng" })).map(PathBuf::from);
-        let profile_heads = if self.can("profile_heads") {
-            host.call("profile_heads", Value::Null)
-                .ok()
-                .and_then(|v| {
-                    v["heads"].as_array().map(|a| {
-                        a.iter()
-                            .filter_map(|h| {
-                                let label = h["label"].as_str()?.to_lowercase();
-                                Some((label, h["addon_name"].as_str().map(str::to_owned)))
+        let (profile_heads, heads_line) = if self.can("profile_heads") {
+            match host.call("profile_heads", Value::Null) {
+                Ok(v) => match heads_from(&v) {
+                    Some(heads) => {
+                        let mdm = heads
+                            .iter()
+                            .filter(|(_, a)| {
+                                a.as_deref()
+                                    .is_some_and(|a| a.to_lowercase().contains("more driver models"))
                             })
-                            .collect()
-                    })
-                })
-                .unwrap_or_default()
+                            .count();
+                        let line = format!(
+                            "profile_heads: {} head(s), {mdm} from More Driver Models",
+                            heads.len()
+                        );
+                        (heads, line)
+                    }
+                    None => (
+                        Vec::new(),
+                        "profile_heads: the reply has no heads list".to_owned(),
+                    ),
+                },
+                Err(e) => (Vec::new(), format!("profile_heads: failed: {e}")),
+            }
         } else {
-            Vec::new()
+            (
+                Vec::new(),
+                "profile_heads: this launcher does not offer it".to_owned(),
+            )
         };
         let inputs = Inputs {
             me: self.id.clone(),
@@ -317,6 +330,7 @@ impl App {
                 "the profile, its addons or its last build changed"
             }
         );
+        eprintln!("  {heads_line}");
         let cache = self.cache_dir.clone();
         let key = self.build_key.clone();
         let (tx, rx) = channel();
@@ -399,6 +413,19 @@ fn portraits(addons: &[AddonRef]) -> HashMap<String, PathBuf> {
         .collect()
 }
 
+fn heads_from(reply: &Value) -> Option<Vec<(String, Option<String>)>> {
+    Some(
+        reply["heads"]
+            .as_array()?
+            .iter()
+            .filter_map(|h| {
+                let label = h["label"].as_str()?.to_lowercase();
+                Some((label, h["addon_name"].as_str().map(str::to_owned)))
+            })
+            .collect(),
+    )
+}
+
 fn read_all(
     inputs: &Inputs,
     game_dir: &Path,
@@ -407,6 +434,9 @@ fn read_all(
     fingerprint: String,
 ) -> Result<Loaded, String> {
     let world = world::load(inputs)?;
+    for line in &world.read_log {
+        eprintln!("  {line}");
+    }
     let catalog = grids::catalog(&world);
     let ui_paths: Vec<String> = catalog.grids.iter().map(|g| g.ui_path.clone()).collect();
     let arrays = logos::wanted(&ui_paths);
@@ -419,4 +449,27 @@ fn read_all(
         lib: Some(lib),
         fingerprint,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_heads_reply_is_read_with_the_addon_names() {
+        let reply = json!({ "heads": [
+            { "label": "Esteban_Gutierrez", "addon_name": "More Driver Models" },
+            { "label": "sw13_gutierrez" }, { "addon": "no label" } ] });
+        assert_eq!(
+            heads_from(&reply),
+            Some(vec![
+                (
+                    "esteban_gutierrez".to_owned(),
+                    Some("More Driver Models".to_owned())
+                ),
+                ("sw13_gutierrez".to_owned(), None),
+            ])
+        );
+        assert_eq!(heads_from(&json!({})), None);
+    }
 }
